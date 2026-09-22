@@ -1,0 +1,241 @@
+use jni::objects::{JClass, JString};
+use jni::sys::{jint, jstring};
+use jni::JNIEnv;
+use std::os::raw::c_char;
+
+fn launch_game_blocking(instance_id: String, account_uuid: String) -> i32 {
+    // 关键：这里**不能**再 `tokio::runtime::Runtime::new().unwrap()`。
+    // 那是每次启动/强制关闭都新建一个线程池，而且一旦创建失败就在 JNI 边界上 panic ——
+    // panic 跨 JNI 会 abort 整个进程，表现成「点启动直接闪退」，没有任何提示。
+    // 直接复用 Tauri 自己的运行时，既没有这个风险，也不用反复建池。
+    let result = tauri::async_runtime::block_on(async {
+        let account = if account_uuid.is_empty() {
+            None
+        } else {
+            crate::accounts::get_account_by_uuid(&account_uuid).await.ok()
+        };
+
+        crate::launch::launch_game(&instance_id, account.as_ref()).await
+    });
+
+    match result {
+        Ok(status) => status.exit_code.unwrap_or(0),
+        Err(e) => {
+            let err_str = e.to_string();
+            // 顺序要紧：JRE 运行时目录名形如 `Pojav-JRE-17`，
+            // 所以任何提到运行时路径的错误都会命中 "JRE" ——
+            // 先判 JVM/Dlopen/JliLaunch，否则「找不到 libjvm.so」这类错误
+            // 会被报成「JRE 缺失」，用户看到的原因完全是错的。
+            if err_str.contains("GAME_ALREADY_RUNNING") { -2 }
+            else if err_str.contains("JVM") || err_str.contains("Dlopen") || err_str.contains("JliLaunch") { -6 }
+            else if err_str.contains("JRE") { -3 }
+            else if err_str.contains("NATIVE") || err_str.contains("ARCH") { -4 }
+            else if err_str.contains("GL") || err_str.contains("RENDER") { -5 }
+            else { -1 }
+        }
+    }
+}
+
+/// Kotlin 侧（MainActivity.onCreate）调用，把 JavaVM 与 Activity 实例交给 Rust。
+/// 之后方向锁定、`content://` 文件落地、读取系统代理都由 Rust 回调该实例完成。
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeAttach(
+    mut env: JNIEnv,
+    _class: JClass,
+    activity: jni::objects::JObject,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match env.get_java_vm() {
+            Ok(vm) => crate::android_bridge::init(vm, &mut env, &activity),
+            Err(e) => tracing::warn!("nativeAttach: 获取 JavaVM 失败: {e}"),
+        }
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeLaunchGame(
+    mut env: JNIEnv,
+    _class: JClass,
+    instance_id: JString,
+    account_uuid: JString,
+) -> jint {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let instance_id: String = env.get_string(&instance_id)
+            .map(|s| s.to_str().unwrap_or("").to_string())
+            .unwrap_or_default();
+
+        let account_uuid: String = env.get_string(&account_uuid)
+            .map(|s| s.to_str().unwrap_or("").to_string())
+            .unwrap_or_default();
+
+        launch_game_blocking(instance_id, account_uuid)
+    }));
+
+    result.unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeKillGame(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // 这里**不能** unwrap：Runtime 创建失败时的 panic 会被 catch_unwind 吞成 0，
+        // 调用方就分不清「没杀掉」和「自己崩了」，于是游戏留在后台继续跑（P0-16）。
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            tracing::error!("创建 tokio runtime 失败，kill_game 中止");
+            return -1;
+        };
+        match runtime.block_on(crate::launch::kill_game()) {
+            Ok(()) => 1,
+            Err(e) => {
+                tracing::warn!("kill_game 失败：{e}");
+                0
+            }
+        }
+    }));
+
+    result.unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeGetGameStatus(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let status = crate::launch::get_game_status();
+        serde_json::to_string(&status).unwrap_or_default()
+    }));
+
+    let json_str = result.unwrap_or_else(|_| "{}".to_string());
+    env.new_string(json_str)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeSendInput(
+    mut env: JNIEnv,
+    _class: JClass,
+    event_type: jint,
+    data: JString,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let data: String = env.get_string(&data)
+            .map(|s| s.to_str().unwrap_or("").to_string())
+            .unwrap_or_default();
+
+        let event = match event_type {
+            1005 => {
+                let parts: Vec<&str> = data.split(',').collect();
+                if parts.len() >= 4 {
+                    let key_code: i32 = parts[0].parse().unwrap_or(0);
+                    let scancode: i32 = parts[1].parse().unwrap_or(0);
+                    let action: i32 = parts[2].parse().unwrap_or(0);
+                    let mods: i32 = parts[3].parse().unwrap_or(0);
+                    Some(crate::input_bridge::InputEvent::Key { key_code, scancode, action, mods })
+                } else if parts.len() >= 2 {
+                    let key_code: i32 = parts[0].parse().unwrap_or(0);
+                    let action = if parts[1] == "1" { 1 } else { 0 };
+                    Some(crate::input_bridge::InputEvent::Key { key_code, scancode: 0, action, mods: 0 })
+                } else { None }
+            }
+            1006 => {
+                let parts: Vec<&str> = data.split(',').collect();
+                if parts.len() >= 3 {
+                    let button: i32 = parts[0].parse().unwrap_or(0);
+                    let action: i32 = parts[1].parse().unwrap_or(0);
+                    let mods: i32 = parts[2].parse().unwrap_or(0);
+                    Some(crate::input_bridge::InputEvent::MouseButton { button, action, mods })
+                } else if parts.len() >= 2 {
+                    let button: i32 = parts[0].parse().unwrap_or(0);
+                    let action = if parts[1] == "1" { 1 } else { 0 };
+                    Some(crate::input_bridge::InputEvent::MouseButton { button, action, mods: 0 })
+                } else { None }
+            }
+            1003 => {
+                let parts: Vec<&str> = data.split(',').collect();
+                if parts.len() >= 2 {
+                    let x: f64 = parts[0].parse().unwrap_or(0.0);
+                    let y: f64 = parts[1].parse().unwrap_or(0.0);
+                    Some(crate::input_bridge::InputEvent::CursorPos { x, y })
+                } else { None }
+            }
+            1007 => {
+                let parts: Vec<&str> = data.split(',').collect();
+                if parts.len() >= 2 {
+                    let x: f64 = parts[0].parse().unwrap_or(0.0);
+                    let y: f64 = parts[1].parse().unwrap_or(0.0);
+                    Some(crate::input_bridge::InputEvent::Scroll { x, y })
+                } else { None }
+            }
+            _ => None,
+        };
+
+        if let Some(event) = event {
+            let _ = crate::input_bridge::send_event(event);
+        }
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeSetupSurface(
+    env: JNIEnv,
+    _class: JClass,
+    surface: jni::sys::jobject,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extern "C" {
+            fn ANativeWindow_fromSurface(
+                env: *mut jni::sys::JNIEnv,
+                surface: jni::sys::jobject,
+            ) -> *mut std::ffi::c_void;
+            fn ANativeWindow_acquire(window: *mut std::ffi::c_void);
+        }
+
+        let env_ptr = env.get_raw();
+        let window = unsafe { ANativeWindow_fromSurface(env_ptr, surface) };
+        if window.is_null() {
+            tracing::error!("GL_CONTEXT_FAILED: ANativeWindow_fromSurface returned null");
+            return;
+        }
+        unsafe { ANativeWindow_acquire(window); }
+
+        match crate::render_bridge::setup_surface(window) {
+            Ok(()) => tracing::info!("Surface setup complete"),
+            Err(e) => tracing::error!("Surface setup failed: {}", e),
+        }
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeReleaseSurface(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::render_bridge::release();
+        tracing::info!("Surface released");
+    }));
+}
+
+/// 记录 Surface 实际尺寸。必须由 GameActivity 在 Surface 就绪时调用：
+/// 游戏窗口尺寸要与它一致，否则触摸坐标换算会整体偏移（点不中按钮）。
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeSetSurfaceSize(
+    _env: JNIEnv,
+    _class: JClass,
+    width: jint,
+    height: jint,
+) {
+    crate::android_env::set_surface_size(width, height);
+}
+
+#[no_mangle]
+pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeGetVersionList(
+    _env: JNIEnv,
+    _class: JClass,
+) -> *const c_char {
+    std::ptr::null()
+}

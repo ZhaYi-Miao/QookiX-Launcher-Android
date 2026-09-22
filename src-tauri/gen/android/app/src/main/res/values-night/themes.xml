@@ -1,0 +1,23 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.qookix_launcher" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <!-- 启动器前端底部也铺到导航条区域，避免前端出现黑条 -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+    </style>
+
+    <!--
+      注意：这里**故意不再定义** Theme.qookix_game。
+
+      DayNight 的 values-night/ 会整体覆盖同名 style：之前这里存着一份没有配色的
+      Theme.qookix_game，于是深色模式下 values/themes.xml 里那份（带 QookiX 调色板、
+      alertDialogTheme 等）被整个替换掉 —— 表现是 SeekBar 变回 Material 默认的青色、
+      对话框变成浅色。游戏界面本来就是深色，配色只需在 values/ 里定义一次。
+    -->
+</resources>

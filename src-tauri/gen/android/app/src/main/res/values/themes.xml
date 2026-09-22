@@ -1,0 +1,70 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.qookix_launcher" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- 冷启动时 WebView 还没渲染，窗口背景就是用户看到的第一帧 ——
+             默认白色与深色 UI 反差刺眼（白闪），改成启动页同款深色。 -->
+        <item name="android:windowBackground">@android:color/background_dark</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <!-- 启动器前端底部也铺到导航条区域，避免前端出现黑条 -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+    </style>
+
+    <!--
+      游戏界面主题。
+
+      运行时由 `GameActivity.applyImmersiveMode()` 把状态栏与导航条整个隐藏
+      （Pojav 的 `Tools.setFullscreen` 同款 flag）。这里做的是兜底：
+      系统栏被用户从边缘滑出、或沉浸模式被系统临时打断时，
+      导航条背景/状态栏必须是**透明**的，而不是默认的黑色 ——
+      否则就会出现「底部一条黑的、把游戏画面盖住」的现象。
+      另外 `shortEdges` 让内容延伸进刘海/挖孔区（Pojav 的 `Tools.ignoreNotch`）。
+
+      ── 配色 ──
+      与启动器前端（src/styles.css / src/theme.ts）同源：强调色 #
+      （默认主题琥珀 #E89A4B）、底色 #0B0D12 一系、文字三级。
+      这些属性同时决定游戏内所有 Material/AppCompat 控件的外观：
+      对话框、开关、SeekBar、ListView 分隔线、涟漪等。
+    -->
+    <style name="Theme.qookix_game" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/qk_bg_0</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="p">shortEdges</item>
+        <!-- 关掉 Android 10+ 手势导航的「对比度保护」蒙版（底部那条半透明黑） -->
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+
+        <!-- ── 配色（QookiX 设计语言）────────────────────────────── -->
+        <item name="colorPrimary">@color/qk_accent</item>
+        <item name="colorPrimaryVariant">@color/qk_accent_pressed</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/qk_accent</item>
+        <item name="colorSecondaryVariant">@color/qk_accent_pressed</item>
+        <item name="colorAccent">@color/qk_accent</item>
+        <item name="colorSurface">@color/qk_surface</item>
+        <item name="colorOnSurface">@color/qk_text_1</item>
+        <item name="colorBackgroundFloating">@color/qk_surface_float</item>
+        <item name="android:colorBackground">@color/qk_bg_0</item>
+        <item name="android:textColorPrimary">@color/qk_text_1</item>
+        <item name="android:textColorSecondary">@color/qk_text_2</item>
+        <item name="android:textColorTertiary">@color/qk_text_3</item>
+        <item name="android:textColorHint">@color/qk_text_3</item>
+        <item name="colorControlActivated">@color/qk_accent</item>
+        <item name="colorControlHighlight">@color/qk_ripple</item>
+        <item name="colorControlNormal">@color/qk_text_2</item>
+        <item name="android:divider">@color/qk_divider</item>
+        <item name="android:listDivider">@color/qk_divider</item>
+        <item name="android:itemBackground">@color/qk_surface</item>
+        <item name="alertDialogTheme">@style/QookixAlertDialog</item>
+    </style>
+</resources>

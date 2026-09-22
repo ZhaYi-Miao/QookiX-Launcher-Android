@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <external-path name="my_images" path="." />
+  <cache-path name="my_cache_images" path="." />
+  <!-- 导出控制布局：<files>/controlmap/*.json 通过 FileProvider 分享给其他应用 -->
+  <files-path name="controlmap" path="controlmap/" />
+</paths>

@@ -1,0 +1,1584 @@
+use crate::settings;
+use crate::download;
+use anyhow::{Context, Result};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+const MODRINTH_API: &str = "https://api.modrinth.com/v2";
+const FABRIC_API: &str = "https://meta.fabricmc.net/v2";
+const FORGE_API: &str = "https://files.minecraftforge.net/maven";
+
+/// 内置的公共 CurseForge API Key（Eternal 官方示例 Key）。
+/// 用户可在设置里填写自己的 Key，配置后所有 CurseForge 请求都会优先使用用户的 Key。
+const CURSEFORGE_FALLBACK_KEY: &str =
+    "$2a$10$Y1weArmW71Nn0Hb5Ckqk4.KfKGQfFqj1lYaVmKdH5l5Z3qQGZqYyC";
+
+/// 生效的 CurseForge API Key：优先设置里的 `curseforge_api_key`，为空时回退内置 Key。
+async fn curseforge_key() -> String {
+    if let Ok(s) = crate::settings::get_settings().await {
+        if let Some(k) = s.curseforge_api_key {
+            let k = k.trim().to_string();
+            if !k.is_empty() {
+                return k;
+            }
+        }
+    }
+    CURSEFORGE_FALLBACK_KEY.to_string()
+}
+
+/// Minecraft 官方新闻搜索接口（minecraft.net 官网自用），按时间倒序取最新中文条目。
+const NEWS_API: &str = "https://net-secondary.web.minecraft-services.net/api/v1.0/zh-cn/search?pageSize=24&sortType=Recent&category=News&newsOnly=true&geography=CN";
+
+/// 官网原始数据里的 HTML 实体，直接展示会露出生标记。
+fn decode_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// 拉取 Minecraft 官方新闻。网络异常时返回错误，由前端展示空态。
+pub async fn fetch_news() -> Result<Vec<Value>> {
+    let resp = crate::util::http_client()
+        .await
+        .get(NEWS_API)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .context("获取新闻失败")?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("获取新闻失败: HTTP {status}");
+    }
+    let body: Value = resp.json().await.context("解析新闻失败")?;
+    let items = body
+        .pointer("/result/results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| {
+            let title = e.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            if title.trim().is_empty() {
+                return None;
+            }
+            Some(json!({
+                "title": decode_entities(title),
+                "description": decode_entities(e.get("description").and_then(|v| v.as_str()).unwrap_or("")),
+                "author": e.get("author").and_then(|v| v.as_str()).unwrap_or(""),
+                "time": e.get("time").and_then(|v| v.as_i64()).unwrap_or(0),
+                "image": e.get("image").and_then(|v| v.as_str()).unwrap_or(""),
+                "image_alt": e.get("imageAltText").and_then(|v| v.as_str()).unwrap_or(""),
+                "url": e.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+            }))
+        })
+        .collect();
+    Ok(items)
+}
+
+// ==================== Browse ====================
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BrowseResult {
+    pub hits: Vec<ProjectHit>,
+    pub total: i64,
+    pub cf_error: Option<String>,
+    pub cf_count: Option<i64>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ProjectHit {
+    pub provider: String,
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    pub author: String,
+    pub downloads: i64,
+    pub follows: i64,
+    pub icon_url: String,
+    pub project_type: String,
+    pub categories: Vec<String>,
+    pub latest_version: String,
+    pub game_versions: Vec<String>,
+    pub updated: String,
+    pub featured_image: String,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ProjectInfoResult {
+    pub provider: String,
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    pub body: String,
+    pub author: String,
+    pub downloads: i64,
+    pub follows: i64,
+    pub icon_url: String,
+    pub project_type: String,
+    pub categories: Vec<String>,
+    pub versions: Vec<String>,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub date_created: String,
+    pub date_modified: String,
+    pub source_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub wiki_url: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ProjectVersionResult {
+    pub id: String,
+    pub name: String,
+    pub version_number: String,
+    pub version_type: String,
+    pub date_published: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub files: Vec<ProjectFile>,
+    pub dependencies: Vec<Value>,
+    pub download_url: String,
+    pub filename: String,
+    pub size: i64,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ProjectFile {
+    pub url: String,
+    pub filename: String,
+    pub size: i64,
+    pub primary: bool,
+    pub hashes: HashMap<String, String>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ProjectDependency {
+    pub project_id: String,
+    pub title: String,
+    pub slug: String,
+    pub dependency_type: String,
+}
+
+pub async fn browse(
+    provider: &str,
+    query: &str,
+    project_type: &str,
+    category: &str,
+    page: i32,
+    game_version: &str,
+    loader: &str,
+    sort: &str,
+    page_size: i32,
+) -> Result<BrowseResult> {
+    let client = crate::util::http_client().await;
+    let _offset = page * page_size;
+
+    if provider == "curseforge" {
+        return browse_curseforge(&client, query, project_type, category, page, page_size).await;
+    }
+
+    // Modrinth
+    let mut facets: Vec<Vec<String>> = Vec::new();
+    if !project_type.is_empty() {
+        facets.push(vec![format!("project_type:{}", project_type)]);
+    }
+    if !category.is_empty() {
+        facets.push(vec![format!("categories:{}", category)]);
+    }
+    if !game_version.is_empty() {
+        facets.push(vec![format!("versions:{}", game_version)]);
+    }
+    if !loader.is_empty() {
+        facets.push(vec![format!("categories:{}", loader)]);
+    }
+
+    let facets_json = if facets.is_empty() {
+        String::new()
+    } else {
+        let arr: Vec<Value> = facets.iter().map(|f| json!(f)).collect();
+        format!("&facets={}", urlencoding::encode(&json!(arr).to_string()))
+    };
+
+    let sort_param = if sort.is_empty() || sort == "downloads" {
+        "&index=downloads"
+    } else if sort == "follows" {
+        "&index=follows"
+    } else if sort == "newest" {
+        "&index=newest"
+    } else if sort == "updated" {
+        "&index=updated"
+    } else {
+        "&index=relevance"
+    };
+
+    let url = format!(
+        "{}/search?query={}&limit={}{}{}",
+        MODRINTH_API,
+        urlencoding::encode(query),
+        page_size,
+        sort_param,
+        facets_json,
+    );
+
+    let response = client.get(&url).send().await
+        .context("Failed to search Modrinth")?;
+    let result: Value = response.json().await
+        .context("Failed to parse Modrinth response")?;
+
+    let hits_arr = result["hits"].as_array();
+    let total = result["total_hits"].as_i64().unwrap_or(0);
+
+    let mut hits = Vec::new();
+    if let Some(hits_value) = hits_arr {
+        for hit in hits_value {
+            let icon = hit["icon_url"].as_str().unwrap_or("").to_string();
+            let slug = hit["slug"].as_str().unwrap_or("").to_string();
+            let project_id = hit["project_id"].as_str().unwrap_or("").to_string();
+            hits.push(ProjectHit {
+                provider: "modrinth".to_string(),
+                id: project_id,
+                slug: slug.clone(),
+                title: hit["title"].as_str().unwrap_or("").to_string(),
+                description: hit["description"].as_str().unwrap_or("").to_string(),
+                author: hit["author"].as_str().unwrap_or("").to_string(),
+                downloads: hit["downloads"].as_i64().unwrap_or(0),
+                follows: hit["follows"].as_i64().unwrap_or(0),
+                icon_url: icon.clone(),
+                project_type: hit["project_type"].as_str().unwrap_or("").to_string(),
+                categories: hit["categories"].as_array().unwrap_or(&vec![])
+                    .iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect(),
+                latest_version: hit["latest_version"].as_str().unwrap_or("").to_string(),
+                game_versions: hit["versions"].as_array().unwrap_or(&vec![])
+                    .iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+                updated: hit["date_modified"].as_str().unwrap_or("").to_string(),
+                featured_image: icon,
+            });
+        }
+    }
+
+    Ok(BrowseResult {
+        hits,
+        total,
+        cf_error: None,
+        cf_count: None,
+    })
+}
+
+async fn browse_curseforge(
+    client: &reqwest::Client,
+    query: &str,
+    project_type: &str,
+    category: &str,
+    page: i32,
+    page_size: i32,
+) -> Result<BrowseResult> {
+    let game_id: i32 = 432; // Minecraft
+    let class_id: i32 = match project_type {
+        "mod" => 6,
+        "modpack" => 4471,
+        "resourcepack" => 12,
+        "shader" => 6552,
+        _ => 0,
+    };
+
+    let mut body = json!({
+        "gameId": game_id,
+        "searchFilter": query,
+        "pageSize": page_size,
+        "index": page * page_size,
+        "sortField": 2, // Popularity
+        "sortOrder": 0, // Descending
+    });
+
+    if class_id > 0 {
+        body["classId"] = json!(class_id);
+    }
+    if !category.is_empty() {
+        if let Ok(cat_id) = category.parse::<i32>() {
+            body["categoryId"] = json!(cat_id);
+        }
+    }
+
+    let response = client.post("https://api.curseforge.com/v1/mods/search")
+        .header("x-api-key", curseforge_key().await)
+        .json(&body)
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                return Ok(BrowseResult {
+                    hits: vec![],
+                    total: 0,
+                    cf_error: Some(format!("CurseForge API returned status {}", resp.status())),
+                    cf_count: None,
+                });
+            }
+            let result: Value = resp.json().await
+                .context("Failed to parse CurseForge response")?;
+            let data = result["data"].as_array();
+            let total = result["pagination"]["totalCount"].as_i64().unwrap_or(0);
+
+            let mut hits = Vec::new();
+            if let Some(items) = data {
+                for item in items {
+                    let icon_url = item["logo"]["thumbnailUrl"].as_str()
+                        .unwrap_or("").to_string();
+                    let authors = item["authors"].as_array().unwrap_or(&vec![])
+                        .iter().filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>().join(", ");
+                    hits.push(ProjectHit {
+                        provider: "curseforge".to_string(),
+                        id: item["id"].as_i64().unwrap_or(0).to_string(),
+                        slug: item["slug"].as_str().unwrap_or("").to_string(),
+                        title: item["name"].as_str().unwrap_or("").to_string(),
+                        description: item["summary"].as_str().unwrap_or("").to_string(),
+                        author: authors,
+                        downloads: item["downloadCount"].as_i64().unwrap_or(0),
+                        follows: 0,
+                        icon_url: icon_url.clone(),
+                        project_type: item["classId"].as_i64().unwrap_or(0).to_string(),
+                        categories: item["categories"].as_array().unwrap_or(&vec![])
+                            .iter().filter_map(|c| c["name"].as_str().map(|s| s.to_string()))
+                            .collect(),
+                        latest_version: String::new(),
+                        game_versions: vec![],
+                        updated: item["dateModified"].as_str().unwrap_or("").to_string(),
+                        featured_image: icon_url,
+                    });
+                }
+            }
+
+            Ok(BrowseResult {
+                hits,
+                total,
+                cf_error: None,
+                cf_count: Some(total),
+            })
+        }
+        Err(e) => Ok(BrowseResult {
+            hits: vec![],
+            total: 0,
+            cf_error: Some(format!("CurseForge request failed: {}", e)),
+            cf_count: None,
+        }),
+    }
+}
+
+// ==================== CurseForge Categories ====================
+
+pub async fn curseforge_categories() -> Result<Vec<Value>> {
+    let client = crate::util::http_client().await;
+    let response = client.get("https://api.curseforge.com/v1/categories?gameId=432")
+        .header("x-api-key", curseforge_key().await)
+        .send().await.context("Failed to fetch CurseForge categories")?;
+    let result: Value = response.json().await.context("Failed to parse categories")?;
+    Ok(result["data"].as_array().unwrap_or(&vec![]).clone())
+}
+
+// ==================== Project Info ====================
+
+pub async fn project_info(provider: &str, project_id: &str) -> Result<ProjectInfoResult> {
+    let client = crate::util::http_client().await;
+
+    if provider == "curseforge" {
+        return project_info_curseforge(&client, project_id).await;
+    }
+
+    // Modrinth
+    let response = client.get(format!("{}/project/{}", MODRINTH_API, project_id))
+        .send().await.context("Failed to get Modrinth project")?;
+    let result: Value = response.json().await.context("Failed to parse Modrinth project")?;
+
+    let authors = result["authors"].as_array().unwrap_or(&vec![])
+        .iter().filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
+        .collect::<Vec<_>>().join(", ");
+
+    Ok(ProjectInfoResult {
+        provider: "modrinth".to_string(),
+        id: result["id"].as_str().unwrap_or("").to_string(),
+        slug: result["slug"].as_str().unwrap_or("").to_string(),
+        title: result["title"].as_str().unwrap_or("").to_string(),
+        description: result["description"].as_str().unwrap_or("").to_string(),
+        body: result["body"].as_str().unwrap_or("").to_string(),
+        author: authors,
+        downloads: result["downloads"].as_i64().unwrap_or(0),
+        follows: result["follows"].as_i64().unwrap_or(0),
+        icon_url: result["icon_url"].as_str().unwrap_or("").to_string(),
+        project_type: result["project_type"].as_str().unwrap_or("").to_string(),
+        categories: result["categories"].as_array().unwrap_or(&vec![])
+            .iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect(),
+        versions: result["versions"].as_array().unwrap_or(&vec![])
+            .iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+        game_versions: result["game_versions"].as_array().unwrap_or(&vec![])
+            .iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+        loaders: result["loaders"].as_array().unwrap_or(&vec![])
+            .iter().filter_map(|l| l.as_str().map(|s| s.to_string())).collect(),
+        date_created: result["date_created"].as_str().unwrap_or("").to_string(),
+        date_modified: result["date_modified"].as_str().unwrap_or("").to_string(),
+        source_url: result["source_url"].as_str().map(|s| s.to_string()),
+        issues_url: result["issues_url"].as_str().map(|s| s.to_string()),
+        wiki_url: result["wiki_url"].as_str().map(|s| s.to_string()),
+    })
+}
+
+async fn project_info_curseforge(client: &reqwest::Client, project_id: &str) -> Result<ProjectInfoResult> {
+    let response = client.get(format!("https://api.curseforge.com/v1/mods/{}", project_id))
+        .header("x-api-key", curseforge_key().await)
+        .send().await.context("Failed to get CurseForge project")?;
+    let result: Value = response.json().await.context("Failed to parse CurseForge project")?;
+    let data = &result["data"];
+
+    let authors = data["authors"].as_array().unwrap_or(&vec![])
+        .iter().filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
+        .collect::<Vec<_>>().join(", ");
+
+    let links = &data["links"];
+    Ok(ProjectInfoResult {
+        provider: "curseforge".to_string(),
+        id: data["id"].as_i64().unwrap_or(0).to_string(),
+        slug: data["slug"].as_str().unwrap_or("").to_string(),
+        title: data["name"].as_str().unwrap_or("").to_string(),
+        description: data["summary"].as_str().unwrap_or("").to_string(),
+        body: data["description"].as_str().unwrap_or("").to_string(),
+        author: authors,
+        downloads: data["downloadCount"].as_i64().unwrap_or(0),
+        follows: 0,
+        icon_url: data["logo"]["thumbnailUrl"].as_str().unwrap_or("").to_string(),
+        project_type: data["classId"].as_i64().unwrap_or(0).to_string(),
+        categories: data["categories"].as_array().unwrap_or(&vec![])
+            .iter().filter_map(|c| c["name"].as_str().map(|s| s.to_string())).collect(),
+        versions: vec![],
+        game_versions: vec![],
+        loaders: vec![],
+        date_created: data["dateCreated"].as_str().unwrap_or("").to_string(),
+        date_modified: data["dateModified"].as_str().unwrap_or("").to_string(),
+        source_url: links["sourceUrl"].as_str().map(|s| s.to_string()),
+        issues_url: links["issuesUrl"].as_str().map(|s| s.to_string()),
+        wiki_url: None,
+    })
+}
+
+// ==================== Project Versions ====================
+
+pub async fn project_versions(provider: &str, project_id: &str, mc_version: &str, loader: &str) -> Result<Vec<ProjectVersionResult>> {
+    let client = crate::util::http_client().await;
+
+    if provider == "curseforge" {
+        return project_versions_curseforge(&client, project_id, mc_version).await;
+    }
+
+    // Modrinth
+    let mut url = format!("{}/project/{}/version", MODRINTH_API, project_id);
+    let mut params = Vec::new();
+    if !mc_version.is_empty() {
+        params.push(format!("game_versions=[\"{}\"]", mc_version));
+    }
+    if !loader.is_empty() {
+        params.push(format!("loaders=[\"{}\"]", loader));
+    }
+    if !params.is_empty() {
+        url = format!("{}?{}", url, params.join("&"));
+    }
+
+    let response = client.get(&url).send().await
+        .context("Failed to get Modrinth versions")?;
+    let result: Value = response.json().await
+        .context("Failed to parse Modrinth versions")?;
+    let versions_arr = result.as_array();
+
+    let mut versions = Vec::new();
+    if let Some(items) = versions_arr {
+        for v in items {
+            let files = v["files"].as_array();
+            let primary_file = files.and_then(|f| f.iter().find(|f| f["primary"].as_bool().unwrap_or(false)))
+                .or_else(|| files.and_then(|f| f.first()));
+
+            let file_url = primary_file.and_then(|f| f["url"].as_str()).unwrap_or("").to_string();
+            let filename = primary_file.and_then(|f| f["filename"].as_str()).unwrap_or("").to_string();
+            let size = primary_file.and_then(|f| f["size"].as_i64()).unwrap_or(0);
+
+            let mut hashes = HashMap::new();
+            if let Some(h) = primary_file.and_then(|f| f["hashes"].as_object()) {
+                for (k, val) in h {
+                    if let Some(s) = val.as_str() {
+                        hashes.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+
+            let deps: Vec<Value> = v["dependencies"].as_array().unwrap_or(&vec![])
+                .iter().map(|d| d.clone()).collect();
+
+            versions.push(ProjectVersionResult {
+                id: v["id"].as_str().unwrap_or("").to_string(),
+                name: v["name"].as_str().unwrap_or("").to_string(),
+                version_number: v["version_number"].as_str().unwrap_or("").to_string(),
+                version_type: v["version_type"].as_str().unwrap_or("").to_string(),
+                date_published: v["date_published"].as_str().unwrap_or("").to_string(),
+                game_versions: v["game_versions"].as_array().unwrap_or(&vec![])
+                    .iter().filter_map(|gv| gv.as_str().map(|s| s.to_string())).collect(),
+                loaders: v["loaders"].as_array().unwrap_or(&vec![])
+                    .iter().filter_map(|l| l.as_str().map(|s| s.to_string())).collect(),
+                files: vec![ProjectFile {
+                    url: file_url.clone(),
+                    filename: filename.clone(),
+                    size,
+                    primary: true,
+                    hashes,
+                }],
+                dependencies: deps,
+                download_url: file_url,
+                filename,
+                size,
+            });
+        }
+    }
+    Ok(versions)
+}
+
+async fn project_versions_curseforge(
+    client: &reqwest::Client,
+    project_id: &str,
+    mc_version: &str,
+) -> Result<Vec<ProjectVersionResult>> {
+    let mut url = format!("https://api.curseforge.com/v1/mods/{}/files?pageSize=50", project_id);
+    if !mc_version.is_empty() {
+        url = format!("{}&gameVersion={}", url, urlencoding::encode(mc_version));
+    }
+
+    let response = client.get(&url)
+        .header("x-api-key", curseforge_key().await)
+        .send().await.context("Failed to get CurseForge files")?;
+    let result: Value = response.json().await.context("Failed to parse CurseForge files")?;
+    let files = result["data"].as_array();
+
+    let mut versions = Vec::new();
+    if let Some(items) = files {
+        for f in items {
+            let file_url = f["downloadUrl"].as_str().unwrap_or("").to_string();
+            let release_type = match f["releaseType"].as_i64().unwrap_or(1) {
+                1 => "release",
+                2 => "beta",
+                3 => "alpha",
+                _ => "release",
+            };
+            versions.push(ProjectVersionResult {
+                id: f["id"].as_i64().unwrap_or(0).to_string(),
+                name: f["displayName"].as_str().unwrap_or("").to_string(),
+                version_number: f["fileName"].as_str().unwrap_or("").to_string(),
+                version_type: release_type.to_string(),
+                date_published: f["fileDate"].as_str().unwrap_or("").to_string(),
+                game_versions: f["gameVersions"].as_array().unwrap_or(&vec![])
+                    .iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+                loaders: vec![],
+                files: vec![ProjectFile {
+                    url: file_url.clone(),
+                    filename: f["fileName"].as_str().unwrap_or("").to_string(),
+                    size: f["fileLength"].as_i64().unwrap_or(0),
+                    primary: true,
+                    hashes: HashMap::new(),
+                }],
+                dependencies: vec![],
+                download_url: file_url,
+                filename: f["fileName"].as_str().unwrap_or("").to_string(),
+                size: f["fileLength"].as_i64().unwrap_or(0),
+            });
+        }
+    }
+    Ok(versions)
+}
+
+// ==================== Project Dependencies ====================
+
+pub async fn project_dependencies(provider: &str, project_id: &str) -> Result<Vec<ProjectDependency>> {
+    if provider == "curseforge" {
+        return Ok(vec![]); // CurseForge deps handled via files
+    }
+
+    let client = crate::util::http_client().await;
+    let response = client.get(format!("{}/project/{}", MODRINTH_API, project_id))
+        .send().await.context("Failed to get project")?;
+    let result: Value = response.json().await.context("Failed to parse project")?;
+
+    let mut deps = Vec::new();
+    if let Some(relations) = result["dependencies"].as_array() {
+        for dep in relations {
+            let dep_id = dep["project_id"].as_str().unwrap_or("").to_string();
+            if dep_id.is_empty() { continue; }
+            // Fetch dependency info
+            if let Ok(dep_info) = client.get(format!("{}/project/{}", MODRINTH_API, dep_id))
+                .send().await {
+                if let Ok(dep_val) = dep_info.json::<Value>().await {
+                    deps.push(ProjectDependency {
+                        project_id: dep_id,
+                        title: dep_val["title"].as_str().unwrap_or("").to_string(),
+                        slug: dep_val["slug"].as_str().unwrap_or("").to_string(),
+                        dependency_type: dep["dependency_type"].as_str().unwrap_or("required").to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(deps)
+}
+
+// ==================== Loader Versions ====================
+
+pub async fn get_loader_versions(loader: String, mc_version: String) -> Result<Vec<String>> {
+    let client = crate::util::http_client().await;
+
+    match loader.as_str() {
+        "fabric" => {
+            let url = format!("{}/versions/loader", FABRIC_API);
+            let response = client.get(&url).send().await
+                .context("Failed to get Fabric versions")?;
+            let result: Value = response.json().await
+                .context("Failed to parse Fabric versions")?;
+            let empty_vec = vec![];
+            let versions = result.as_array().unwrap_or(&empty_vec);
+            let filtered: Vec<String> = versions.iter()
+                .filter(|v| {
+                    let game = v["version"]["game_version"].as_str().unwrap_or("");
+                    game == mc_version || mc_version.is_empty()
+                })
+                .filter_map(|v| v["version"]["loader"]["version"].as_str().map(|s| s.to_string()))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter().collect();
+            Ok(filtered)
+        }
+        "forge" => {
+            let url = format!("https://files.minecraftforge.net/maven/net/minecraftforge/forge/promotions_slim.json");
+            let response = client.get(&url).send().await
+                .context("Failed to get Forge versions")?;
+            let result: Value = response.json().await
+                .context("Failed to parse Forge versions")?;
+            let promos = result["promos"].as_object();
+            let mut versions = Vec::new();
+            if let Some(p) = promos {
+                for (key, _) in p {
+                    let parts: Vec<&str> = key.split('-').collect();
+                    if parts.len() == 2 && parts[1] == "latest" {
+                        let mc = parts[0];
+                        if mc == mc_version || mc_version.is_empty() {
+                            if let Some(ver) = p[key].as_str() {
+                                versions.push(ver.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(versions)
+        }
+        "neoforge" => {
+            let url = "https://api.modrinth.com/v2/project/P7dR8mSH/version?loaders=[\"neoforge\"]";
+            let response = client.get(url).send().await
+                .context("Failed to get NeoForge versions")?;
+            let result: Value = response.json().await
+                .context("Failed to parse NeoForge versions")?;
+            let empty_vec = vec![];
+            let versions = result.as_array().unwrap_or(&empty_vec);
+            let filtered: Vec<String> = versions.iter()
+                .filter(|v| {
+                    let empty_gv = vec![];
+                    let gv = v["game_versions"].as_array().unwrap_or(&empty_gv);
+                    gv.iter().any(|g| g.as_str().unwrap_or("") == mc_version) || mc_version.is_empty()
+                })
+                .filter_map(|v| v["version_number"].as_str().map(|s| s.to_string()))
+                .collect();
+            Ok(filtered)
+        }
+        "quilt" => {
+            let url = format!("{}/versions/loader", "https://meta.quiltmc.org/v3/versions/loader");
+            let response = client.get(&url).send().await
+                .context("Failed to get Quilt versions")?;
+            let result: Value = response.json().await
+                .context("Failed to parse Quilt versions")?;
+            let empty_vec = vec![];
+            let versions = result.as_array().unwrap_or(&empty_vec);
+            let filtered: Vec<String> = versions.iter()
+                .filter(|v| {
+                    let game = v["game_version"].as_str().unwrap_or("");
+                    game == mc_version || mc_version.is_empty()
+                })
+                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter().collect();
+            Ok(filtered)
+        }
+        _ => Ok(vec![]),
+    }
+}
+
+// ==================== Install Game ====================
+
+pub async fn install_game(instance_id: &str) -> Result<serde_json::Value> {
+    crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
+    let data_dir = settings::get_data_dir().await?;
+    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let instance_json = instance_path.join("instance.json");
+
+    if !instance_json.exists() {
+        return Err(anyhow::anyhow!("Instance not found"));
+    }
+
+    let content = tokio::fs::read_to_string(&instance_json).await
+        .context("Failed to read instance.json")?;
+    let mut instance: Value = serde_json::from_str(&content)
+        .context("Failed to parse instance.json")?;
+
+    let mc_version = instance["mc_version"]
+        .as_str()
+        .or_else(|| instance["mcVersion"].as_str())
+        .unwrap_or("1.20.1")
+        .to_string();
+    let loader = instance["loader"]
+        .as_str()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "vanilla".to_string());
+    let instance_name = instance["name"].as_str().unwrap_or(instance_id).to_string();
+
+    // 「下载中心」靠这些事件驱动；taskId 与阶段名要和前端 STAGE_LABELS 对齐
+    let ctx = crate::progress::TaskCtx::new(instance_id, &instance_name, "游戏本体");
+    crate::progress::emit_install(&ctx, "manifest", "正在获取版本信息…", 0, 3);
+
+    let result: Result<serde_json::Value> = async {
+        // Install version files
+        crate::version::install_version_tracked(&mc_version, Some(&ctx)).await?;
+
+        // Install loader if needed
+        if loader != "vanilla" {
+            let loader_version = instance["loader_version"].as_str().unwrap_or("");
+            if !loader_version.is_empty() {
+                crate::progress::emit_install(&ctx, "loader", "正在安装加载器…", 2, 3);
+                install_loader(&loader, &mc_version, loader_version, &instance_path).await?;
+            }
+        }
+
+        let total_bytes: i64 = calculate_dir_size(&instance_path).await;
+        let file_count = count_files(&instance_path).await;
+
+        // 标记游戏已安装，前端据此隐藏「未安装」横幅
+        instance["installed"] = json!(true);
+        let updated = serde_json::to_string_pretty(&instance)
+            .context("Failed to serialize instance.json")?;
+        tokio::fs::write(&instance_json, updated).await
+            .context("Failed to write instance.json")?;
+
+        Ok(json!({
+            "instance_id": instance_id,
+            "total_bytes": total_bytes,
+            "file_count": file_count,
+        }))
+    }
+    .await;
+
+    match &result {
+        Ok(_) => crate::progress::emit_install_done(&ctx, true, "安装完成", 3, 3),
+        Err(e) => crate::progress::emit_install_done(&ctx, false, &format!("安装失败：{e}"), 0, 3),
+    }
+    result
+}
+
+async fn install_loader(loader: &str, mc_version: &str, loader_version: &str, instance_path: &std::path::Path) -> Result<()> {
+    let client = crate::util::http_client().await;
+
+    let libs_dir = instance_path.parent().unwrap().parent().unwrap().join("libraries");
+    tokio::fs::create_dir_all(&libs_dir).await.ok();
+
+    match loader {
+        "fabric" => {
+            // Download fabric-loader installer
+            let url = format!("https://maven.fabricmc.net/net/fabricmc/fabric-loader/{loader_version}/fabric-loader-{loader_version}.jar");
+            let dest = libs_dir.join(format!("fabric-loader-{}.jar", loader_version));
+            if !dest.exists() {
+                download::download_file(&url, &dest.to_string_lossy(), None).await?;
+            }
+        }
+        "forge" => {
+            let url = format!("https://files.minecraftforge.net/maven/net/minecraftforge/forge/{mc_version}-{loader_version}/forge-{mc_version}-{loader_version}-universal.jar");
+            let dest = libs_dir.join(format!("forge-{}-{}.jar", mc_version, loader_version));
+            if !dest.exists() {
+                download::download_file(&url, &dest.to_string_lossy(), None).await?;
+            }
+        }
+        "neoforge" => {
+            let url = format!("https://api.modrinth.com/v2/project/P7dR8mSH/version?loaders=[\"neoforge\"]&game_versions=[\"{}\"]", mc_version);
+            let resp = client.get(&url).send().await?;
+            let versions: Value = resp.json().await?;
+            if let Some(ver) = versions.as_array().and_then(|v| v.first()) {
+                if let Some(file) = ver["files"].as_array().and_then(|f| f.first()) {
+                    if let Some(dl_url) = file["url"].as_str() {
+                        let dest = libs_dir.join(format!("neoforge-{}.jar", loader_version));
+                        if !dest.exists() {
+                            download::download_file(dl_url, &dest.to_string_lossy(), None).await?;
+                        }
+                    }
+                }
+            }
+        }
+        "quilt" => {
+            let url = format!("https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/{loader_version}/quilt-loader-{loader_version}.jar");
+            let dest = libs_dir.join(format!("quilt-loader-{}.jar", loader_version));
+            if !dest.exists() {
+                download::download_file(&url, &dest.to_string_lossy(), None).await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ==================== Estimate Download ====================
+
+pub async fn estimate_download(mc_version: &str) -> Result<serde_json::Value> {
+    let version_info = crate::version::get_version_info(mc_version).await?;
+    let mut total_size: i64 = 0;
+    let mut file_count: i64 = 0;
+
+    // Client JAR
+    if let Some(ref downloads) = version_info.downloads {
+        if let Some(ref client) = downloads.client {
+            total_size += client.size as i64;
+            file_count += 1;
+        }
+    }
+
+    // Libraries
+    if let Some(ref libraries) = version_info.libraries {
+        for lib in libraries {
+            if let Some(ref downloads) = lib.downloads {
+                if let Some(ref artifact) = downloads.artifact {
+                    total_size += artifact.size as i64;
+                    file_count += 1;
+                }
+            }
+        }
+    }
+
+    // Asset index
+    if let Some(ref asset_index) = version_info.asset_index {
+        total_size += asset_index.total_size as i64;
+        file_count += 1;
+    }
+
+    Ok(json!({
+        "download_files": file_count,
+        "download_bytes": total_size,
+        "assets_known": true,
+    }))
+}
+
+// ==================== Estimate Import ====================
+
+pub async fn estimate_import(_source: &str, _raw_ids: &[String]) -> Result<serde_json::Value> {
+    Ok(json!({
+        "import_files": 0,
+        "import_bytes": 0,
+    }))
+}
+
+// ==================== Install Content ====================
+
+/// Loader 枚举 → 字符串（用于内容版本过滤）。
+pub fn loader_str(loader: &crate::models::Loader) -> &'static str {
+    match loader {
+        crate::models::Loader::Vanilla => "vanilla",
+        crate::models::Loader::Fabric => "fabric",
+        crate::models::Loader::Quilt => "quilt",
+        crate::models::Loader::Forge => "forge",
+        crate::models::Loader::NeoForge => "neoforge",
+    }
+}
+
+pub async fn install_content(
+    instance_id: &str,
+    provider: &str,
+    project_id: &str,
+    version_id: &str,
+    kind: &str,
+) -> Result<Value> {
+    let data_dir = settings::get_data_dir().await?;
+    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let folder = crate::instances::kind_folder(kind);
+    let content_dir = instance_path.join(folder);
+    tokio::fs::create_dir_all(&content_dir).await.ok();
+
+    let client = crate::util::http_client().await;
+
+    let mut file_url = String::new();
+    let mut file_name = String::new();
+    let mut project_title = String::new();
+
+    // Fetch version info to get file URL
+    if provider == "modrinth" {
+        let response = client.get(format!("{}/version/{}", MODRINTH_API, version_id))
+            .send().await.context("Failed to get version")?;
+        let version: Value = response.json().await.context("Failed to parse version")?;
+        if let Some(files) = version["files"].as_array() {
+            if let Some(primary) = files.iter().find(|f| f["primary"].as_bool().unwrap_or(false))
+                .or_else(|| files.first()) {
+                file_url = primary["url"].as_str().unwrap_or("").to_string();
+                file_name = primary["filename"].as_str().unwrap_or("").to_string();
+            }
+        }
+        if let Ok(info) = project_info("modrinth", project_id).await {
+            project_title = info.title;
+        }
+    } else if provider == "curseforge" {
+        let response = client.get(format!("https://api.curseforge.com/v1/mods/files/{}", version_id))
+            .header("x-api-key", curseforge_key().await)
+            .send().await.context("Failed to get CurseForge file")?;
+        let result: Value = response.json().await.context("Failed to parse CurseForge file")?;
+        let data = &result["data"];
+        file_url = data["downloadUrl"].as_str().unwrap_or("").to_string();
+        file_name = data["fileName"].as_str().unwrap_or("").to_string();
+    }
+
+    if file_url.is_empty() || file_name.is_empty() {
+        return Err(anyhow::anyhow!("Could not find file to download"));
+    }
+    if !crate::util::is_safe_filename(&file_name) {
+        return Err(anyhow::anyhow!("非法的文件名: {file_name}"));
+    }
+
+    // 上报到「下载中心」：内容下载同样是长任务，用户需要看到进度
+    let instance_name = crate::instances::get_instance(instance_id)
+        .await
+        .map(|i| i.name)
+        .unwrap_or_else(|_| instance_id.to_string());
+    let provider_label = if provider == "curseforge" { "CurseForge" } else { "Modrinth" };
+    let ctx = crate::progress::TaskCtx::new(
+        instance_id,
+        &instance_name,
+        &format!(
+            "{provider_label}：{}",
+            if project_title.is_empty() { file_name.as_str() } else { project_title.as_str() }
+        ),
+    );
+    crate::progress::emit_install(&ctx, "content", &format!("正在下载 {file_name}…"), 0, 1);
+
+    let dest = content_dir.join(&file_name);
+    let download_result = download::download_file(&file_url, &dest.to_string_lossy(), None).await;
+    match &download_result {
+        Ok(p) => {
+            crate::progress::emit_download(
+                &ctx,
+                "content",
+                1,
+                1,
+                &file_name,
+                p.downloaded_bytes.max(0) as u64,
+                p.total_bytes.max(0) as u64,
+                true,
+            );
+            crate::progress::emit_install_done(&ctx, true, "安装完成", 1, 1);
+        }
+        Err(e) => {
+            crate::progress::emit_install_done(&ctx, false, &format!("安装失败：{e}"), 0, 1);
+        }
+    }
+    download_result?;
+
+    // 登记内容记录
+    let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    let mut rec = crate::models::InstalledContent::manual(file_name.clone());
+    rec.source = provider.to_string();
+    rec.project_id = Some(project_id.to_string());
+    rec.version_id = Some(version_id.to_string());
+    rec.name = Some(if project_title.is_empty() { file_name.clone() } else { project_title });
+    rec.size = size as i64;
+    crate::util::fill_content_from_jar(&mut rec, &dest);
+    let _ = crate::instances::add_content(instance_id, kind, rec).await;
+
+    Ok(json!({
+        "ok": true,
+        "filename": file_name,
+    }))
+}
+
+// ==================== List Content ====================
+
+pub async fn list_content(instance_id: &str, kind: &str) -> Result<serde_json::Value> {
+    crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
+    let data_dir = settings::get_data_dir().await?;
+    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let content_dir = instance_path.join(crate::instances::kind_folder(kind));
+
+    let mut records = crate::instances::list_content_records(instance_id, kind).await;
+    let mut on_disk: Vec<String> = Vec::new();
+    if content_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&content_dir) {
+            for entry in entries.flatten() {
+                if let Some(fname) = entry.file_name().to_str() {
+                    if entry.path().is_file() {
+                        on_disk.push(fname.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // auto-register files that exist on disk but have no record
+    let ext = if kind == "mod" { ".jar" } else { ".zip" };
+    let mut new_records: Vec<crate::models::InstalledContent> = Vec::new();
+    for fname in &on_disk {
+        if !fname.ends_with(ext) {
+            continue;
+        }
+        if records.iter().any(|r: &crate::models::InstalledContent| r.filename == *fname) {
+            continue;
+        }
+        let size = std::fs::metadata(content_dir.join(fname)).map(|m| m.len()).unwrap_or(0);
+        let mut rec = crate::models::InstalledContent::manual(fname.clone());
+        rec.size = size as i64;
+        crate::util::fill_content_from_jar(&mut rec, &content_dir.join(fname));
+        new_records.push(rec);
+    }
+    if !new_records.is_empty() {
+        let _ = crate::instances::add_content_batch(instance_id, kind, new_records.clone()).await;
+        records.extend(new_records);
+    }
+
+    // refresh metadata for existing records whose files are present
+    let mut updated = false;
+    for rec in &mut records {
+        let abs = content_dir.join(&rec.filename);
+        if abs.is_file() {
+            let before = rec.clone();
+            crate::util::fill_content_from_jar(rec, &abs);
+            if rec.name != before.name || rec.description != before.description || rec.icon != before.icon {
+                updated = true;
+            }
+        }
+    }
+    if updated {
+        let _ = crate::instances::add_content_batch(instance_id, kind, records.clone()).await;
+    }
+
+    let items: Vec<Value> = records
+        .iter()
+        .map(|r| {
+            let exists = content_dir.join(&r.filename).is_file()
+                || content_dir.join(format!("{}.disabled", r.filename)).is_file();
+            let mut rec_val = serde_json::to_value(r).unwrap_or(Value::Null);
+            if let Some(obj) = rec_val.as_object_mut() {
+                obj.insert("cn_name".to_string(), Value::Null);
+            }
+            json!({ "record": rec_val, "exists": exists })
+        })
+        .collect();
+    Ok(json!({ "items": items, "onDisk": on_disk }))
+}
+
+// ==================== Content Management ====================
+
+/// 卸载内容：删除磁盘文件（含 .disabled 变体）并移除记录。
+pub async fn uninstall_content(instance_id: &str, kind: &str, filename: &str) -> Result<(), String> {
+    crate::fsutil::validate_id(instance_id, "实例")?;
+    crate::fsutil::validate_name(filename)?;
+    if !crate::util::is_safe_filename(filename) {
+        return Err("非法文件名".into());
+    }
+    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
+    let dir = std::path::PathBuf::from(&data_dir)
+        .join("instances")
+        .join(instance_id)
+        .join(crate::instances::kind_folder(kind));
+    let _ = std::fs::remove_file(dir.join(filename));
+    let _ = std::fs::remove_file(dir.join(format!("{filename}.disabled")));
+    crate::instances::remove_content(instance_id, kind, filename).await
+}
+
+/// 启用/禁用内容（重命名 .disabled）。
+pub async fn toggle_content_enabled(
+    instance_id: &str,
+    kind: &str,
+    filename: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    crate::instances::set_content_enabled(instance_id, kind, filename, enabled).await
+}
+
+/// 导入本地文件到实例内容目录，并登记为手动内容。
+pub async fn import_local_file(
+    instance_id: &str,
+    kind: &str,
+    source_path: &str,
+) -> Result<Value, String> {
+    let source = std::path::Path::new(source_path);
+    let filename = source
+        .file_name()
+        .ok_or_else(|| "无效的文件路径".to_string())?
+        .to_string_lossy()
+        .to_string();
+    if !crate::util::is_safe_filename(&filename) {
+        return Err("非法的文件名".into());
+    }
+    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
+    let dest = std::path::PathBuf::from(&data_dir)
+        .join("instances")
+        .join(instance_id)
+        .join(crate::instances::kind_folder(kind))
+        .join(&filename);
+    // 复制 jar + 解出图标/元数据全是同步 IO（模组包几十 MB），挪出 tokio worker
+    let source_owned = source.to_path_buf();
+    let dest_owned = dest.clone();
+    let kind_owned = kind.to_string();
+    let record = tokio::task::spawn_blocking(move || -> Result<crate::models::InstalledContent, String> {
+        std::fs::create_dir_all(dest_owned.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::copy(&source_owned, &dest_owned).map_err(|e| format!("复制文件失败: {e}"))?;
+        let size = std::fs::metadata(&dest_owned).map(|m| m.len()).unwrap_or(0);
+        let mut record = crate::models::InstalledContent::manual(filename.clone());
+        record.size = size as i64;
+        if let Some(icon) = crate::util::extract_archive_icon(&dest_owned, &kind_owned) {
+            record.icon = Some(icon);
+        }
+        crate::util::fill_content_from_jar(&mut record, &dest_owned);
+        Ok(record)
+    })
+    .await
+    .map_err(|e| format!("复制任务失败: {e}"))??;
+    crate::instances::add_content(instance_id, kind, record).await?;
+    Ok(json!({ "ok": true }))
+}
+
+/// 检查 Modrinth 内容更新。返回每个有新版的可更新项。
+pub async fn check_updates(instance_id: &str, kind: &str) -> Result<Vec<Value>, String> {
+    crate::fsutil::validate_id(instance_id, "实例")?;
+    let instance = crate::instances::get_instance(instance_id).await.map_err(|e| e.to_string())?;
+    let records = crate::instances::list_content_records(instance_id, kind).await;
+    let loader = loader_str(&instance.loader);
+    let mut updates = Vec::new();
+    for item in records {
+        if item.source != "modrinth" {
+            continue;
+        }
+        let (Some(project_id), Some(_current)) = (item.project_id.as_deref(), item.version_id.as_deref()) else {
+            continue;
+        };
+        let Ok(versions) = project_versions("modrinth", project_id, &instance.mc_version, loader).await else {
+            continue;
+        };
+        if let Some(latest) = versions.first() {
+            let latest_id = latest.id.clone();
+            if !latest_id.is_empty() && latest_id != item.version_id.as_deref().unwrap_or("") {
+                updates.push(json!({
+                    "filename": item.filename,
+                    "projectId": project_id,
+                    "currentVersion": item.version,
+                    "latestVersion": latest.version_number,
+                    "latestVersionId": latest_id,
+                    "projectTitle": item.name,
+                    "kind": kind,
+                    "provider": "modrinth",
+                }));
+            }
+        }
+    }
+    Ok(updates)
+}
+
+/// 应用更新：后台下载新版本并移除旧文件，返回 `{ queued: true }`。
+pub async fn apply_update(
+    instance_id: &str,
+    kind: &str,
+    old_filename: &str,
+    provider: &str,
+    project_id: &str,
+    new_version_id: &str,
+) -> Result<Value, String> {
+    // 先安装新版本（同名文件会覆盖；不同名则额外下载）
+    let result = install_content(instance_id, provider, project_id, new_version_id, kind)
+        .await
+        .map_err(|e| e.to_string())?;
+    // 移除旧文件 + 记录（若与新版文件名不同）
+    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
+    let dir = std::path::PathBuf::from(&data_dir)
+        .join("instances")
+        .join(instance_id)
+        .join(crate::instances::kind_folder(kind));
+    if crate::util::is_safe_filename(old_filename) {
+        let _ = std::fs::remove_file(dir.join(old_filename));
+        let _ = std::fs::remove_file(dir.join(format!("{old_filename}.disabled")));
+    }
+    let _ = crate::instances::remove_content(instance_id, kind, old_filename).await;
+    Ok(result)
+}
+
+/// 异步识别未识别内容：先 sha1 哈希查找，回退到名称搜索。
+pub async fn identify_content(instance_id: &str, kind: &str) -> Result<(), String> {
+    crate::fsutil::validate_id(instance_id, "实例")?;
+    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
+    let dir = std::path::PathBuf::from(&data_dir)
+        .join("instances")
+        .join(instance_id)
+        .join(crate::instances::kind_folder(kind));
+    let records = crate::instances::list_content_records(instance_id, kind).await;
+    let to_identify: Vec<(String, String)> = records
+        .iter()
+        .filter(|r| r.project_id.is_none() && dir.join(&r.filename).is_file())
+        .filter_map(|r| {
+            let path = dir.join(&r.filename);
+            crate::util::file_sha1(&path).map(|h| (r.filename.clone(), h))
+        })
+        .collect();
+    if to_identify.is_empty() {
+        return Ok(());
+    }
+
+    let project_type = match kind {
+        "shader" => "shader",
+        "resourcepack" => "resourcepack",
+        _ => "mod",
+    };
+    let client = crate::util::http_client().await;
+
+    // ---- pass 1: hash lookup ----
+    let hashes: Vec<String> = to_identify.iter().map(|(_, h)| h.clone()).collect();
+    let resolved = resolve_by_hashes(&client, &hashes).await;
+    let mut resolved_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (filename, hash) in &to_identify {
+        if let Some((pid, vid)) = resolved.get(hash) {
+            let info = match project_info("modrinth", pid).await {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            let slug = if info.slug.is_empty() { None } else { Some(info.slug.clone()) };
+            let name = if info.title.is_empty() { None } else { Some(info.title.clone()) };
+            let desc = if info.description.is_empty() { None } else { Some(info.description.clone()) };
+            let icon = if info.icon_url.is_empty() { None } else { Some(info.icon_url.clone()) };
+            let mut rec = crate::instances::list_content_records(instance_id, kind).await
+                .into_iter()
+                .find(|r| r.filename == *filename);
+            if let Some(rec) = rec.as_mut() {
+                rec.source = "modrinth".into();
+                rec.project_id = Some(pid.clone());
+                rec.version_id = Some(vid.clone());
+                rec.slug = slug.clone();
+                if let Some(n) = name.clone() { rec.name = Some(n); }
+                if let Some(d) = desc.clone() { rec.description = Some(d); }
+                if let Some(ic) = icon.clone() { rec.icon = Some(ic); }
+                let _ = crate::instances::add_content_batch(instance_id, kind, vec![rec.clone()]).await;
+            }
+            resolved_files.insert(filename.clone());
+            eprintln!("[identify] {filename} → {pid}@{vid}");
+        }
+    }
+
+    // ---- pass 2: name search fallback ----
+    for (filename, _) in &to_identify {
+        if resolved_files.contains(filename.as_str()) {
+            continue;
+        }
+        let query = extract_search_query(filename);
+        if query.is_empty() {
+            continue;
+        }
+        let Ok(search_result) = browse("modrinth", &query, project_type, "", 0, "", "", "relevance", 1).await else {
+            continue;
+        };
+        if let Some(hit) = search_result.hits.first() {
+            let pid = hit.id.clone();
+            if pid.is_empty() {
+                continue;
+            }
+            let mut rec = crate::instances::list_content_records(instance_id, kind).await
+                .into_iter()
+                .find(|r| r.filename == *filename);
+            if let Some(rec) = rec.as_mut() {
+                rec.source = "modrinth".into();
+                rec.project_id = Some(pid.clone());
+                rec.slug = if hit.slug.is_empty() { None } else { Some(hit.slug.clone()) };
+                if !hit.title.is_empty() { rec.name = Some(hit.title.clone()); }
+                if !hit.description.is_empty() { rec.description = Some(hit.description.clone()); }
+                if !hit.icon_url.is_empty() { rec.icon = Some(hit.icon_url.clone()); }
+                if !hit.author.is_empty() { rec.authors = Some(vec![hit.author.clone()]); }
+                let _ = crate::instances::add_content_batch(instance_id, kind, vec![rec.clone()]).await;
+            }
+            eprintln!("[identify] {filename} → {pid} (name search)");
+        }
+    }
+    Ok(())
+}
+
+/// 从文件名提取搜索词（去掉扩展名与版本后缀）。
+fn extract_search_query(filename: &str) -> String {
+    let stem = filename.trim_end_matches(".zip").trim_end_matches(".jar");
+    let parts: Vec<&str> = stem.split(|c: char| c == '_' || c == '-' || c == '+').collect();
+    let mut keep: Vec<&str> = Vec::new();
+    for p in &parts {
+        if p.is_empty() {
+            continue;
+        }
+        if p.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            break;
+        }
+        if p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            break;
+        }
+        keep.push(p);
+    }
+    keep.join(" ")
+}
+
+/// 用 sha1 批量解析 Modrinth 项目/版本。返回 sha1 → (project_id, version_id)。
+async fn resolve_by_hashes(
+    client: &reqwest::Client,
+    hashes: &[String],
+) -> std::collections::HashMap<String, (String, String)> {
+    let mut out = std::collections::HashMap::new();
+    if hashes.is_empty() {
+        return out;
+    }
+    let body = json!({ "hashes": hashes, "algorithm": "sha1" });
+    let Ok(resp) = client.post(format!("{}/version_files", MODRINTH_API)).json(&body).send().await else {
+        return out;
+    };
+    let Ok(map) = resp.json::<Value>().await else {
+        return out;
+    };
+    if let Some(obj) = map.as_object() {
+        for (hash, ver) in obj {
+            let pid = ver.get("project_id").and_then(|v| v.as_str()).unwrap_or("");
+            let vid = ver.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if !pid.is_empty() && !vid.is_empty() {
+                out.insert(hash.clone(), (pid.to_string(), vid.to_string()));
+            }
+        }
+    }
+    out
+}
+
+// ==================== MC Wiki URL ====================
+
+pub async fn mc_wiki_url(name: &str, slug: Option<&str>, _provider: Option<&str>) -> Result<String> {
+    let slug = slug.unwrap_or(name);
+    Ok(format!("https://minecraft.wiki/w/{}", urlencoding::encode(slug)))
+}
+
+// ==================== Helpers ====================
+
+fn calculate_dir_size_sync(path: &std::path::Path) -> i64 {
+    let mut total: i64 = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = std::fs::metadata(entry.path()) {
+                if meta.is_file() {
+                    total += meta.len() as i64;
+                } else if meta.is_dir() {
+                    total += calculate_dir_size_sync(&entry.path());
+                }
+            }
+        }
+    }
+    total
+}
+
+fn count_files_sync(path: &std::path::Path) -> i64 {
+    let mut count: i64 = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = std::fs::metadata(entry.path()) {
+                if meta.is_file() {
+                    count += 1;
+                } else if meta.is_dir() {
+                    count += count_files_sync(&entry.path());
+                }
+            }
+        }
+    }
+    count
+}
+
+async fn calculate_dir_size(path: &std::path::Path) -> i64 {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || calculate_dir_size_sync(&path))
+        .await
+        .unwrap_or(0)
+}
+
+async fn count_files(path: &std::path::Path) -> i64 {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || count_files_sync(&path))
+        .await
+        .unwrap_or(0)
+}
+
+// ==================== Game Icons ====================
+
+#[derive(serde::Serialize, Clone)]
+pub struct GameIcon {
+    pub name: String,
+    pub label: String,
+    pub path: String,
+}
+
+const GAME_TEXTURES: &[(&str, &str, &[&str])] = &[
+    ("diamond", "钻石", &["assets/minecraft/textures/item/diamond.png", "assets/minecraft/textures/items/diamond.png"]),
+    ("emerald", "绿宝石", &["assets/minecraft/textures/item/emerald.png", "assets/minecraft/textures/items/emerald.png"]),
+    ("iron_ingot", "铁锭", &["assets/minecraft/textures/item/iron_ingot.png", "assets/minecraft/textures/items/iron_ingot.png"]),
+    ("gold_ingot", "金锭", &["assets/minecraft/textures/item/gold_ingot.png", "assets/minecraft/textures/items/gold_ingot.png"]),
+    ("netherite_ingot", "下界合金锭", &["assets/minecraft/textures/item/netherite_ingot.png", "assets/minecraft/textures/items/netherite_ingot.png"]),
+    ("iron_sword", "铁剑", &["assets/minecraft/textures/item/iron_sword.png", "assets/minecraft/textures/items/iron_sword.png"]),
+    ("diamond_sword", "钻石剑", &["assets/minecraft/textures/item/diamond_sword.png", "assets/minecraft/textures/items/diamond_sword.png"]),
+    ("netherite_sword", "下界合金剑", &["assets/minecraft/textures/item/netherite_sword.png", "assets/minecraft/textures/items/netherite_sword.png"]),
+    ("bow", "弓", &["assets/minecraft/textures/item/bow.png", "assets/minecraft/textures/items/bow.png"]),
+    ("shield", "盾牌", &["assets/minecraft/textures/item/shield.png", "assets/minecraft/textures/items/shield.png"]),
+    ("apple", "苹果", &["assets/minecraft/textures/item/apple.png", "assets/minecraft/textures/items/apple.png"]),
+    ("golden_apple", "金苹果", &["assets/minecraft/textures/item/golden_apple.png", "assets/minecraft/textures/items/golden_apple.png"]),
+    ("clock", "时钟", &["assets/minecraft/textures/item/clock_0.png", "assets/minecraft/textures/items/clock_0.png"]),
+    ("compass", "指南针", &["assets/minecraft/textures/item/compass_0.png", "assets/minecraft/textures/items/compass_0.png"]),
+    ("map", "地图", &["assets/minecraft/textures/item/map.png", "assets/minecraft/textures/items/map.png"]),
+    ("bucket", "桶", &["assets/minecraft/textures/item/bucket.png", "assets/minecraft/textures/items/bucket.png"]),
+    ("fishing_rod", "钓鱼竿", &["assets/minecraft/textures/item/fishing_rod.png", "assets/minecraft/textures/items/fishing_rod.png"]),
+    ("shears", "剪刀", &["assets/minecraft/textures/item/shears.png", "assets/minecraft/textures/items/shears.png"]),
+    ("flint_and_steel", "打火石", &["assets/minecraft/textures/item/flint_and_steel.png", "assets/minecraft/textures/items/flint_and_steel.png"]),
+    ("ender_eye", "末影之眼", &["assets/minecraft/textures/item/ender_eye.png", "assets/minecraft/textures/items/ender_eye.png"]),
+    ("ender_pearl", "末影珍珠", &["assets/minecraft/textures/item/ender_pearl.png", "assets/minecraft/textures/items/ender_pearl.png"]),
+    ("firework_rocket", "烟花火箭", &["assets/minecraft/textures/item/firework_rocket.png", "assets/minecraft/textures/items/firework_rocket.png"]),
+    ("book", "书", &["assets/minecraft/textures/item/book.png", "assets/minecraft/textures/items/book.png"]),
+    ("enchanted_book", "附魔书", &["assets/minecraft/textures/item/enchanted_book.png", "assets/minecraft/textures/items/enchanted_book.png"]),
+    ("totem_of_undying", "不死图腾", &["assets/minecraft/textures/item/totem_of_undying.png", "assets/minecraft/textures/items/totem_of_undying.png"]),
+    ("nether_star", "下界之星", &["assets/minecraft/textures/item/nether_star.png", "assets/minecraft/textures/items/nether_star.png"]),
+    ("blaze_rod", "烈焰棒", &["assets/minecraft/textures/item/blaze_rod.png", "assets/minecraft/textures/items/blaze_rod.png"]),
+    ("experience_bottle", "经验瓶", &["assets/minecraft/textures/item/experience_bottle.png", "assets/minecraft/textures/items/experience_bottle.png"]),
+    ("grass_block", "草方块", &["assets/minecraft/textures/block/grass_block_top.png", "assets/minecraft/textures/blocks/grass_top.png"]),
+    ("stone", "石头", &["assets/minecraft/textures/block/stone.png", "assets/minecraft/textures/blocks/stone.png"]),
+    ("diamond_block", "钻石块", &["assets/minecraft/textures/block/diamond_block.png", "assets/minecraft/textures/blocks/diamond_block.png"]),
+    ("gold_block", "金块", &["assets/minecraft/textures/block/gold_block.png", "assets/minecraft/textures/blocks/gold_block.png"]),
+    ("iron_block", "铁块", &["assets/minecraft/textures/block/iron_block.png", "assets/minecraft/textures/blocks/iron_block.png"]),
+    ("emerald_block", "绿宝石块", &["assets/minecraft/textures/block/emerald_block.png", "assets/minecraft/textures/blocks/emerald_block.png"]),
+    ("netherite_block", "下界合金块", &["assets/minecraft/textures/block/netherite_block.png", "assets/minecraft/textures/blocks/netherite_block.png"]),
+    ("crafting_table", "工作台", &["assets/minecraft/textures/block/crafting_table_front.png", "assets/minecraft/textures/blocks/crafting_table_front.png"]),
+    ("furnace", "熔炉", &["assets/minecraft/textures/block/furnace_front.png", "assets/minecraft/textures/blocks/furnace_front.png"]),
+    ("beacon", "信标", &["assets/minecraft/textures/block/beacon.png", "assets/minecraft/textures/blocks/beacon.png"]),
+    ("enchanting_table", "附魔台", &["assets/minecraft/textures/block/enchanting_table_front.png", "assets/minecraft/textures/blocks/enchanting_table_front.png"]),
+    ("anvil", "铁砧", &["assets/minecraft/textures/block/anvil.png", "assets/minecraft/textures/blocks/anvil.png"]),
+    ("tnt", "TNT", &["assets/minecraft/textures/block/tnt.png", "assets/minecraft/textures/blocks/tnt.png"]),
+    ("obsidian", "黑曜石", &["assets/minecraft/textures/block/obsidian.png", "assets/minecraft/textures/blocks/obsidian.png"]),
+    ("glowstone", "荧石", &["assets/minecraft/textures/block/glowstone.png", "assets/minecraft/textures/blocks/glowstone.png"]),
+    ("bookshelf", "书架", &["assets/minecraft/textures/block/bookshelf.png", "assets/minecraft/textures/blocks/bookshelf.png"]),
+    ("pumpkin", "南瓜", &["assets/minecraft/textures/block/pumpkin_front.png", "assets/minecraft/textures/blocks/pumpkin_front.png"]),
+    ("cake", "蛋糕", &["assets/minecraft/textures/block/cake_top.png", "assets/minecraft/textures/blocks/cake_top.png"]),
+    ("sponge", "海绵", &["assets/minecraft/textures/block/sponge.png", "assets/minecraft/textures/blocks/sponge.png"]),
+    ("ice", "冰", &["assets/minecraft/textures/block/ice.png", "assets/minecraft/textures/blocks/ice.png"]),
+    ("netherrack", "下界岩", &["assets/minecraft/textures/block/netherrack.png", "assets/minecraft/textures/blocks/netherrack.png"]),
+    ("redstone", "红石粉", &["assets/minecraft/textures/item/redstone.png", "assets/minecraft/textures/items/redstone.png"]),
+    ("gunpowder", "火药", &["assets/minecraft/textures/item/gunpowder.png", "assets/minecraft/textures/items/gunpowder.png"]),
+    ("slime_ball", "粘液球", &["assets/minecraft/textures/item/slime_ball.png", "assets/minecraft/textures/items/slime_ball.png"]),
+    ("bone", "骨头", &["assets/minecraft/textures/item/bone.png", "assets/minecraft/textures/items/bone.png"]),
+    ("stick", "木棍", &["assets/minecraft/textures/item/stick.png", "assets/minecraft/textures/items/stick.png"]),
+    ("coal", "煤炭", &["assets/minecraft/textures/item/coal.png", "assets/minecraft/textures/items/coal.png"]),
+    ("wheat", "小麦", &["assets/minecraft/textures/item/wheat.png", "assets/minecraft/textures/items/wheat.png"]),
+    ("carrot", "胡萝卜", &["assets/minecraft/textures/item/carrot.png", "assets/minecraft/textures/items/carrot.png"]),
+    ("potato", "马铃薯", &["assets/minecraft/textures/item/potato.png", "assets/minecraft/textures/items/potato.png"]),
+];
+
+/// 从已安装版本的 client.jar 中提取一套 Minecraft 材质作为实例图标。
+pub async fn extract_game_icons(instance_id: Option<String>) -> Result<Vec<GameIcon>, String> {
+    use std::io::Read;
+    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
+    let versions_dir = std::path::PathBuf::from(&data_dir).join("versions");
+    let mut client_jar: Option<std::path::PathBuf> = None;
+
+    if let Some(id) = &instance_id {
+        let jar = versions_dir.join(id).join(format!("{}.jar", id));
+        if jar.exists() {
+            client_jar = Some(jar);
+        }
+        if client_jar.is_none() {
+            if let Ok(inst) = crate::instances::get_instance(id).await {
+                let jar = versions_dir.join(&inst.mc_version).join(format!("{}.jar", inst.mc_version));
+                if jar.exists() {
+                    client_jar = Some(jar);
+                }
+            }
+        }
+    }
+    if client_jar.is_none() {
+        if let Ok(entries) = std::fs::read_dir(&versions_dir) {
+            for e in entries.flatten() {
+                let dir = e.path();
+                if !dir.is_dir() { continue; }
+                let name = e.file_name().to_string_lossy().to_string();
+                let jar = dir.join(format!("{}.jar", name));
+                if jar.exists() {
+                    client_jar = Some(jar);
+                    break;
+                }
+            }
+        }
+    }
+    let jar_path = client_jar.ok_or_else(|| "未找到已安装的游戏版本，请先安装游戏后再设置图标".to_string())?;
+
+    let icons_dir = std::path::PathBuf::from(&data_dir).join("game-icons");
+    // client.jar 动辄几十 MB，打开 + 逐个解压全是同步 IO，挪出 tokio worker
+    let icons = tokio::task::spawn_blocking(move || -> Result<Vec<GameIcon>, String> {
+        let jar_path = std::path::Path::new(&jar_path);
+        std::fs::create_dir_all(&icons_dir).map_err(|e| format!("创建图标目录失败: {e}"))?;
+
+        let file =
+            std::fs::File::open(jar_path).map_err(|e| format!("打开 client.jar 失败: {e}"))?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| format!("解析 client.jar 失败: {e}"))?;
+
+        let mut icons = Vec::new();
+        for (key, label, candidates) in GAME_TEXTURES {
+            for cand in *candidates {
+                if let Ok(mut entry) = archive.by_name(cand) {
+                    if entry.is_dir() {
+                        continue;
+                    }
+                    let mut buf = Vec::new();
+                    if Read::read_to_end(&mut entry, &mut buf).is_err() {
+                        continue;
+                    }
+                    if buf.len() < 8 {
+                        continue;
+                    }
+                    let out_path = icons_dir.join(format!("{}.png", key));
+                    if std::fs::write(&out_path, &buf).is_err() {
+                        continue;
+                    }
+                    icons.push(GameIcon {
+                        name: key.to_string(),
+                        label: label.to_string(),
+                        path: out_path.to_string_lossy().to_string(),
+                    });
+                    break;
+                }
+            }
+        }
+        if icons.is_empty() {
+            return Err("未能从游戏文件中提取任何图标素材".into());
+        }
+        Ok(icons)
+    })
+    .await
+    .map_err(|e| format!("提取图标任务失败: {e}"))??;
+
+    Ok(icons)
+}
+
+/// 写文本内容到文件（用于日志导出等）。
+///
+/// 安卓上「另存为」对话框 `save()` 返回的是 SAF 的 `content://` URI 而不是路径，
+/// 对 URI 直接 `fs::write` 会失败 —— 那种情况必须走原生的 ContentResolver 写回。
+pub fn save_text_file(path: &str, content: &str) -> Result<(), String> {
+    if path.starts_with("content://") {
+        return crate::android_bridge::write_text_to_uri(path, content);
+    }
+    let p = std::path::Path::new(path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    std::fs::write(p, content).map_err(|e| format!("写入文件失败: {e}"))
+}

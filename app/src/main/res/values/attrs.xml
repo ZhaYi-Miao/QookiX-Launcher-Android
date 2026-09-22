@@ -1,0 +1,3 @@
+<resources>
+    <attr name="colorScheme" format="reference|color" />
+</resources>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Pojav 的布局/控件用的是 portrait-sdp / portrait-ssp（JitPack）里的 _NNsdp / _NNssp 尺寸。
+      本机开发环境无法访问 JitPack（SSL 不通），故在此按 1:1 生成等值 dp/sp 资源。
+      差异：原库会按屏幕最短边对尺寸做整体缩放，这里不做缩放。
+      影响仅限少数图标按钮的视觉大小，不影响任何交互逻辑。
+    -->
+    <dimen name="_1sdp">1dp</dimen>
+    <dimen name="_2sdp">2dp</dimen>
+    <dimen name="_4sdp">4dp</dimen>
+    <dimen name="_5sdp">5dp</dimen>
+    <dimen name="_6sdp">6dp</dimen>
+    <dimen name="_8sdp">8dp</dimen>
+    <dimen name="_10sdp">10dp</dimen>
+    <dimen name="_11sdp">11dp</dimen>
+    <dimen name="_12sdp">12dp</dimen>
+    <dimen name="_12ssp">12sp</dimen>
+    <dimen name="_13ssp">13sp</dimen>
+    <dimen name="_15sdp">15dp</dimen>
+    <dimen name="_16sdp">16dp</dimen>
+    <dimen name="_20sdp">20dp</dimen>
+    <dimen name="_22sdp">22dp</dimen>
+    <dimen name="_24sdp">24dp</dimen>
+    <dimen name="_30sdp">30dp</dimen>
+    <dimen name="_32sdp">32dp</dimen>
+    <dimen name="_35sdp">35dp</dimen>
+    <dimen name="_36sdp">36dp</dimen>
+    <dimen name="_40sdp">40dp</dimen>
+    <dimen name="_48sdp">48dp</dimen>
+    <dimen name="_66sdp">66dp</dimen>
+    <dimen name="_94sdp">94dp</dimen>
+    <dimen name="_134sdp">134dp</dimen>
+    <dimen name="_150sdp">150dp</dimen>
+    <dimen name="_200sdp">200dp</dimen>
+    <dimen name="_280sdp">280dp</dimen>
+</resources>

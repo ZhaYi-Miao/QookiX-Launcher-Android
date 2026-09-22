@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="qk_menu_title_ingame">游戏内菜单</string>
+    <string name="qk_menu_title_editor">控制布局编辑</string>
+    <string name="qk_menu_subtitle_hint">选择一项操作</string>
+    <string name="qk_menu_subtitle_editor">拖动按钮调整位置 · 长按编辑属性</string>
+</resources>

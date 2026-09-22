@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  游戏内 UI 调色板 —— 与启动器前端 (src/styles.css / src/theme.ts) 同源。
+  强调色取默认主题琥珀 #E89A4B；底色取前端 CSS 变量 bg-0 / #0b0d12 一系；
+  边框/文字层级与前端一致（border 8% 白、text-1/2/3）。
+-->
+<resources>
+    <!-- 强调色 -->
+    <color name="qk_accent">#FFE89A4B</color>
+    <color name="qk_accent_hover">#FFF2B56B</color>
+    <color name="qk_accent_pressed">#FFD97F33</color>
+    <color name="qk_accent_light">#FFF2C079</color>
+    <color name="qk_accent_soft">#33E89A4B</color>       <!-- 20% -->
+    <color name="qk_accent_border">#66E89A4B</color>     <!-- 40% -->
+    <color name="qk_accent_ripple">#40E89A4B</color>     <!-- 25% -->
+
+    <!-- 背景 / 表面 -->
+    <color name="qk_bg_0">#FF0B0D12</color>
+    <color name="qk_bg_1">#FF10131A</color>
+    <color name="qk_surface">#FF151924</color>
+    <color name="qk_surface_float">#F2151924</color>     <!-- 95% 不透明，盖在游戏画面上 -->
+    <color name="qk_surface_menu">#F210131A</color>
+
+    <!-- 描边 / 分隔 / 涟漪 -->
+    <color name="qk_border">#14FFFFFF</color>            <!-- 8% -->
+    <color name="qk_divider">#14FFFFFF</color>
+    <color name="qk_ripple">#1FFFFFFF</color>            <!-- 12% -->
+    <color name="qk_scrim">#99000000</color>
+
+    <!-- 文字层级 -->
+    <color name="qk_text_1">#FFF2F3F7</color>
+    <color name="qk_text_2">#FFC6C8D2</color>
+    <color name="qk_text_3">#FF8B8E9C</color>
+
+    <!-- 其它 -->
+    <color name="qk_shadow">#99000000</color>
+    <color name="qk_log_bg">#CC05070B</color>
+</resources>

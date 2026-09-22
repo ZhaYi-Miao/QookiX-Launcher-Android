@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  游戏内视图层级 —— 结构与 PojavLauncher 的 activity_basemain.xml 一致
+  （ControlLayout 必须是 MinecraftGLSurface 的直接父级；id 全部沿用上游，
+   net.kdt.pojavlaunch.customcontrols.ControlLayout#getGameSurface 按 id 查找）。
+  仅做了视觉升级：抽屉改成贴右边缘的圆角「纸片」+ 标题 + 图标化列表项。
+-->
+<androidx.drawerlayout.widget.DrawerLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_height="match_parent"
+	android:layout_width="match_parent"
+	android:layout_alignParentRight="true"
+	android:id="@+id/main_drawer_options"
+	android:background="@drawable/no_focus_shown"
+	android:keepScreenOn="true">
+
+	<FrameLayout
+		android:id="@+id/content_frame"
+		android:layout_width="match_parent"
+		android:layout_height="match_parent">
+
+		<net.kdt.pojavlaunch.customcontrols.ControlLayout
+			android:id="@+id/main_control_layout"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent">
+
+			<View style="@style/DimensionTracker"/>
+
+			<net.kdt.pojavlaunch.MinecraftGLSurface
+				android:id="@+id/main_game_render_view"
+				android:layout_width="fill_parent"
+				android:layout_height="fill_parent"
+				android:defaultFocusHighlightEnabled="false"
+                tools:ignore="UnusedAttribute" />
+
+			<net.kdt.pojavlaunch.customcontrols.mouse.Touchpad
+				android:layout_height="match_parent"
+				android:layout_width="match_parent"
+				android:orientation="vertical"
+				android:id="@+id/main_touchpad"
+				android:focusable="false"
+				android:translationZ="1dp"
+				android:visibility="gone"/>
+
+			<net.kdt.pojavlaunch.customcontrols.keyboard.TouchCharInput
+				android:id="@+id/mainTouchCharInput"
+				android:layout_width="1dp"
+				android:layout_height="1dp"
+				android:background="@android:color/darker_gray"
+				android:ems="10"
+				android:imeOptions="flagNoFullscreen|flagNoExtractUi|flagNoPersonalizedLearning|actionDone"
+				android:inputType="textFilter|textImeMultiLine|textAutoComplete|textAutoCorrect"
+				tools:ignore="TouchTargetSizeCheck" />
+
+			<net.kdt.pojavlaunch.customcontrols.handleview.DrawerPullButton
+				android:id="@+id/drawer_button"
+				android:layout_width="58dp"
+				android:layout_height="22dp"
+				android:layout_marginTop="6dp"
+				android:padding="0dp"
+				android:elevation="10dp"
+				android:layout_gravity="center_horizontal"/>
+
+			<net.kdt.pojavlaunch.customcontrols.mouse.HotbarView
+				android:id="@+id/hotbar_view"
+				android:layout_width="0px"
+				android:layout_height="0px"/>
+
+		</net.kdt.pojavlaunch.customcontrols.ControlLayout>
+
+		<com.kdt.LoggerView
+			android:id="@+id/mainLoggerView"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:visibility="gone"
+			/>
+
+	</FrameLayout>
+
+	<!--
+	  右侧抽屉（游戏内菜单 / 就地编辑器）。
+	  注意：容器才是 DrawerLayout 的直接子 View，openDrawer() 必须传它；
+	  列表本身仍是 id=main_navigation_view（GameActivity 用它 setAdapter）。
+	-->
+	<LinearLayout
+		android:id="@+id/main_nav_container"
+		android:layout_width="256dp"
+		android:layout_height="match_parent"
+		android:layout_gravity="right"
+		android:orientation="vertical"
+		android:background="@drawable/qk_drawer_bg"
+		android:elevation="16dp"
+		android:fitsSystemWindows="false"
+		android:clipToPadding="false"
+		android:paddingTop="14dp"
+		android:paddingBottom="10dp">
+
+		<TextView
+			android:id="@+id/qk_menu_title"
+			style="@style/QookixMenuTitle"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:paddingStart="22dp"
+			android:paddingEnd="22dp"
+			android:text="@string/qk_menu_title_ingame" />
+
+		<TextView
+			android:id="@+id/qk_menu_subtitle"
+			style="@style/QookixMenuSubtitle"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:paddingStart="22dp"
+			android:paddingEnd="22dp"
+			android:paddingTop="3dp"
+			android:text="@string/qk_menu_subtitle_hint" />
+
+		<View
+			android:layout_width="match_parent"
+			android:layout_height="1dp"
+			android:layout_marginTop="12dp"
+			android:layout_marginBottom="6dp"
+			android:layout_marginStart="14dp"
+			android:layout_marginEnd="14dp"
+			android:background="@color/qk_divider" />
+
+		<ListView
+			android:id="@+id/main_navigation_view"
+			android:layout_width="match_parent"
+			android:layout_height="0dp"
+			android:layout_weight="1"
+			android:divider="@null"
+			android:dividerHeight="0dp"
+			android:scrollbars="none"
+			android:clipToPadding="false" />
+
+	</LinearLayout>
+
+</androidx.drawerlayout.widget.DrawerLayout>

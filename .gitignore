@@ -1,0 +1,60 @@
+# ── 依赖与构建产物 ──────────────────────────────────────────────
+node_modules/
+dist/
+
+# Gradle / Android：任何层级的 build/ 都是产物
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.idsig
+*.jks
+*.keystore
+
+# Rust
+src-tauri/target/
+
+# ── 仅本机使用的构建辅助（内含本机绝对路径，不入库）────────────────
+# CI 用环境变量提供 NDK 链接器（见 .github/workflows/release.yml），
+# 本机编译仍用磁盘上这份 config.toml（已忽略，不随仓库分发）。
+src-tauri/.cargo/config.toml
+/copy_tauri.bat
+/copy_tauri.ps1
+
+# 我们自己编出来的原生库。
+# **不要写成 `*.so`** —— 同目录下 liblwjgl*/libopenal/libOSMesa/libgl4es_114/
+# libvulkan_freedreno/libfreetype/libjnidispatch/libunpack200 都是随仓库携带的
+# 预编译资产，是构建的必需输入，忽略掉就再也编不出能跑的包了。
+src-tauri/gen/android/app/src/main/jniLibs/*/libqookix_lib.so
+app/src/main/jniLibs/*/libqookix_lib.so
+
+# vite 产物：会被 `tauri::generate_context!` 编进 .so，属于生成物。
+# 注意同名目录在仓库里有两处（另一处是遗留脚手架），一起忽略免得混淆。
+src-tauri/gen/android/app/src/main/assets/
+app/src/main/assets/
+
+# ── 本机 / IDE 配置 ─────────────────────────────────────────────
+.idea/
+*.iml
+.codeartsdoer/
+
+# ── 调试与验证留下的产物（不属于源码）──────────────────────────
+# 只忽略项目根目录下的：子目录里的同名文件（如图标、截图资源）要保留。
+/*.png
+/*.xml
+/*-log*.txt
+/*.txt
+/*.jar
+/*.bin
+/*.json.bak
+/*setp*
+dev.log
+device_settings.json
+mf_probe.json
+v1211.json
+/check_*.mjs
+/scan_jar.mjs
+/mcjar_out/
+/*_out/
+/maps*.txt

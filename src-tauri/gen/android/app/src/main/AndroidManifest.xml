@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      前台服务类型对应的权限：Android 14+ 起，没有这条权限 startForeground() 会被系统拒绝
+      （ForegroundServiceStartNotAllowedException），游戏进程就没有保护，
+      切后台很容易被 lowmemorykiller 杀掉 —— 表现就是「切出去再回来游戏没了/闪退」。
+      Pojav 声明的是 DATA_SYNC + SPECIAL_USE 两条。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 关于页彩蛋：曲奇炸碎时 navigator.vibrate 触发一下震动反馈 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 控制布局可以通过 content:// 从外部导入（Pojav 的 ImportControlActivity 同款） -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="false" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.qookix_launcher"
+        android:allowNativeHeapPointerTagging="false"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+
+        <!-- Main Activity (Tauri WebView) -->
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustResize"
+            android:enableOnBackInvokedCallback="true"
+            android:alwaysRetainTaskState="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Game Activity (Fullscreen game rendering)
+
+          进入游戏之后的逻辑完全照 PojavLauncher 的 MainActivity：
+            - configChanges 必须包含 keyboard|navigation|uiMode，否则旋转/系统栏变化时
+              onConfigurationChanged 不会触发，控制按钮与游戏窗口尺寸也不会重算；
+            - screenOrientation="sensorLandscape"：横屏两个方向都允许（GyroControl 会据此
+              修正陀螺仪轴向；固定的 landscape 会让反向握持时视角反向）；
+            - launchMode="singleTask"：游戏 JVM 与这个界面绑在一起，从启动器再点一次
+              「启动游戏」必须复用已有实例，否则两个 GameActivity 会抢同一个 Surface / 同一个 JVM。
+
+          与 Pojav 的差异：**不加 android:process=":game"**。QookiX 的游戏 JVM 是
+          在应用进程内通过 JNI 创建的（libqookix_lib.so 持有 JVM 与 Surface 桥），
+          拆到独立进程会让两边拿到各自的 pojav_environ / 输入队列，直接失去输入与渲染。
+        -->
+        <activity
+            android:name=".GameActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:documentLaunchMode="intoExisting"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
+            android:theme="@style/Theme.qookix_game" />
+
+        <!--
+          控制布局编辑器（全屏、可拖动按钮/摇杆/抽屉）。
+          来自 PojavLauncher 的 net.kdt.pojavlaunch.CustomControlsActivity。
+        -->
+        <activity
+            android:name="net.kdt.pojavlaunch.CustomControlsActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|keyboard|navigation"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="net.kdt.pojavlaunch.CustomControlsActivity" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          从外部导入控制布局（content:// 的 json/纯文本）。
+          来自 PojavLauncher 的 net.kdt.pojavlaunch.ImportControlActivity。
+        -->
+        <activity
+            android:name="net.kdt.pojavlaunch.ImportControlActivity"
+            android:configChanges="keyboard|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:windowSoftInputMode="stateVisible">
+            <intent-filter android:label="@string/import_control_label">
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/json" />
+                <data android:scheme="content" android:mimeType="text/json" />
+                <data android:scheme="content" android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- Game Service (Foreground) -->
+        <!--
+          foregroundServiceType 用 specialUse（Pojav 也是这么声明的）：
+          dataSync 在 Android 15+ 有「6 小时/24 小时」上限，超时会被系统停掉，
+          表现就是「玩一会儿切后台就被杀」。specialUse 需要下面的 property 说明用途。
+        -->
+        <!-- 不设 stopWithTask（默认即 false）—— 改由 GameService.onTaskRemoved()
+             主动收尾（先杀游戏再停服务）。否则从最近任务划掉启动器后，
+             同进程的 JVM 会继续跑、却再也看不到界面（问题清单 P0-15）。 -->
+        <service
+            android:name=".services.GameService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持 Minecraft Java 版游戏进程在前台存活，避免切到后台被系统回收" />
+        </service>
+
+        <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+              android:name="android.support.FILE_PROVIDER_PATHS"
+              android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>
