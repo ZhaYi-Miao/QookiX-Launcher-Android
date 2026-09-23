@@ -150,10 +150,42 @@ jobs:
         working-directory: src-tauri/gen/android
         run: ./gradlew :app:assembleArm64Release --no-daemon
 
-      # ⑤ 发布：APK 挂到该 tag 的 GitHub Release
+      # ⑥ 产物改名：带版本号（多版本下载时不会认错）
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+          TAG="${GITHUB_REF_NAME}"
+          cp src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk \
+             "dist/QookiX-Launcher-Android-${TAG}-arm64.apk"
+          # 同时给出校验值，方便用户核对下载完整性
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          ls -lh dist
+
+      # ⑦ 发布说明：优先用 .github/release-notes/<tag>.md 完全自定义；
+      #    没有则用 DEFAULT.md 模板（自动替换 {{VERSION}} / {{DATE}} / {{CHANGELOG}}）。
+      #    想给某个版本写说明，就新增一个同名 md，无需改 workflow。
+      - name: 准备发布说明
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES=".github/release-notes/${TAG}.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" /tmp/release-body.md
+            echo "使用自定义说明：$NOTES"
+          else
+            CHANGELOG="https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
+            sed -e "s/{{VERSION}}/${TAG}/g" \
+                -e "s|{{DATE}}|$(date -u '+%Y-%m-%d')|g" \
+                -e "s|{{CHANGELOG}}|${CHANGELOG}|g" \
+                .github/release-notes/DEFAULT.md > /tmp/release-body.md
+            echo "使用默认模板 DEFAULT.md"
+          fi
+          echo "--- 发布说明预览 ---"; cat /tmp/release-body.md
+
+      # ⑧ 发布：APK + 校验文件挂到该 tag 的 GitHub Release
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: /tmp/release-body.md
           files: |
-            src-tauri/gen/android/app/build/outputs/apk/arm64/release/*.apk
+            dist/*.apk
+            dist/SHA256SUMS.txt
