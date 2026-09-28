@@ -33,6 +33,7 @@
         <item>@string/quick_setting_title</item>
         <item>@string/mcl_option_customcontrol</item>
         <item>@string/control_screenshot</item>
+        <item>@string/menu_perf</item>
     </string-array>
     
     <string-array name="renderer_values">

@@ -336,7 +336,22 @@ async fn ms_access_token(refresh_token: &str, client_id: &str) -> Result<String>
         .send()
         .await
         .context("Failed to get access token")?;
-    let body: Value = resp.json().await.context("Failed to parse token response")?;
+    let status = resp.status();
+    let text = resp.text().await.context("读取令牌响应失败")?;
+    let body: Value = serde_json::from_str(&text).map_err(|e| {
+        anyhow::anyhow!(
+            "MSA 取令牌失败（HTTP {}，响应不是 JSON：{e}）：{}",
+            status.as_u16(),
+            snippet(&text, 300)
+        )
+    })?;
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "MSA 取令牌被拒（HTTP {}）：{}",
+            status.as_u16(),
+            snippet(&body.to_string(), 300)
+        ));
+    }
     body["access_token"]
         .as_str()
         .map(|s| s.to_string())
@@ -358,6 +373,45 @@ pub async fn minecraft_access_token(account: &Account) -> Result<String> {
     Ok(token)
 }
 
+/// 把响应正文裁一小段用于报错（避免整页 HTML 糊满界面/日志）。
+fn snippet(text: &str, max: usize) -> String {
+    let one_line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if one_line.chars().count() <= max {
+        one_line
+    } else {
+        format!("{}…", one_line.chars().take(max).collect::<String>())
+    }
+}
+
+/// 发请求并读出状态码 + 正文原文。
+///
+/// 为什么要拿到原文：Xbox 系接口被拒时**正文常常是空的**（实测 400 + Content-Length: 0），
+/// 直接 `response.json()` 只会抛一句"解析失败"，把真正的状态码和空正文掩盖掉。
+async fn send_raw(
+    req: reqwest::RequestBuilder,
+    what: &str,
+) -> Result<(reqwest::StatusCode, String)> {
+    let resp = req.send().await.with_context(|| format!("{what}：请求发送失败"))?;
+    let status = resp.status();
+    let text = resp.text().await.with_context(|| format!("{what}：读取响应失败"))?;
+    Ok((status, text))
+}
+
+/// 解析 JSON 并附上状态码/正文的诊断信息（正文为空时明确写出来）。
+fn parse_json(status: reqwest::StatusCode, text: &str, what: &str) -> Result<Value> {
+    serde_json::from_str(text).map_err(|e| {
+        anyhow::anyhow!(
+            "{what} 失败（HTTP {}，响应{}：{e}）",
+            status.as_u16(),
+            if text.trim().is_empty() {
+                "为空".to_string()
+            } else {
+                format!("不是 JSON，原文：{}", snippet(text, 300))
+            }
+        )
+    })
+}
+
 /// MSA → XBL → XSTS → Minecraft 四步。
 ///
 /// 返回 `(Minecraft access token, uhs)` —— uhs 是 XSTS 里的用户哈希，
@@ -370,47 +424,104 @@ async fn exchange_minecraft_token(refresh_token: &str, client_id: &str) -> Resul
     let access_token_str = ms_access_token(refresh_token, client_id).await?;
 
     // Step 2: Get XBL Token
-    let xbl_response = client
-        .post(XBL_AUTH_URL)
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "Properties": {
-                "AuthMethod": "RPS",
-                "SiteName": "user.auth.xboxlive.com",
-                // v1.0 的 MSA access token 必须带 `d=` 前缀，漏了 XBL 会直接 400
-                "RpsTicket": format!("d={access_token_str}")
-            },
-            "RelyingParty": "http://auth.xboxlive.com",
-            "TokenType": "JWT"
-        }))
-        .send()
-        .await
-        .context("Failed to get XBL token")?;
-
-    let xbl: Value = xbl_response.json().await
-        .context("Failed to parse XBL response")?;
-    let xbl_token = xbl["Token"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No XBL token in response"))?;
+    //
+    // RpsTicket 的前缀随 MSA client_id 类型而定：
+    //   - Live SDK / MSA v1 客户端（如 00000000402b5328）→ 需要 `d=` 前缀；
+    //   - 现代 Azure 应用（UUID 形式，无 `d=`）→ 直接用原始令牌。
+    // 前缀不对时 XBL 会回 **HTTP 400 + 空正文**（实测，测试机直连确认），
+    // 报错信息只会是"解析失败"，极难定位 —— 所以这里两种都试，谁成功用谁。
+    let mut xbl_error: Option<String> = None;
+    let mut xbl_token_owned: Option<String> = None;
+    for ticket in [format!("d={access_token_str}"), access_token_str.to_string()] {
+        let resp = client
+            .post(XBL_AUTH_URL)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("x-xbl-contract-version", "1")
+            .json(&json!({
+                "Properties": {
+                    "AuthMethod": "RPS",
+                    "SiteName": "user.auth.xboxlive.com",
+                    "RpsTicket": ticket
+                },
+                "RelyingParty": "http://auth.xboxlive.com",
+                "TokenType": "JWT"
+            }))
+            .send()
+            .await
+            .context("XBL 认证：请求发送失败")?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let prefix = if ticket.starts_with("d=") { "d=" } else { "原始" };
+        if status.is_success() {
+            if let Ok(body) = serde_json::from_str::<Value>(&text) {
+                if let Some(t) = body["Token"].as_str() {
+                    xbl_token_owned = Some(t.to_string());
+                    break;
+                }
+            }
+            xbl_error = Some(format!("[{prefix}] HTTP {} 但响应里没有 Token：{}", status.as_u16(), snippet(&text, 200)));
+        } else {
+            // 注意：被拒时正文常常是**空的**（实测 400 + Content-Length: 0），别当成解析错误。
+            xbl_error = Some(format!(
+                "[{prefix}] HTTP {}{}",
+                status.as_u16(),
+                if text.trim().is_empty() { "（空正文）".to_string() } else { format!("：{}", snippet(&text, 200)) }
+            ));
+        }
+        tracing::warn!("[accounts] XBL 尝试（RpsTicket 前缀 {prefix}）失败：{xbl_error:?}");
+    }
+    let xbl_token_owned = xbl_token_owned.ok_or_else(|| {
+        anyhow::anyhow!(
+            "XBL 认证失败（两种 RpsTicket 前缀都试过）：{}",
+            xbl_error.unwrap_or_default()
+        )
+    })?;
+    let xbl_token = xbl_token_owned.as_str();
 
     // Step 3: Get XSTS Token
-    let xsts_response = client
-        .post(XSTS_AUTH_URL)
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "Properties": {
-                "SandboxId": "RETAIL",
-                "UserTokens": [xbl_token]
-            },
-            "RelyingParty": "rp://api.minecraftservices.com/",
-            "TokenType": "JWT"
-        }))
-        .send()
-        .await
-        .context("Failed to get XSTS token")?;
-
-    let xsts: Value = xsts_response.json().await
-        .context("Failed to parse XSTS response")?;
+    let (xsts_status, xsts_text) = send_raw(
+        client
+            .post(XSTS_AUTH_URL)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("x-xbl-contract-version", "1")
+            .json(&json!({
+                "Properties": {
+                    "SandboxId": "RETAIL",
+                    "UserTokens": [xbl_token]
+                },
+                "RelyingParty": "rp://api.minecraftservices.com/",
+                "TokenType": "JWT"
+            })),
+        "XSTS 授权",
+    )
+    .await?;
+    if !xsts_status.is_success() {
+        // XSTS 的 401 会带 XErr 码，含义很关键（无 Xbox 档案 / 未成年 / 区域不支持）。
+        let xerr = serde_json::from_str::<Value>(&xsts_text)
+            .ok()
+            .and_then(|v| v["XErr"].as_u64())
+            .unwrap_or(0);
+        let hint = match xerr {
+            2148916233 => "：该微软账号还没有 Xbox 档案，请先去 xbox.com 登录创建",
+            2148916235 => "：该账号所在区域不支持 Xbox Live",
+            2148916238 => "：未成年账号，需要家长同意（加入家庭组）",
+            _ => "",
+        };
+        return Err(anyhow::anyhow!(
+            "XSTS 授权被拒（HTTP {}，XErr={}{}）{}",
+            xsts_status.as_u16(),
+            xerr,
+            hint,
+            if xsts_text.trim().is_empty() {
+                String::new()
+            } else {
+                format!("：{}", snippet(&xsts_text, 300))
+            }
+        ));
+    }
+    let xsts = parse_json(xsts_status, &xsts_text, "XSTS 授权")?;
     let xsts_token = xsts["Token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No XSTS token in response"))?;
@@ -419,19 +530,29 @@ async fn exchange_minecraft_token(refresh_token: &str, client_id: &str) -> Resul
         .ok_or_else(|| anyhow::anyhow!("No UHS in XSTS response"))?;
 
     // Step 4: Get Minecraft Token
-    let mc_response = client
-        .post(MC_LOGIN_URL)
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "identityToken": format!("XBL3.0 x={};{}", uhs, xsts_token),
-            "ensureLegacy": true
-        }))
-        .send()
-        .await
-        .context("Failed to get Minecraft token")?;
-
-    let mc: Value = mc_response.json().await
-        .context("Failed to parse Minecraft token response")?;
+    let (mc_status, mc_text) = send_raw(
+        client
+            .post(MC_LOGIN_URL)
+            .header("Content-Type", "application/json")
+            .json(&json!({
+                "identityToken": format!("XBL3.0 x={};{}", uhs, xsts_token),
+                "ensureLegacy": true
+            })),
+        "Minecraft 登录",
+    )
+    .await?;
+    if !mc_status.is_success() {
+        return Err(anyhow::anyhow!(
+            "Minecraft 登录被拒（HTTP {}）{}",
+            mc_status.as_u16(),
+            if mc_text.trim().is_empty() {
+                String::new()
+            } else {
+                format!("：{}", snippet(&mc_text, 300))
+            }
+        ));
+    }
+    let mc = parse_json(mc_status, &mc_text, "Minecraft 登录")?;
     let mc_token = mc["access_token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No Minecraft token in response"))?

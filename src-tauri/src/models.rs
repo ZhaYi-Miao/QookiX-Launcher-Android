@@ -45,6 +45,33 @@ pub struct MinecraftProfile {
     /// 旧实例文件没有该字段时按 false 处理，等待用户点一次「安装游戏」。
     #[serde(default)]
     pub installed: bool,
+    /// 本实例使用的渲染器，见 `launch::resolve_renderer`：
+    /// `auto`（**缺省**，按 MC 版本自动挑）/ `global`（跟随全局设置）
+    /// / `opengles2`（GL4ES）| `mobileglues` | `vulkan_zink`（显式指定）。
+    /// 旧实例文件没有该字段 → None，与 `auto` 等价。
+    #[serde(default)]
+    pub renderer: Option<String>,
+}
+
+/// 渲染器健康检查的结论（见 `renderer_health::check`）。
+///
+/// 前端在用户从游戏回到启动器后弹窗：「当前渲染器在日志里有异常证据，且不是本版本的
+/// 推荐渲染器，要不要把这个**实例**切过去」。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RendererIssue {
+    pub instance_id: String,
+    /// 本次实际使用的渲染器键：`opengles2` | `mobileglues` | `vulkan_zink`
+    pub used: String,
+    pub used_name: String,
+    /// 按 MC 版本推荐的渲染器键
+    pub recommended: String,
+    pub recommended_name: String,
+    /// 一句人话：日志里发现了什么
+    pub reason: String,
+    /// 日志证据（最多几条，已经去重并截断）
+    pub evidence: Vec<String>,
+    /// 该实例的 MC 版本，弹窗文案里用
+    pub mc_version: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

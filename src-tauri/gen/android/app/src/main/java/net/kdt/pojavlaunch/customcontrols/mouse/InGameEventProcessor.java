@@ -31,15 +31,23 @@ public class InGameEventProcessor implements TouchEventProcessor {
                 checkGestures();
                 break;
             case MotionEvent.ACTION_MOVE:
-                mTracker.trackEvent(motionEvent);
-                float[] motionVector = mTracker.getMotionVector();
-                float deltaX = (float) (motionVector[0] * mSensitivity);
-                float deltaY = (float) (motionVector[1] * mSensitivity);
-                mLeftClickGesture.setMotion(deltaX, deltaY);
-                mRightClickGesture.setMotion(deltaX, deltaY);
-                CallbackBridge.mouseX += deltaX;
-                CallbackBridge.mouseY += deltaY;
-                CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
+                try {
+                    mTracker.trackEvent(motionEvent);
+                    float[] motionVector = mTracker.getMotionVector();
+                    float deltaX = (float) (motionVector[0] * mSensitivity);
+                    float deltaY = (float) (motionVector[1] * mSensitivity);
+                    mLeftClickGesture.setMotion(deltaX, deltaY);
+                    mRightClickGesture.setMotion(deltaX, deltaY);
+                    CallbackBridge.mouseX += deltaX;
+                    CallbackBridge.mouseY += deltaY;
+                    // SDL 路径用相对位移（见 CallbackBridge.sendCursorPos）
+                    CallbackBridge.deltaX = deltaX;
+                    CallbackBridge.deltaY = deltaY;
+                    CallbackBridge.inputDebugLogPub("InGame MOVE d(" + deltaX + "," + deltaY + ")");
+                    CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
+                } catch (Throwable t) {
+                    CallbackBridge.inputDebugLogPub("InGame MOVE EX: " + t);
+                }
                 if(LauncherPreferences.PREF_DISABLE_GESTURES) break;
                 checkGestures();
                 break;

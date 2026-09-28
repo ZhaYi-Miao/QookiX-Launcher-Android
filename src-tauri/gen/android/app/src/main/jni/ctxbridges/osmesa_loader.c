@@ -21,7 +21,12 @@ void (*glReadPixels_p) (GLint x, GLint y, GLsizei width, GLsizei height, GLenum 
 void* (*OSMesaGetProcAddress_p)(const char* funcName);
 
 bool dlsym_OSMesa() {
-    void* dl_handle = loader_dlopen("libOSMesa.so.8", "libOSMesa.so", RTLD_LOCAL | RTLD_LAZY);
+    // POJAVEXEC_OSMESA：OSMesa 的显式路径（渲染器插件用）。
+    // 不设时保持原行为（按库名找，命中 APK 里随包那份）。
+    const char* osmesa_override = getenv("POJAVEXEC_OSMESA");
+    void* dl_handle = (osmesa_override != NULL && osmesa_override[0] != '\0')
+        ? loader_dlopen((char*) osmesa_override, "libOSMesa.so", RTLD_LOCAL | RTLD_LAZY)
+        : loader_dlopen("libOSMesa.so.8", "libOSMesa.so", RTLD_LOCAL | RTLD_LAZY);
     if(dl_handle == NULL) return false;
     OSMesaGetProcAddress_p = dlsym(dl_handle, "OSMesaGetProcAddress");
     if(OSMesaGetProcAddress_p == NULL) {

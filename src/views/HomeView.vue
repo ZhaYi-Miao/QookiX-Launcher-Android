@@ -104,8 +104,8 @@ async function launchSelected() {
   }
   launching.value = true;
   try {
-    await instances.launch(target.id);
-    message.success(`已启动 ${target.name}`);
+    const res = await instances.launch(target.id);
+    if (res) message.success(`已启动 ${target.name}`);
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -171,7 +171,10 @@ async function launchPin(p: PinItem) {
     message.info(`此实例是 ${p.mcVersion}，不支持命令行直达存档，将启动游戏后手动进入存档`);
   }
   try {
-    await instances.launch(p.instanceId, p.world, p.address);
+    const res = await instances.launch(p.instanceId, p.world, p.address);
+    if (!res) {
+      return;
+    }
     const msg =
       p.type === "server" ? `正在加入服务器「${p.name}」`
       : p.type === "world" ? `正在进入世界「${p.name}」`
@@ -509,6 +512,9 @@ onMounted(() => {
 .pin-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  /* 必须显式写：这个网格在「溢出滚动 + min-height:0」的容器里时，auto 行会被压扁，
+     卡片互相重叠（实测：26.3 与 1.8.9 两张卡的标题叠在一起）。 */
+  grid-auto-rows: max-content;
   gap: 16px;
 }
 .pin-card {
@@ -1095,17 +1101,19 @@ onMounted(() => {
   }
 }
 
-/* ── 宽视图（≥720 CSS px 且横屏）：欢迎卡 + 内容分左右两栏 ──────────────────
+/* ── 宽视图（可用布局宽度 ≥720px）：欢迎卡 + 内容分左右两栏 ──────────────────
    什么时候会出现「宽视图」：
-     · 手机**横屏** —— 安卓端主页要求与桌面端同款双栏布局
+     · 手机**横屏**且缩放不大 —— 安卓端主页要求与桌面端同款双栏布局
        （用户 2026-09-22：照桌面截图改；原来 ≥1150px 的断点横屏手机永远够不到）；
-     · 界面缩放调到 100% 以下 —— 布局视口会成比例变大
-       （实测 60% 时 853px 的屏幕变成 1421 CSS px）；
+     · 界面缩放调到 100% 以下 —— 布局视口成比例变大（实测 60% 时 853px 的屏幕变成 1421 CSS px）；
      · 平板 / 外接屏 / 桌面端窗口拉大。
-   竖屏手机（宽度 <720px）仍走上面的竖排规则。游戏统计卡锚在英雄卡左下角。
-   注意这个块放在最后：粗指针设备即使视口变宽也会同时命中上面的手机规则，
+   窄了（竖屏手机、或缩放调大）就走上面的竖排规则。游戏统计卡锚在英雄卡左下角。
+   **判定必须用 @container 而不是 @media**：界面缩放是 zoom 实现的，媒体查询看到的
+   仍是视口宽度 —— 150% 时视口 853px 但真实可用的只有 568px，按 @media 判断会把
+   「宽屏两栏」误命中，右栏被压到 233px、卡片内容溢出互相压字（用户实测）。
+   放在文件最后：粗指针设备即使容器变宽也会同时命中上面的手机规则，
    靠「后来居上」覆盖掉竖排相关的属性（display:grid 下那些 flex 属性本来就无效）。 */
-@media (min-width: 720px) and (orientation: landscape) {
+@container page (min-width: 720px) {
   .home {
     display: grid;
     /* 左栏欢迎卡、右栏内容；右栏给更多空间（实例卡 + 固定项都在右边）。
@@ -1186,11 +1194,17 @@ onMounted(() => {
   }
   /* 右栏当前实例卡：压成单行 —— 图标 + （名称/版本两行）在左，
      切换/启动两个按钮跟在右边（手机竖排规则折成的两行通栏按钮在这里改回单行），
-     卡片更矮，下面能多放固定到首页的实例。 */
+     卡片更矮，下面能多放固定到首页的实例。
+     虽然容器宽度够才走到这里，但仍然允许换行：宽度是「够」到刚好放不下之间只差几像素，
+     一旦放不下就该折成两行长高，**绝不能压住按钮**。 */
   .home .resident {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     padding: 14px 16px;
     gap: 12px;
+  }
+  /* 信息列给一个下限：挤不下时宁可折行，也不要把名字压成 0 宽 */
+  .home .resident-info {
+    flex: 1 1 180px;
   }
   .home .resident-actions {
     width: auto;

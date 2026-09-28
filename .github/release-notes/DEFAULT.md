@@ -5,22 +5,25 @@
 ## 本次更新
 
 <!--
-  这里是默认模板：想给某个版本写专属说明，只需新增
-  .github/release-notes/<tag>.md（例如 v1.0.1.md），内容整篇即 Release 正文。
+  这里是默认模板（安装 / 说明 / 反馈这些固定内容），「## 本次更新」那一节会被
+  scripts/generate-release-notes.mjs 用 CHANGELOG.md 里对应 tag 的更新日志替换。
+
+  想给某个版本写整篇手写说明，就新增 .github/release-notes/<tag>.md（例如 v1.1.0.md），
+  内容整篇即 Release 正文，优先级最高。
 -->
 
-- 待补充：请在 `.github/release-notes/{{VERSION}}.md` 里写下这个版本的更新内容与注意事项。
+- 待补充：请在仓库根目录 `CHANGELOG.md` 的 `[Unreleased]` 里写下改动，发版时把标题改成 `## [版本号] - 日期`。
 
 ## 安装
 
-1. 下载下方的 `QookiX-Launcher-Android-{{VERSION}}-arm64.apk`
+1. 下载对应架构的安装包：`QookiX-Launcher-Android-{{VERSION}}-arm64.apk`（绝大多数手机）或 `-x86_64.apk`（模拟器 / 平板）
 2. 从旧版本升级可直接覆盖安装（同一签名）；若之前装的是 debug 版，请先卸载
 3. 首次启动需联网下载 Java 运行时与游戏文件
 
 | 项目 | 要求 |
 |---|---|
 | 系统 | Android 7.0（API 24）及以上 |
-| 架构 | arm64-v8a |
+| 架构 | arm64-v8a / x86_64 |
 | 网络 | 首次启动需联网（可用 BMCLAPI 等镜像加速） |
 
 ## 说明

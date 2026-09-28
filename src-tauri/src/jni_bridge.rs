@@ -1,7 +1,9 @@
 use jni::objects::{JClass, JString};
 use jni::sys::{jint, jstring};
 use jni::JNIEnv;
+use std::ffi::CString;
 use std::os::raw::c_char;
+use std::sync::OnceLock;
 
 fn launch_game_blocking(instance_id: String, account_uuid: String) -> i32 {
     // 关键：这里**不能**再 `tokio::runtime::Runtime::new().unwrap()`。
@@ -232,10 +234,14 @@ pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeSetSurfaceSize(
     crate::android_env::set_surface_size(width, height);
 }
 
+/// 版本清单的旧 JNI 入口（真实数据走 `get_version_manifest` 命令，这里目前无调用者）。
+/// Kotlin 侧的声明是**非空** `String`（TauriBridge.kt），返回 `null` 会让调用点抛 NPE ——
+/// 改为返回一个常驻空串，占位也安全。
 #[no_mangle]
 pub extern "C" fn Java_com_zhayi_qookix_tauri_TauriBridge_nativeGetVersionList(
     _env: JNIEnv,
     _class: JClass,
 ) -> *const c_char {
-    std::ptr::null()
+    static EMPTY: OnceLock<CString> = OnceLock::new();
+    EMPTY.get_or_init(CString::default).as_ptr()
 }

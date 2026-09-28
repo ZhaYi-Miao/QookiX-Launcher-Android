@@ -46,6 +46,19 @@ pub fn set_orientation(mode: &str) -> Result<(), String> {
     .ok_or_else(|| "设置屏幕方向失败（原生桥未就绪）".to_string())
 }
 
+/// 把下载好的 APK 交给系统安装器（会弹「是否安装」，安卓不允许静默安装）。
+#[cfg(target_os = "android")]
+pub fn install_apk(path: &str) -> Result<(), String> {
+    android::call_activity("installApk", "(Ljava/lang/String;)V", Some(path))
+        .map(|_| ())
+        .ok_or_else(|| "无法拉起安装器（原生桥未就绪）".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn install_apk(_path: &str) -> Result<(), String> {
+    Err("桌面端不涉及 APK 安装".to_string())
+}
+
 /// 拉起游戏界面（GameActivity）。游戏必须跑在带 SurfaceView 的 Activity 里，
 /// 否则 GL4ES 没有 Surface 可用，GLFW 创建窗口就会失败。
 #[cfg(target_os = "android")]
@@ -164,6 +177,21 @@ pub fn system_proxy() -> Option<String> {
 /// 裸文件名，JDK 8 的库之间靠裸名字互相依赖（libnio.so → libnet.so），
 /// 必须在 JVM 启动前用绝对路径先加载进来。
 #[cfg(target_os = "android")]
+/// 让启动器侧启用 SDL 整合（MC 26.3+ 的 SDL 窗口层必需）。
+///
+/// 详情见 Kotlin 侧 `MainActivity.enableSdlIntegration()`：SDL3 在安卓上依赖
+/// `org.libsdl.app.SDL` 那套 Java 胶水拿 Surface，必须由启动器侧准备好。
+pub fn enable_sdl_integration() -> Result<(), String> {
+    android::call_activity("enableSdlIntegration", "()V", None)
+        .map(|_| ())
+        .ok_or_else(|| "启用 SDL 整合失败（原生桥未就绪）".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn enable_sdl_integration() -> Result<(), String> {
+    Ok(())
+}
+
 pub fn preload_jre_libs(jre_home: &str) -> Result<i32, String> {
     android::call_activity("preloadJreLibs", "(Ljava/lang/String;)I", Some(jre_home))
         .and_then(|s| s.trim().parse::<i32>().ok())

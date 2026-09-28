@@ -91,12 +91,30 @@ extern "system" fn qookix_ngl_get_string(
 
 /// 在后台等 JVM 起来并安装拦截（不阻塞启动流程）。
 ///
-/// 之所以要轮询：`JvmLauncher::launch` 会一直阻塞到游戏退出，而 JVM 与 classpath
-/// 是它内部建立的，所以这里只能"等它出现再装"。等到 `GL11C` 能被系统类加载器找到
-/// 就说明 classpath 已就绪，可以注册了。
-pub fn spawn_installer() {
-    std::thread::spawn(|| {
-        let deadline = Instant::now() + Duration::from_secs(180);
+/// 时机是这块最容易踩的地方，分两道闸：
+///
+/// **闸 1：等游戏自己的原生库引导走完**（2026-09-26 加）。
+/// `RegisterNatives` 会**触发目标类的静态初始化**，而 `GL11C` → `GL` →
+/// `org.lwjgl.system.Library` 的静态初始化里就 `System.loadLibrary("lwjgl")`。
+/// 我们抢在那时插进去，就会和 MC 主线程的库加载赛跑：在「库刚 dlopen、还没注册到
+/// 类加载器」的窗口里把 GLFW / MemoryUtil 初始化掉，它们的 native 必然解析不到 ——
+/// 整局直接崩（26.3 实测 `Could not initialize class org.lwjgl.system.MemoryUtil`、
+/// 栈上线程是 `Thread-0`，也就是本线程）。
+///
+/// 判据用 MC 自己的日志（这两行都在原生库装好之后才写）：
+/// 1.18/1.21 → `Setting user`；26.x → `Backend library:`。
+/// 最多等 120 秒，超时也放行（那时早过了那个窗口）。
+///
+/// **闸 2：原来的「第 2 个 JavaVM + GL11C 找得到就装」**（见 `try_install`）。
+pub fn spawn_installer(game_dir: &str) {
+    let game_dir = game_dir.to_string();
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let gate_deadline = start + Duration::from_secs(120);
+        while Instant::now() < gate_deadline && !natives_ready(&game_dir) {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let deadline = start + Duration::from_secs(180);
         loop {
             if Instant::now() > deadline {
                 tracing::warn!("GL_VENDOR 覆盖：等待 JVM 超时，放弃安装");
@@ -113,6 +131,18 @@ pub fn spawn_installer() {
             std::thread::sleep(Duration::from_millis(300));
         }
     });
+}
+
+/// MC 的日志里是否已出现「原生库装好」的标记（见 `spawn_installer` 的闸 1）。
+fn natives_ready(game_dir: &str) -> bool {
+    const MARKERS: [&str; 2] = ["Setting user", "Backend library:"];
+    let path = std::path::Path::new(game_dir)
+        .join("logs")
+        .join("latest.log");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    MARKERS.iter().any(|m| text.contains(m))
 }
 
 /// 尝试安装一次。返回 `Ok(true)` 表示装好了。

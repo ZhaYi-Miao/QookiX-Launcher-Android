@@ -168,6 +168,32 @@ export interface Instance {
   source_path?: string | null;
   /** 所属分组 id，null / undefined 表示未分组 */
   group?: string | null;
+  /**
+   * 本实例使用的渲染器：
+   * - `"auto"` / `null`（缺省）：按 MC 版本自动挑（26.x → MobileGlues，其余 → GL4ES）
+   * - `"global"`：跟随「设置 → 游戏内 → 渲染器」
+   * - `"opengles2"` | `"mobileglues"` | `"vulkan_zink"`：显式指定
+   */
+  renderer?: string | null;
+}
+
+/**
+ * 渲染器健康检查结论（后端 `check_renderer_health`）。
+ * 只在「日志里有渲染器失败证据」**且**「当前渲染器不是该版本推荐的」时才有值。
+ */
+export interface RendererIssue {
+  instance_id: string;
+  /** 本次实际使用的渲染器键 */
+  used: string;
+  used_name: string;
+  /** 按 MC 版本推荐的渲染器键 */
+  recommended: string;
+  recommended_name: string;
+  /** 一句人话：日志里发现了什么 */
+  reason: string;
+  /** 日志证据（最多几条） */
+  evidence: string[];
+  mc_version: string;
 }
 
 /** 实例分组（持久化在 instance_groups.json） */
@@ -328,6 +354,59 @@ export interface ActiveFile {
   name: string;
   bytesDone: number;
   bytesTotal: number;
+}
+
+/**
+ * 插件（组件 / 渲染器 / 驱动）的展示信息。
+ *
+ * 后端把「远程清单」与「本机安装状态」合并后给出：`version` 是清单里的可用版本，
+ * `installed_version` 是本机装的版本，两者不等即 `update_available`。
+ */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  summary: string;
+  kind: string;
+  version: string | null;
+  installed_version: string | null;
+  enabled: boolean;
+  update_available: boolean;
+  abi_supported: boolean;
+  device_abi: string;
+  size: number | null;
+  installed_size: number;
+  source: string | null;
+  error: string | null;
+  /** 渲染器插件提供的渲染后端键（`opengles2` / `mobileglues` / `vulkan_zink`）。 */
+  renderers: string[];
+}
+
+/** 控制布局里的一个按钮（与 Rust `controls::ControlButtonInfo` 对应）。 */
+export interface ControlButtonInfo {
+  index: number;
+  name: string;
+  /** 按住这个键时拖动是否也能转视角 */
+  passThru: boolean;
+}
+
+/** 启动器自更新：GitHub Release 检查结果（与 Rust `updater::UpdateInfo` 对应）。 */
+export interface AppUpdateInfo {
+  available: boolean;
+  version: string | null;
+  currentVersion: string;
+  notes: string | null;
+  size: number | null;
+  /** 这个版本已经下载好的安装包路径 */
+  downloadedPath: string | null;
+}
+
+/** 插件安装进度（`plugin://progress`）。phase: download / verify / extract / done */
+export interface PluginProgressEvent {
+  id: string;
+  phase: string;
+  done: number;
+  total: number;
+  message: string;
 }
 
 export interface NewsItem {

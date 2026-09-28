@@ -59,11 +59,29 @@ android {
             }
         }
     }
+    // 原生库压缩打包：APK 里的 .so 默认是**不压缩**存储的（为了直接 mmap），
+    // 实测这几坨库能压到 30%~51%，是体积最大的一块肉。
+    // 代价是安装时系统会把 .so 解压到应用目录 —— 下载变小、装完占用变大，
+    // 对手机用户来说前者更要紧。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     kotlinOptions {
         jvmTarget = "1.8"
     }
     buildFeatures {
         buildConfig = true
+    }
+    // 第二个 assets 源目录：放「游戏组件」这类大体积随包文件（LWJGL 3.4.1 jar/natives、
+    // SDL3 等）。**不能**放 src/main/assets —— 那个目录是前端（vite）的 outDir，
+    // 每次 `npm run build` 都会按 `emptyOutDir: true` 整目录清空，
+    // 组件会被静默删掉（表现为「换了新版本却还是老 LWJGL」）。
+    sourceSets {
+        getByName("main") {
+            assets.srcDirs("src/main/assets-components")
+        }
     }
     // Pojav 版 JNI 核心（libpojavexec.so）：Surface→EGL 桥 + GL 函数转发 + 输入注册。
     // 源码来自 PojavLauncher，模块名必须保持 pojavexec。

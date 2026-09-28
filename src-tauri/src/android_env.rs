@@ -237,6 +237,13 @@ fn is_system_loaded_lib(name: &str) -> bool {
             // WebView 的 Chromium：由 WebView provider 管理
             | "libwebviewchromium.so"
             | "libwebviewchromium_loader.so"
+            // **绝不能在 data 目录留副本**：SDL3 的 `JNI_OnLoad` 里缓存 JavaVM，
+            // 而它只会在「Java 类加载器加载这个库」时被调用一次。
+            // 进程里出现两份 libSDL3.so 时，LWJGL 从 data 目录 dlopen 的那份
+            // （JNI_OnLoad 没跑过）被游戏调用，SDL 内部拿 JavaVM 得到 NULL →
+            // `Failed, there is no JavaVM` → 空指针 SIGSEGV（26.3 实测 tombstone）。
+            // 只留 APK 里那一份，两条路径的 realpath 相同，linker 会去重。
+            | "libSDL3.so"
     ) || name.starts_with("libcrashpad")
         || name.starts_with("libmonochrome")
 }
@@ -298,6 +305,18 @@ pub async fn resolve_native_lib_dir(data_dir: &str) -> std::io::Result<String> {
         }
         if required.iter().all(|name| dest.join(name).exists()) && failures.is_empty() {
             break;
+        }
+    }
+
+    // 老版本曾把 libSDL3.so 抽到这里，留下的那份必须删掉：
+    // 进程里一旦存在两份 libSDL3.so，游戏调用的那份没跑过 JNI_OnLoad →
+    // SDL 拿不到 JavaVM → `Failed, there is no JavaVM` → SIGSEGV。
+    // 现在只认 APK 里那一份（见 is_system_loaded_lib 的说明）。
+    let stale_sdl = dest.join("libSDL3.so");
+    if stale_sdl.exists() {
+        match std::fs::remove_file(&stale_sdl) {
+            Ok(()) => crate::util::log_line("已清理 data 目录里多余的 libSDL3.so（避免进程里出现两份）"),
+            Err(e) => crate::util::log_line(&format!("清理多余 libSDL3.so 失败：{e}")),
         }
     }
 
@@ -469,6 +488,178 @@ async fn write_if_needed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     tokio::fs::write(path, bytes).await
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LWJGL 3.4.1 组件（MC 26.3 起窗口层从 GLFW 换成 SDL3）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 随包分发的 LWJGL 3.4.1 组件在 APK 里的位置。
+///
+/// 注意目录是 **`assets-components`**（Gradle 里声明的第二个 assets 源目录），
+/// 不是 `src/main/assets` —— 后者是前端 vite 的 outDir，构建时会被整目录清空。
+const LWJGL341_JARS_PREFIX: &str = "assets/components/lwjgl3/3.4.1/";
+const LWJGL341_NATIVES_PREFIX: &str = "assets/components/lwjgl-3.4.1-natives/";
+
+/// LWJGL 3.4.1 组件落盘后的路径。
+pub struct LwjglComponents {
+    /// 已排好加载顺序的 classpath 条目
+    /// （`lwjgl.jar` → merged-modules → 其余模块；顺序不能乱，见函数内注释）。
+    pub jars: Vec<PathBuf>,
+    /// `-Dorg.lwjgl.librarypath` 指向它。
+    pub natives_dir: PathBuf,
+}
+
+/// 释放 LWJGL 3.4.1 组件（jar + 该 ABI 的 natives），返回可用路径。
+///
+/// **为什么需要第二套 LWJGL**：MC 26.3 起窗口层由 GLFW 换成 **SDL3** ——
+/// 26.3 客户端 jar 里 `org/lwjgl/glfw` 的引用数是 **0**、`org/lwjgl/sdl` 是 27 个类。
+/// 而随包那份单体 `lwjgl-glfw-classes.jar`（3.4.0 时代的 GLFW fork）
+/// **没有 `org.lwjgl.sdl` 包**，于是 26.3 一进窗口初始化就 NoClassDefFoundError。
+///
+/// 这套组件取自 AngelAuraMC 的 LWJGL fork（与项目原有那份同源，同样带
+/// glfw stub / GLCapabilities / PojavRendererInit 的安卓改写，并额外有 SDL 集成）。
+pub async fn ensure_lwjgl341(data_dir: &str) -> std::io::Result<LwjglComponents> {
+    let root = Path::new(data_dir).join("lwjgl341");
+    let jars_dir = root.join("jars");
+    let natives_dir = root.join("natives");
+    let apks = apk_paths();
+    let arch = crate::java::get_device_arch();
+
+    // APK 换了就全量重抽：只比大小会漏掉「大小恰好没变」的构建。
+    let stamp_path = root.join(".apk-stamp");
+    let stamp = apk_stamp(&apks);
+    let force = std::fs::read_to_string(&stamp_path)
+        .map(|s| s.trim() != stamp)
+        .unwrap_or(true);
+
+    let mut jars_seen = 0usize;
+    let mut natives_seen = 0usize;
+    for apk in &apks {
+        jars_seen += extract_asset_files(apk, LWJGL341_JARS_PREFIX, &jars_dir, force)
+            .await
+            .unwrap_or(0);
+        natives_seen += extract_asset_files(
+            apk,
+            &format!("{LWJGL341_NATIVES_PREFIX}{arch}/"),
+            &natives_dir,
+            force,
+        )
+        .await
+        .unwrap_or(0);
+        if jars_seen > 0 && natives_seen > 0 {
+            break;
+        }
+    }
+
+    // classpath 顺序：先 `lwjgl.jar`（核心：Version/MemoryUtil/system.*），
+    // 再 merged-modules（**补丁类在这里**：glfw stub、GLCapabilities、
+    // PojavRendererInit、SDL 集成），最后才是各模块 jar —— merged 必须排在
+    // sdl.jar 之前，否则官方原版 SDLInit/SDLMouse 会盖掉补丁版，
+    // 表现为「SDL 起来了但输入桥不工作」。
+    const FIRST: [&str; 2] = ["lwjgl.jar", "lwjgl-3.4.1-merged-modules.jar"];
+    let mut jars: Vec<PathBuf> = Vec::new();
+    for name in FIRST {
+        let p = jars_dir.join(name);
+        if p.exists() {
+            jars.push(p);
+        }
+    }
+    if jars.is_empty() {
+        return Err(std::io::Error::other(format!(
+            "APK 内缺少 LWJGL 3.4.1 组件（{}）",
+            jars_dir.display()
+        )));
+    }
+    let mut rest: Vec<PathBuf> = std::fs::read_dir(&jars_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|e| e == "jar")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| !FIRST.contains(&n))
+        })
+        .collect();
+    rest.sort();
+    jars.extend(rest);
+
+    if !natives_dir.join("liblwjgl.so").exists() {
+        return Err(std::io::Error::other(format!(
+            "APK 内缺少 LWJGL 3.4.1 原生库（{}/，ABI={arch}）",
+            natives_dir.display()
+        )));
+    }
+
+    let _ = std::fs::write(&stamp_path, &stamp);
+    crate::util::log_line(&format!(
+        "LWJGL 3.4.1 组件就绪：{} 个 jar + {} 个原生库（{}，{}）",
+        jars.len(),
+        natives_seen,
+        natives_dir.display(),
+        if force { "全量重抽" } else { "增量复用" }
+    ));
+
+    Ok(LwjglComponents { jars, natives_dir })
+}
+
+/// 从 APK 的 assets 里抽取 `prefix` 下的**直接子文件**到 `dest`。
+///
+/// 与 `extract_native_libs_from_apk` 的区别：那个专抽 `lib/<abi>/*.so` 并跳过
+/// 系统自加载的库；这个走 assets 通道，jar 与 .so 都能抽（LWJGL 3.4.1 的
+/// natives 就是以 assets 形式随包分发的）。
+async fn extract_asset_files(
+    apk: &str,
+    prefix: &str,
+    dest: &Path,
+    force: bool,
+) -> std::io::Result<usize> {
+    let apk = apk.to_string();
+    let prefix = prefix.to_string();
+    let dest = dest.to_path_buf();
+
+    tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
+        use std::io::Read;
+
+        let file = std::fs::File::open(&apk)?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| std::io::Error::other(e.to_string()))?;
+        std::fs::create_dir_all(&dest)?;
+
+        let mut extracted = 0usize;
+        for index in 0..archive.len() {
+            let Ok(mut entry) = archive.by_index(index) else {
+                continue;
+            };
+            let name = entry.name().to_string();
+            let Some(rel) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            // 只要该前缀下的直接子文件（跳过目录项与子目录里的东西）
+            if rel.is_empty() || rel.contains('/') {
+                continue;
+            }
+            let out = dest.join(rel);
+            if !force {
+                if let Ok(meta) = out.metadata() {
+                    if meta.len() == entry.size() {
+                        continue;
+                    }
+                }
+            }
+            let mut data = Vec::with_capacity(entry.size() as usize);
+            if entry.read_to_end(&mut data).is_err() {
+                continue;
+            }
+            std::fs::write(&out, &data)?;
+            extracted += 1;
+        }
+        Ok(extracted)
+    })
+    .await
+    .map_err(|e| std::io::Error::other(e.to_string()))?
+}
+
 /// 安卓系统版本号（`ro.build.version.release`），用于 `-Dos.version=Android-<release>`。
 /// 部分模组/加载器靠它识别运行环境，拿不到时退回 "Android"。
 pub fn android_release() -> String {
@@ -518,12 +709,36 @@ pub fn redirect_output(log_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 后台跟随日志文件，把新增行通过 `launch://log` 推给前端日志面板。
+/// 启动日志里出现这些措辞，说明**游戏已经死了**（只是 JVM 还挂在那里、画面白屏）。
+///
+/// 这时立刻结束游戏，把玩家送回启动器看原因 —— 否则要等系统的 ANR/收尾机制
+/// （几十秒）才回到启动器，体验上就是「卡了很久才弹提示」。
+///
+/// 只收「确定致命」的说法（宁可漏，不可误杀正在玩的游戏）：
+///  - `Failed to load required shader programs`：1.13+ 核心着色器加载失败，MC 自己就会退出；
+///  - `Invalid shaders/`：1.8.9 实测（post 着色器无效 → 异常抛到 main）；
+///  - `Exception in thread "main"`：主线程挂了；
+///  - `A fatal error has been detected`：JVM 自身崩溃（hs_err）。
+const FATAL_LAUNCH_MARKERS: &[&str] = &[
+    "Failed to load required shader programs",
+    "Invalid shaders/",
+    "Exception in thread \"main\"",
+    "A fatal error has been detected",
+];
+
+/// 只在启动后这段时间内做上面的「快判」：世界跑起来之后的报错交给
+/// 「回到启动器」那条检查路径，不在这里越权动手杀游戏。
+const FATAL_WINDOW_SECS: u64 = 300;
+
+/// 后台跟随日志文件，把新增行通过 `launch://log` 推给前端日志面板，
+/// 顺带做「游戏已死」的快判（见 [`FATAL_LAUNCH_MARKERS`]）。
 pub fn spawn_log_tail(log_path: PathBuf, instance_id: String) {
     TAIL_ACTIVE.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
+        let started = std::time::Instant::now();
+        let mut fatal_handled = false;
         let mut pos: u64 = 0;
         while TAIL_ACTIVE.load(Ordering::SeqCst) {
             if let Ok(mut file) = std::fs::File::open(&log_path) {
@@ -539,6 +754,30 @@ pub fn spawn_log_tail(log_path: PathBuf, instance_id: String) {
                                 let text = line.trim_end_matches(['\n', '\r']);
                                 if !text.is_empty() {
                                     crate::progress::emit_launch_log(&instance_id, "out", text);
+                                    if !fatal_handled
+                                        && started.elapsed().as_secs() < FATAL_WINDOW_SECS
+                                    {
+                                        if let Some(hit) = FATAL_LAUNCH_MARKERS
+                                            .iter()
+                                            .find(|m| text.contains(**m))
+                                        {
+                                            fatal_handled = true;
+                                            let msg = format!(
+                                                "[launcher] 启动日志出现致命错误（{hit}），游戏已无法继续，正在结束它以便回到启动器"
+                                            );
+                                            tracing::warn!("{msg}");
+                                            crate::util::log_line(&msg);
+                                            crate::progress::emit_launch_log(
+                                                &instance_id,
+                                                "out",
+                                                &msg,
+                                            );
+                                            // kill_game 是 async：这里在普通线程里，借用 Tauri 的全局运行时
+                                            tauri::async_runtime::spawn(async {
+                                                let _ = crate::launch::kill_game().await;
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             Err(_) => break,

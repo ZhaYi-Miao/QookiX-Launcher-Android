@@ -10,11 +10,9 @@ use crate::java::{MultiRTManager, JreManager, JREValidator, get_device_arch};
 use crate::natives::NativesExtractor;
 use crate::jvm_launcher::JvmLauncher;
 
-static GAME_PID: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
 static GAME_STATUS: OnceLock<Mutex<GameStatus>> = OnceLock::new();
 
 fn init_statics() {
-    GAME_PID.get_or_init(|| Mutex::new(None));
     GAME_STATUS.get_or_init(|| Mutex::new(GameStatus {
         is_running: false,
         instance_id: None,
@@ -77,6 +75,24 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
         let runtime = match MultiRTManager::get_compatible_runtime(required_java).await? {
             Some(r) => r,
             None => {
+                // 先确认这个 Java 版本到底**下得下来**：新版 Minecraft 会要求更新的 Java
+                // （例如 26.3 要求 Java 25），而镜像表里没有的版本会一路抛到界面，
+                // 用户只看到 `JRE_ARCH_UNSUPPORTED: no JRE for Java 25 on arm64-v8a` 这种内部错误。
+                if crate::java::resolve_download_url(required_java, get_device_arch()).is_err() {
+                    let supported = crate::java::supported_java_versions()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" / ");
+                    return Err(anyhow::anyhow!(
+                        "JAVA_VERSION_UNSUPPORTED: 该版本需要 Java {}，而启动器目前只支持 Java {}。\n\
+                         可以在「设置 → 游戏内 → Java 路径」里手动指定一个已安装的 Java {}，\
+                         或先在设置里改用其它游戏版本（如 1.20.x / 1.21.x）。",
+                        required_java,
+                        supported,
+                        required_java
+                    ));
+                }
                 tracing::info!("No compatible JRE found, downloading Java {} for {}", required_java, get_device_arch());
                 // 实际下载包约 27MB（解压后 150~250MB）。以前这里写「约 100MB」，差得太远。
                 crate::progress::emit_launch_progress(
@@ -138,7 +154,13 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
             .await
             .map_err(|e| anyhow::anyhow!("安卓原生库准备失败：{e}"))?;
 
-        let vendor = load_vendor_jars(&data_dir, runtime.java_version).await?;
+        // MC 26.3 起清单里是 `org.lwjgl:lwjgl:3.4.3`（窗口层换成 SDL3）——
+        // 这时必须换成 3.4.1 组件集，否则 org.lwjgl.sdl 整个包缺失。
+        let use_lwjgl341 = needs_lwjgl341(&version_info);
+        if use_lwjgl341 {
+            tracing::info!("[launcher] 版本要求 LWJGL ≥3.4.1，启用 SDL3 组件集");
+        }
+        let vendor = load_vendor_jars(&data_dir, runtime.java_version, use_lwjgl341).await?;
 
         let classpath = build_classpath(&version_info, &data_dir, &vendor).await?;
 
@@ -181,12 +203,37 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
             &game_dir,
             &natives_dir.to_string_lossy(),
             &apk_native_dir,
+            vendor.lwjgl_natives.as_deref(),
+            &vendor.extra_library_dirs,
         ));
 
         let mut env_map = HashMap::new();
         env_map.insert("JAVA_HOME".to_string(), runtime.path.clone());
         env_map.insert("HOME".to_string(), game_dir.clone());
-        let renderer = renderer_setting();
+        // 每实例渲染器：实例设置 → （auto 时）按 MC 版本 → （global 时）全局设置。
+        // 选中的渲染器会写进启动日志，启动浮层里能直接看到「用的是哪个、为什么」。
+        let mut renderer_source = String::new();
+        let mut renderer = resolve_renderer(Some(&instance), &mut renderer_source);
+        crate::util::log_line(&format!(
+            "渲染器：{}（{}）",
+            renderer_display_name(&renderer),
+            renderer_source
+        ));
+        // 渲染器/驱动已改为插件分发，APK 里只随包 GL4ES 兜底。
+        // 选中的渲染器在插件目录和随包目录都找不到时，必须回退 GL4ES ——
+        // 否则 C 层会去 dlopen 一个不存在的库（空桥接表直接 SIGSEGV）。
+        #[cfg(target_os = "android")]
+        if !renderer_available(&data_dir, &apk_native_dir, &renderer) {
+            let chosen = renderer.clone();
+            renderer = "opengles2".to_string();
+            let msg = format!(
+                "渲染器「{}」未安装（找不到 {}），本次启动回退到 GL4ES；可在「设置 → 插件」安装",
+                chosen,
+                renderer_gl_lib(&chosen)
+            );
+            tracing::warn!("[launcher] {msg}");
+            crate::util::log_line(&msg);
+        }
 
         // 注意：**不要**设置 LD_LIBRARY_PATH。
         // 实测（1.8.9 与 1.18.2 都试过）覆盖它会让 libjvm.so 加载失败，
@@ -195,14 +242,118 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
         // JDK 8 自带的原生库找不到依赖（libnio.so → libnet.so）改用
         // `preload_jre_libs` 在 JVM 启动前逐个 System.load 解决，见那里。
 
-        env_map.insert("POJAV_NATIVEDIR".to_string(), natives_dir.to_string_lossy().to_string());
+        // POJAV_NATIVEDIR 在 C 层被当作**库搜索路径**用（`egl_bridge.c` 的
+        // `linker_ns_load` → 拼进 android_create_namespace 的 default_library_path，
+        // 也就是 zink/Turnip 那条链路）。驱动/渲染器插件的目录必须排在最前，
+        // 否则命名空间里只会命中 APK 里随包那份，插件等于没装。
+        // 该变量只有这一处消费者，放冒号分隔的列表是它本来就支持的用法。
+        let mut native_search_dirs: Vec<String> = vendor
+            .extra_library_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        native_search_dirs.push(natives_dir.to_string_lossy().to_string());
+        env_map.insert(
+            "POJAV_NATIVEDIR".to_string(),
+            native_search_dirs.join(":"),
+        );
         // Pojav 的 Java 层会设这些变量，libpojavexec 的 pojavInitOpenGL 直接读它们：
         // 读不到就是 NULL，`strcmp(NULL,...)` 会段错误（不是可选优化，是必须项）。
-        env_map.insert("POJAV_RENDERER".to_string(), renderer.clone());
+        env_map.insert(
+            "POJAV_RENDERER".to_string(),
+            renderer_c_name(&renderer).to_string(),
+        );
+        // 26.3：把「游戏会加载的那份 libSDL3」的绝对路径告诉 C 层。
+        // 它要在 `SDL_Init` 之前对**同一个映射**调 `SDL_SetMainReady` —— SDL 的全局状态
+        // 按映射隔离，给错文件等于没调（实测表现就是
+        // `Unable to initialize SDL: Application didn't initialize properly`）。
+        if use_lwjgl341 {
+            // 注意要在**所有**插件 libs 目录里找（列表第一个未必是组件插件那个，
+            // 渲染器/驱动插件也有 libs 目录，顺序不保证）。
+            let sdl3 = vendor
+                .extra_library_dirs
+                .iter()
+                .map(|d| d.join("libSDL3.so"))
+                .find(|p| p.exists());
+            if let Some(path) = sdl3 {
+                env_map.insert(
+                    "POJAVEXEC_SDL3".to_string(),
+                    path.to_string_lossy().to_string(),
+                );
+            }
+        }
         env_map.insert("FORCE_VSYNC".to_string(), "true".to_string());
         env_map.insert("POJAV_EMUI_ITERATOR_MITIGATE".to_string(), "false".to_string());
         env_map.insert("POJAV_VSYNC_IN_ZINK".to_string(), "false".to_string());
         env_map.insert("TMPDIR".to_string(), format!("{}/cache", data_dir.trim_end_matches('/')));
+
+        // SDL 窗口层（MC 26.3+）**自己**用 `SDL_GL_LoadLibrary` 加载 GL 实现，
+        // 而 MC 随后会比对「SDL 拿到的 glGetError 指针」与 LWJGL 用的库是否一致 ——
+        // 不一致就 `BackendCreationException: glGetError mismatch`（26.3 实测）。
+        // 所以必须把 `SDL_OPENGL_LIBRARY` 指到与 `-Dorg.lwjgl.opengl.libname` 同一个文件。
+        // 给绝对路径，避免 linker 命名空间找不到（files/natives 不在默认搜索路径里）。
+        // 渲染器库的来源：插件目录优先，其次是随包解压出来的 `<data>/natives`。
+        // 注意**不是** `natives_dir` —— 那是 Minecraft 运行库的解压缓存目录，
+        // 里面没有渲染器库（用错就是 SDL 的 `Could not load EGL library`）。
+        let gl_file = renderer_gl_lib(&renderer).to_string();
+        // v2：如果「当前选中的渲染器」由某个已启用的渲染器插件提供，就优先用它
+        // （用户可以单独更新/替换渲染器，不必等启动器发版）；否则退回随包内置。
+        let renderer_plugin_libs = crate::plugin::renderer_libs_dir(
+            &data_dir,
+            renderer_plugin_key(&renderer),
+        );
+        let plugin_libs = renderer_plugin_libs
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .or_else(|| {
+                vendor
+                    .extra_library_dirs
+                    .first()
+                    .map(|p| p.to_string_lossy().to_string())
+            });
+        let native_dir_str = match plugin_libs {
+            Some(dir) if Path::new(&dir).join(&gl_file).exists() => dir,
+            _ => apk_native_dir.trim_end_matches('/').to_string(),
+        };
+        env_map.insert(
+            "SDL_OPENGL_LIBRARY".to_string(),
+            format!("{}/{}", native_dir_str, renderer_gl_lib(&renderer)),
+        );
+        // MobileGlues 自带 EGL（GL 4.6 → GLES 3.x），SDL 也得用同一份 EGL，
+        // 否则 SDL 会去建系统 EGL 上下文、与 MG 的上下文打架。
+        if renderer == "libmobileglues.so" {
+            // MG 默认去 `/sdcard/MG` 读 config.json、写 glsl_cache.tmp ——
+            // 安卓 11+ 的分区存储下我们**没权限访问那里**：配置读不到就用默认值
+            // （`maxGlslCacheSize = 0`，等于关掉着色器翻译缓存），缓存也写不进去，
+            // 于是世界里的着色器每帧重翻译一次（实测 1.18.2 只有 2 FPS / 500ms 一帧）。
+            // 指到应用私有目录后配置生效、缓存可落盘（下次启动直接命中）。
+            if let Some(mg_dir) = ensure_mobileglues_dir(&data_dir) {
+                env_map.insert("MG_DIR_PATH".to_string(), mg_dir);
+            }
+            // MG 的「启动器检测」（源码 `MobileGlues-cpp/config/settings.cpp`）：
+            //   if (isInPluginApp == 0 && fclVersion == 0 && zlVersion == 0
+            //       && pgwVersion == 0 && !is_custom_mg_dir)
+            //       → 打印 "Unsupported launcher detected, force using default config."
+            //       → **强制**覆盖 9 项设置（其中 `noErrorConfig = Auto` → 最终
+            //         `ignore_error = None`，也就是我们最需要的「忽略 shader 错误」被关掉）
+            // 所以这四个变量**任给一个非 0** 就会被当成受支持的启动器，配置才会被尊重。
+            env_map.insert("MG_PLUGIN_STATUS".to_string(), "1".to_string());
+            env_map.insert("FCL_VERSION_CODE".to_string(), "1335".to_string());
+            env_map.insert("ZALITH_VERSION_CODE".to_string(), "2000".to_string());
+            env_map.insert("PGW_VERSION_CODE".to_string(), "1".to_string());
+            let egl_path = format!("{native_dir_str}/libmobileglues.so");
+            env_map.insert("SDL_EGL_LIBRARY".to_string(), egl_path.clone());
+            // 插件给的就是**真实文件路径**，C 层的 `loader_dlopen` 直接用绝对路径最稳；
+            // 内置那份在 APK 的 zip 路径里，还是用库名让 linker 在命名空间里找。
+            env_map.insert(
+                "POJAVEXEC_EGL".to_string(),
+                if renderer_plugin_libs.is_some() {
+                    egl_path
+                } else {
+                    "libmobileglues.so".to_string()
+                },
+            );
+        }
 
         if renderer == "vulkan_zink" {
             // Zink = Mesa 的「OpenGL on Vulkan」。C 层自己也会 setenv GALLIUM_DRIVER=zink，
@@ -226,6 +377,18 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
             // 所以给 GL4ES 时绝不能设这个变量，否则一样会去加载 Turnip。
             env_map.insert("POJAV_LOAD_TURNIP".to_string(), "1".to_string());
             env_map.insert("LIBGL_ES".to_string(), "3".to_string());
+            // OSMesa 是被 **C 层**按库名 dlopen 的（`osmesa_loader.c`），
+            // 走 linker 命名空间只会命中 APK 里那份 —— 渲染器插件要想生效，
+            // 得把绝对路径显式告诉它（C 层读 POJAVEXEC_OSMESA）。
+            if let Some(dir) = &renderer_plugin_libs {
+                let osmesa = dir.join("libOSMesa.so");
+                if osmesa.exists() {
+                    env_map.insert(
+                        "POJAVEXEC_OSMESA".to_string(),
+                        osmesa.to_string_lossy().to_string(),
+                    );
+                }
+            }
         } else {
             // GL4ES 专有：mipmap 与「忽略 GL 错误」（后者能躲掉整合包里的无效调用）
             env_map.insert("LIBGL_MIPMAP".to_string(), "3".to_string());
@@ -249,6 +412,10 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
         #[cfg(target_os = "android")]
         crate::android_env::preload_jre_libraries(jre_home);
 
+        // 26.3 备注：试过把 libpojavexec 用 RTLD_GLOBAL 提前挂进全局符号表（想兜住
+        // `GLFW.<clinit>` 里那两次 native 解析），**实测无效** —— 加载器不接受全局符号，
+        // 桥函数与 LibFFI 依旧 UnsatisfiedLinkError，所以这里没有保留那段代码。
+
         // 悬浮启动卡片靠 launch://progress 显示步骤；这里不要用 launch://log，
         // 前端把任何 launch://log 都当作「启动成功」。
         crate::progress::emit_launch_progress(
@@ -265,6 +432,16 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
             crate::android_env::redirect_output(&log_path)
                 .with_context(|| format!("无法创建启动日志：{}", log_path.display()))?;
             crate::android_env::spawn_log_tail(log_path, instance_id.to_string());
+
+            // 渲染器选择写进启动日志（必须在 redirect_output **之后**，否则进不了文件）：
+            // 启动浮层与日志页能直接看到「这次用的是哪个渲染器、为什么是它」，
+            // 渲染器健康检查也按这行判断本次实际用的渲染器。
+            println!(
+                "渲染器：{}（{}｜实例设置={}）",
+                renderer_display_name(&renderer),
+                renderer_source,
+                instance.renderer.as_deref().unwrap_or("<空>")
+            );
 
             // 窗口尺寸决定触摸坐标换算是否准确，出问题时最需要看到它
             for arg in jvm_args.iter().filter(|a| a.starts_with("-Dglfwstub")) {
@@ -299,9 +476,21 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
             tracing::warn!("切换工作目录到实例目录失败（游戏内相对路径可能异常）：{e}");
         }
 
+        // 26.3：让启动器侧把 SDL 整合准备好（`org.libsdl.app.SDL` 胶水 + 已有 Surface）。
+        // 游戏侧 SDL 建窗口时要用它；不做就是 libSDL3 里空指针崩（实测）。
+        #[cfg(target_os = "android")]
+        if use_lwjgl341 {
+            match crate::android_bridge::enable_sdl_integration() {
+                Ok(()) => tracing::info!("[launcher] 已请求启用启动器侧 SDL 整合"),
+                Err(e) => tracing::warn!("[launcher] 启用启动器侧 SDL 整合失败：{e}"),
+            }
+        }
+
         // 在启动 JVM 之前在后台守候：等 JVM 起来后接管 `GL11C.nglGetString`，
         // 把 F3 里那行 `Display: … (厂商串)` 换成我们自己的（详见 gl_brand.rs）。
-        crate::gl_brand::spawn_installer();
+        // 传 game_dir 是为了让它等 MC 日志里的「原生库已装好」标记再动手 ——
+        // 抢在库加载窗口里注册 native 会把 GLFW / MemoryUtil 的初始化撞坏（26.3 实测崩）。
+        crate::gl_brand::spawn_installer(&game_dir);
 
         let exit_code = JvmLauncher::launch(
             jre_home,
@@ -398,7 +587,11 @@ async fn build_classpath(
         for lib in libraries {
             // 桌面版 LWJGL 在安卓上没得用（不带 arm64 natives），全部剔除，
             // 由下面的 Pojav 版顶替。
-            if lib.name.starts_with("org.lwjgl:") {
+            // groupId 有**两种历史命名**：老版本（≤1.12，1.8.9）是 `org.lwjgl.lwjgl`，
+            // 新版本是 `org.lwjgl` —— 只写后者时，1.8.9 的 Mojang LWJGL2 类会抢在
+            // 补丁版前面进 classpath，native 符号对不上直接
+            // `UnsatisfiedLinkError: DefaultSysImplementation.getPointerSize`（实测）。
+            if lib.name.starts_with("org.lwjgl:") || lib.name.starts_with("org.lwjgl.lwjgl:") {
                 continue;
             }
             if let Some(downloads) = &lib.downloads {
@@ -412,36 +605,113 @@ async fn build_classpath(
         }
     }
 
-    // Pojav 版 LWJGL（官方 LWJGL 全部类 + 安卓版 GLFW stub）：
+    // 安卓版 LWJGL（官方 LWJGL 全部类 + 安卓改写 glfw stub / 渲染桥）：
     // 放在最后也不会被顶掉，因为 org.lwjgl:* 已经在上面的循环里被剔除。
     // Caciocavallo 不放这里，它必须走 bootclasspath（见 build_jvm_args）。
-    classpath.push(vendor.lwjgl.to_string_lossy().to_string());
+    //
+    // 两套二选一（见 load_vendor_jars）：老版本用随包的单体 GLFW jar；
+    // MC 26.3+ 用 3.4.1 组件集（那把 SDL3 窗口层补上）。
+    for jar in &vendor.lwjgl_jars {
+        classpath.push(jar.to_string_lossy().to_string());
+    }
 
     Ok(classpath.join(":"))
 }
 
 /// 安卓适配 jar 的落盘路径（非安卓平台为空结构，逻辑只有一处 cfg）。
 struct VendorJars {
-    lwjgl: std::path::PathBuf,
+    /// classpath 上的 LWJGL 条目。
+    lwjgl_jars: Vec<std::path::PathBuf>,
+    /// LWJGL 3.4.1 的 natives 目录（`-Dorg.lwjgl.librarypath`）；
+    /// 走老 GLFW 单体 jar 时为 None。
+    lwjgl_natives: Option<std::path::PathBuf>,
+    /// 还要额外加进 `java.library.path` 的目录（插件里的 SDL3 / spirv-cross 等）。
+    /// 放在**最前面**：同名库要让插件的版本先被找到（否则又会退回 APK 里那份，
+    /// 出现两个 SDL3 副本那个经典坑）。
+    extra_library_dirs: Vec<std::path::PathBuf>,
     cacio: Vec<std::path::PathBuf>,
 }
 
-async fn load_vendor_jars(data_dir: &str, java_version: i32) -> Result<VendorJars> {
+/// 版本 JSON 要求的 LWJGL 版本是否 ≥ 3.4.1。
+///
+/// 判定依据是版本 JSON 自己的 `org.lwjgl:lwjgl:<ver>` 依赖（**不硬编码 MC 版本号**），
+/// 与 Amethyst/Pojav 的做法一致：把版本号压成整数比较（3.4.1 → 341）。
+/// 26.3 的清单里写的是 `org.lwjgl:lwjgl:3.4.3` → 343 ≥ 341 ✓。
+fn needs_lwjgl341(version_info: &MinecraftVersion) -> bool {
+    let Some(libs) = &version_info.libraries else {
+        return false;
+    };
+    libs.iter()
+        .find_map(|lib| {
+            let rest = lib.name.strip_prefix("org.lwjgl:lwjgl:")?;
+            // 只要没有 classifier 的主条目（"3.4.3"，而不是 "3.4.3:natives-linux"）
+            if rest.contains(':') {
+                return None;
+            }
+            let digits: String = rest
+                .trim_start_matches(|c: char| !c.is_ascii_digit())
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .filter(|c| *c != '.')
+                .collect();
+            digits.parse::<u32>().ok()
+        })
+        .is_some_and(|v| v >= 341)
+}
+
+async fn load_vendor_jars(
+    data_dir: &str,
+    java_version: i32,
+    use_lwjgl341: bool,
+) -> Result<VendorJars> {
     #[cfg(target_os = "android")]
     {
         let vendor = crate::android_env::ensure_vendor_jars(data_dir, java_version)
             .await
             .map_err(|e| anyhow::anyhow!("释放安卓适配 jar 失败：{e}"))?;
+
+        // 两套 LWJGL 不能同时上 classpath：混版本会出现
+        // `[LWJGL] Incompatible Java and native library versions detected`，
+        // 而且到底哪个类被加载取决于顺序，极难排查。所以按版本二选一。
+        //
+        // 注意：**渲染器 / 驱动插件的库路径与 LWJGL 版本无关** —— 老版本（1.18/1.21）
+        // 一样能装 MobileGlues 渲染器插件。所以 extra_library_dirs 在两条分支里都要带上，
+        // 只有 classpath 是二选一的。
+        let plugin = crate::plugin::resolved_component_paths(data_dir);
+        let plugin_has_classpath = !plugin.classpath.is_empty();
+        let (lwjgl_jars, lwjgl_natives, extra_library_dirs) = if use_lwjgl341 {
+            // 插件优先：用户可以单独更新组件（比如换一份适配新 MC 的 SDL3），
+            // 不必等启动器重新发版。没装插件时回退到随包内置的那套。
+            if plugin_has_classpath {
+                tracing::info!(
+                    "[launcher] LWJGL 3.4.1 组件来自插件：{} 个 jar",
+                    plugin.classpath.len()
+                );
+                (plugin.classpath, plugin.lightgl_dir, plugin.library_dirs)
+            } else {
+                let comp = crate::android_env::ensure_lwjgl341(data_dir)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("释放 LWJGL 3.4.1 组件失败：{e}"))?;
+                (comp.jars, Some(comp.natives_dir), plugin.library_dirs)
+            }
+        } else {
+            (vec![vendor.lwjgl], None, plugin.library_dirs)
+        };
+
         Ok(VendorJars {
-            lwjgl: vendor.lwjgl,
+            lwjgl_jars,
+            lwjgl_natives,
+            extra_library_dirs,
             cacio: vendor.cacio,
         })
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (data_dir, java_version);
+        let _ = (data_dir, java_version, use_lwjgl341);
         Ok(VendorJars {
-            lwjgl: std::path::PathBuf::new(),
+            lwjgl_jars: Vec::new(),
+            lwjgl_natives: None,
+            extra_library_dirs: Vec::new(),
             cacio: Vec::new(),
         })
     }
@@ -524,7 +794,7 @@ fn read_instance_log_sync(instance_id: &str, data_dir: &str) -> anyhow::Result<S
     }
     Ok(out)
 }
-/// 当前渲染后端：`opengles2`（GL4ES，默认）或 `vulkan_zink`（Zink + Turnip）。
+/// 全局渲染后端：`opengles2`（GL4ES，默认）或 `vulkan_zink`（Zink + Turnip）。
 ///
 /// 这个设置和「按钮大小 / 鼠标速度」那些放一起，存在安卓侧 SharedPreferences，
 /// 由「设置 → 游戏内 → 渲染器」写入，这里经原生桥读出来。
@@ -538,14 +808,226 @@ fn renderer_setting() -> String {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
         return "opengles2".to_string();
     };
-    match v.get("renderer").and_then(|r| r.as_str()) {
-        Some("vulkan_zink") => "vulkan_zink".to_string(),
-        // MobileGlues：返回库文件名 —— libpojavexec 对未知渲染器名会按 .so dlopen，
-        // 这也是 FCL/Zalith 接入 MG 的同一机制（renderer 列表直接给 .so 文件名）。
-        Some("mobileglues") => "libmobileglues.so".to_string(),
+    normalize_renderer(
+        v.get("renderer").and_then(|r| r.as_str()).unwrap_or("opengles2"),
+    )
+}
+
+/// 把渲染器「键」规范化成内部用的后端名。
+///
+/// MobileGlues 返回的是**库文件名**：`libpojavexec` 对未知渲染器名会按 `.so` dlopen，
+/// 这也是 FCL/Zalith 接入 MG 的同一机制（渲染器列表直接给 .so 文件名）。
+pub(crate) fn normalize_renderer(key: &str) -> String {
+    match key {
+        "vulkan_zink" => "vulkan_zink".to_string(),
+        "mobileglues" | "libmobileglues.so" => "libmobileglues.so".to_string(),
         _ => "opengles2".to_string(),
     }
 }
+
+/// MC 版本的主版本号：`26.3` → 26、`1.8.9` → 1、`26.3-snapshot-3` → 26。
+pub(crate) fn version_major(mc_version: &str) -> u32 {
+    mc_version
+        .trim()
+        .split(['.', '-', '_', ' '])
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+/// 按 MC 版本自动挑渲染器（实例设置为「自动」时用）。
+///
+/// - **26.x 起**：MC 换了整套着色器体系（UBO + 新的 `core/*` 管线），GL4ES 在第一步就
+///   `GL_INVALID_VALUE`，必须走 MobileGlues（我们另外给 MG 打了 UBO 词边界补丁，见
+///   `MobileGlues-src` 那边的修改）。
+/// - **其余版本（1.x）**：GL4ES 兼容性最好（1.8.9 / 1.18.2 等都实测能跑）。
+///   反过来 MG 在这些老版本上会翻不动 `shaders/post/*`（实测 1.8.9 报
+///   `Invalid #version`，MC 判定「无效着色器」直接崩在启动阶段），
+///   所以不能拿 MG 当老版本的默认。
+///
+/// 自动结果只是**默认值**：实例设置里随时可以改成「跟随全局」或具体渲染器。
+pub(crate) fn auto_renderer_for(mc_version: &str) -> &'static str {
+    if version_major(mc_version) >= 26 {
+        "mobileglues"
+    } else {
+        "opengles2"
+    }
+}
+
+/// 本次启动实际使用的渲染器（内部后端名）。
+///
+/// 优先级：**实例设置 → 全局设置**。
+/// - 实例是具体键（`opengles2` / `mobileglues` / `vulkan_zink`）→ 用它；
+/// - 实例是 `auto`（或缺省）→ 按 MC 版本推断，见 [`auto_renderer_for`]；
+/// - 实例是 `global` → 读「设置 → 游戏内 → 渲染器」。
+///
+/// `source` 回填成一句人话，用于写进启动日志（用户能在启动浮层里看到为什么是它）。
+pub(crate) fn resolve_renderer(
+    instance: Option<&crate::models::MinecraftProfile>,
+    source: &mut String,
+) -> String {
+    let key = instance
+        .and_then(|i| i.renderer.as_deref())
+        .unwrap_or("auto");
+    let mc_version = instance.map(|i| i.mc_version.clone()).unwrap_or_default();
+
+    match key {
+        // 跟随全局
+        "global" => {
+            *source = "本实例设置为「跟随全局」".to_string();
+            renderer_setting()
+        }
+        // 按版本自动
+        "auto" | "" => {
+            let picked = auto_renderer_for(&mc_version);
+            *source = format!(
+                "按版本自动（MC {} → {}）",
+                if mc_version.is_empty() { "未知" } else { mc_version.as_str() },
+                renderer_display_name(picked)
+            );
+            normalize_renderer(picked)
+        }
+        // 显式指定
+        other => {
+            *source = "本实例指定".to_string();
+            normalize_renderer(other)
+        }
+    }
+}
+
+/// 给日志用的渲染器显示名。
+pub(crate) fn renderer_display_name(internal: &str) -> &'static str {
+    match internal {
+        "libmobileglues.so" | "mobileglues" => "MobileGlues",
+        "vulkan_zink" => "Zink + Turnip",
+        _ => "GL4ES",
+    }
+}
+/// 渲染后端 → 它对应的 OpenGL 实现库文件名。
+///
+/// 只有一处真相：`-Dorg.lwjgl.opengl.libname`（LWJGL 侧）与
+/// `SDL_OPENGL_LIBRARY`（SDL 窗口层侧）**必须指向同一个库**，
+/// 否则 MC 26.3 会以 `BackendCreationException: glGetError mismatch` 拒绝 OpenGL 后端。
+fn renderer_gl_lib(renderer: &str) -> &'static str {
+    match renderer {
+        // Zink：Mesa 的「OpenGL on Vulkan」
+        "vulkan_zink" => "libOSMesa.so",
+        // MobileGlues：闭源第三方装载器给的库名直接就是文件名
+        "libmobileglues.so" => "libmobileglues.so",
+        // GL4ES（默认）：OpenGL → GLES 翻译层，兼容性最好
+        _ => "libgl4es_114.so",
+    }
+}
+
+/// 渲染器库是否可得：随包目录（APK 解出的 natives）或渲染器插件目录任一存在即可。
+#[cfg(target_os = "android")]
+fn renderer_available(data_dir: &str, bundled_dir: &str, renderer: &str) -> bool {
+    let gl_file = renderer_gl_lib(renderer);
+    if Path::new(bundled_dir).join(gl_file).exists() {
+        return true;
+    }
+    crate::plugin::renderer_libs_dir(data_dir, renderer_plugin_key(renderer))
+        .map(|d| d.join(gl_file).exists())
+        .unwrap_or(false)
+}
+
+/// 给 MobileGlues 准备可写的配置目录，返回给 `MG_DIR_PATH` 用的路径。
+///
+/// 目录里那份 `config.json` 只在**不存在**时写：以后用户自己调过参数不会被覆盖。
+fn ensure_mobileglues_dir(data_dir: &str) -> Option<String> {
+    let dir = std::path::Path::new(data_dir).join("mobileglues");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("[launcher] 创建 MobileGlues 目录失败：{e}");
+        return None;
+    }
+
+    let config = dir.join("config.json");
+    if !config.exists() {
+        // 关键项：
+        //  - maxGlslCacheSize（0 = 不缓存，世界里边走边翻译着色器，帧率会崩）
+        //  - **enableNoError = 1**：这才是 MG 的「忽略 shader/program 错误」开关
+        //    （源码里是 `config_get_int("enableNoError")` → `NoErrorConfig` 0..3，
+        //      1 = Level1 → `IgnoreErrorLevel::Partial`、2 = Level2 → Full；
+        //      日志里打印的 `ignoreError` 只是**最终值**，不是配置键）。
+        //    MG 官方 V1.3.5 的 release note 写明「运行 MC 26.3-snapshot-3 及以后必须启用它」：
+        //    不开的话 MC 26.3 的地形着色器会因 MG 的 GLSL 翻译问题
+        //    （实测 `'_uniform' : undeclared identifier`）编译失败，MC 直接判定
+        //    「Failed to load required shader programs」崩掉。
+        const CONFIG: &str = r#"{
+  "maxGlslCacheSize": 32,
+  "enableExtTimerQuery": true,
+  "enableExtDirectStateAccess": true,
+  "enableExtComputeShader": false,
+  "enableAngle": 0,
+  "enableNoError": 2,
+  "angleDepthClearFixMode": 0,
+  "customGLVersion": "4.0.0",
+  "fsr1Setting": 0,
+  "hideMGEnvLevel": 0
+}
+"#;
+        if let Err(e) = std::fs::write(&config, CONFIG) {
+            tracing::warn!("[launcher] 写入 MobileGlues 配置失败：{e}");
+        }
+    } else if let Err(e) = upgrade_mobileglues_ignore_error(&config) {
+        tracing::warn!("[launcher] 升级 MobileGlues 配置失败：{e}");
+    }
+
+    Some(dir.to_string_lossy().to_string())
+}
+
+/// 老配置里没有 `enableNoError`（= 不忽略任何错误）—— 26.3 必须开启才不崩，
+/// 所以这里就地升级（保留用户其它设置）。
+fn upgrade_mobileglues_ignore_error(config: &std::path::Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(config).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    // MG 的开关是 `enableNoError`（0..3；1=Partial、2=Full）。
+    // 日志里那个 `ignoreError = %i` 是**最终值**，不是配置键 —— 这点踩过坑。
+    let current = value
+        .get("enableNoError")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if current >= 2 {
+        return Ok(());
+    }
+    value["enableNoError"] = serde_json::json!(2);
+    std::fs::write(
+        config,
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    tracing::info!("[launcher] 已把 MobileGlues 的 enableNoError 升到 2（26.3 需要）");
+    Ok(())
+}
+
+/// 渲染后端 → **C 层**（libpojavexec）认的逻辑名。
+///
+/// C 层是 `strncmp("opengles", renderer, 8)` 选桥接表：GL4ES 与 MobileGlues
+/// 都必须以 `opengles` 开头。之前给 MG 直接传 `.so` 文件名 `libmobileglues.so`，
+/// 结果**一个分支都不匹配**、`config_renderer` 保持 0，`br_init()` 在空桥接表上
+/// 直接崩（1.18.2 + MG 实测）。
+///
+/// 注意这和 `-Dorg.lwjgl.opengl.libname`（真实文件名）是两回事，不能混用。
+fn renderer_c_name(renderer: &str) -> &'static str {
+    match renderer {
+        "vulkan_zink" => "vulkan_zink",
+        "libmobileglues.so" => "opengles_mobileglues",
+        _ => "opengles2",
+    }
+}
+
+/// 渲染后端 → 插件清单里 `renderers` 用的键。
+///
+/// 用**设置页的取值**当键（`opengles2` / `mobileglues` / `vulkan_zink`），而不是
+/// `.so` 文件名 —— 这样清单作者不用关心我们内部把 MG 映射成哪个文件名。
+fn renderer_plugin_key(renderer: &str) -> &'static str {
+    match renderer {
+        "vulkan_zink" => "vulkan_zink",
+        "libmobileglues.so" => "mobileglues",
+        _ => "opengles2",
+    }
+}
+
 /// 从设置文件里取整数项（兼容 snake_case 与 camelCase 两种键名）。
 fn raw_i64(raw: &std::collections::HashMap<String, serde_json::Value>, keys: &[&str]) -> Option<i64> {
     keys.iter()
@@ -699,15 +1181,53 @@ fn build_android_jvm_args(
     game_dir: &str,
     natives_dir: &str,
     native_lib_dir: &str,
+    lwjgl_natives: Option<&std::path::Path>,
+    extra_library_dirs: &[std::path::PathBuf],
 ) -> Vec<String> {
     let mut args = Vec::new();
 
-    let mut library_path = natives_dir.to_string();
-    if !native_lib_dir.is_empty() {
-        library_path.push(':');
-        library_path.push_str(&native_lib_dir);
+    // 顺序即优先级：
+    // 1. LWJGL 3.4.1 的原生库目录（有的话）**必须最前** —— `System.loadLibrary("lwjgl"
+    //    / "openal" / …)` 找的是 `java.library.path`，而 APK 与 `files/natives` 里
+    //    还躺着老的 3.3.x 版本。被旧库抢先的后果是 LWJGL 直接报
+    //    `Incompatible Java and native library versions detected`，随后 LibFFI/freetype
+    //    一连串 `UnsatisfiedLinkError`（26.3 实测）。
+    // 2. 插件目录：同名库（SDL3 / 渲染器）要优先于内置那份。
+    let mut library_parts: Vec<String> = Vec::new();
+    if let Some(dir) = lwjgl_natives {
+        library_parts.push(dir.to_string_lossy().to_string());
     }
-    args.push(format!("-Djava.library.path={library_path}"));
+    library_parts.extend(
+        extra_library_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string()),
+    );
+    library_parts.push(natives_dir.to_string());
+    if !native_lib_dir.is_empty() {
+        library_parts.push(native_lib_dir.to_string());
+    }
+    args.push(format!("-Djava.library.path={}", library_parts.join(":")));
+
+    // LWJGL 3.4.1 组件集（MC 26.3+）：它带来的 liblwjgl.so / liblwjgl_opengl.so 是
+    // **3.4.1 版**，而 APK 的 jniLibs 里那份 liblwjgl.so 是老 GLFW 版 ——
+    // 两者符号不同，混用就是 LWJGL 那句
+    // `Incompatible Java and native library versions detected`。
+    // 用 `org.lwjgl.librarypath` 单独把 LWJGL 的库搜索路径指过去，
+    // 老路径（None）时行为完全不变。
+    if let Some(dir) = lwjgl_natives {
+        args.push(format!("-Dorg.lwjgl.librarypath={}", dir.display()));
+    }
+
+    // 26.3 的 JNA 要 7.x，而随包那份 libjnidispatch.so 是 6.1.6（老版本用的）——
+    // 让它直接用 jar 里自带的那份，别去系统路径捞（否则 MC 生成硬件报告时直接 Error）。
+    // 判据用「有 3.4.1 natives」而不是版本号：走到这里就等价于 26.3 那条路。
+    // JNA：随包那份 `libjnidispatch.so` 是给老版本用的（6.1.6），而 MC 26.3 的 JNA
+    // 要 7.x，于是它会报一句「incompatible JNA native library」——**不致命**，
+    // MC 拿不到硬件信息而已（它自己 catch 了）。
+    // 试过让它改用 jar 自带的那份（`-Djna.nosys=true`）：反而更糟 —— 我们给 JVM 设了
+    // `-Dos.name=Linux`，JNA 就按桌面 Linux 挑了 glibc 的版本，加载时报
+    // `dlopen failed: library "libc.so.6" not found`。所以维持原样，等有 Android 版
+    // 的 7.x jnidispatch 再说。
     args.push(format!("-Djna.boot.library.path={native_lib_dir}"));
     args.push(format!("-Djava.home={}", runtime.path));
     args.push(format!(
@@ -722,23 +1242,28 @@ fn build_android_jvm_args(
         crate::android_env::android_release()
     ));
 
-    // 渲染后端决定 LWJGL 去加载哪个 OpenGL 实现：
-    //   GL4ES（opengles2）→ libgl4es_114.so：OpenGL → GLES 翻译层，兼容性最好
-    //   Zink（vulkan_zink）→ libOSMesa.so：Mesa 的 OSMesa + Zink，OpenGL → Vulkan
-    let renderer = renderer_setting();
-    let gl_libname = if renderer == "vulkan_zink" {
-        "libOSMesa.so"
-    } else if renderer == "libmobileglues.so" {
-        "libmobileglues.so"
-    } else {
-        "libgl4es_114.so"
-    };
+    // 渲染后端决定 LWJGL 去加载哪个 OpenGL 实现（与 env 里的 SDL_OPENGL_LIBRARY 同源，
+    // 见 renderer_gl_lib）。
+    //
+    // 必须和主流程用**同一套解析**：这里若直接读全局设置，实例级选择就形同虚设
+    // —— 实测表现是「实例设了 GL4ES，游戏还是加载 libmobileglues.so」。
+    let mut _renderer_why = String::new();
+    let renderer = resolve_renderer(Some(instance), &mut _renderer_why);
+    let gl_libname = renderer_gl_lib(&renderer);
     args.push(format!("-Dorg.lwjgl.opengl.libname={gl_libname}"));
     args.push("-Dorg.lwjgl.vulkan.libname=libvulkan.so".to_string());
     if !native_lib_dir.is_empty() {
         args.push(format!(
             "-Dorg.lwjgl.freetype.libname={native_lib_dir}/libfreetype.so"
         ));
+    }
+
+    // MC 26.3 的 NativeLibrariesBootstrap 会在启动时强加载 spvc（着色器翻译）。
+    // LWJGL 的 spvc 模块默认按 `libspirv-cross.so` 找 —— 我们随包的是
+    // spirv-cross 官方 c-shared 构建（`libspirv-cross-c-shared.so`），所以要把
+    // 库名显式告诉它，否则启动就 `UnsatisfiedLinkError: Loading library spvc`。
+    if lwjgl_natives.is_some() {
+        args.push("-Dorg.lwjgl.spvc.libname=spirv-cross-c-shared".to_string());
     }
 
     // 安卓 GLFW stub 的窗口尺寸**必须等于 Surface 的实际像素尺寸**。

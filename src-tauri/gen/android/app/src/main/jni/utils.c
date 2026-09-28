@@ -59,6 +59,24 @@ jstring convertStringJVM(JNIEnv* srcEnv, JNIEnv* dstEnv, jstring srcStr) {
     return dstStr;
 }
 
+/* 把一个 JNIEnv 里的 int[] 复制到另一个 JNIEnv（跨 VM 传参用）。
+ * SDL 集成里 JVM 侧要把「通知类型 + 参数」交给 dalvik 侧，两个 env 不能混用对象。 */
+jintArray convertIntArrayJVM(JNIEnv* srcEnv, JNIEnv* dstEnv, jintArray srcIntArray) {
+	if (srcIntArray == NULL) {
+		return NULL;
+	}
+
+	jsize len = (*srcEnv)->GetArrayLength(srcEnv, srcIntArray);
+	jint* srcPtr = (*srcEnv)->GetIntArrayElements(srcEnv, srcIntArray, NULL);
+
+	jintArray dstIntArray = (*dstEnv)->NewIntArray(dstEnv, len);
+	(*dstEnv)->SetIntArrayRegion(dstEnv, dstIntArray, 0, len, srcPtr);
+
+	(*srcEnv)->ReleaseIntArrayElements(srcEnv, srcIntArray, srcPtr, JNI_ABORT);
+
+	return dstIntArray;
+}
+
 JNIEXPORT void JNICALL Java_net_kdt_pojavlaunch_utils_JREUtils_setupBridgeSurfaceAWT(JNIEnv *env, jclass clazz, jlong surface) {
 	shared_awt_surface = surface;
 }

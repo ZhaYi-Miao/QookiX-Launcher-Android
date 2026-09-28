@@ -182,8 +182,9 @@ async function launch() {
     return;
   }
   try {
-    await instances.launch(i.id);
-    message.success("游戏已启动，可在「日志」查看输出");
+    // 被渲染器确认弹窗拦下时返回 null，此时游戏还没启动
+    const res = await instances.launch(i.id);
+    if (res) message.success("游戏已启动，可在「日志」查看输出");
   } catch (e) {
     message.error(String(e));
   }

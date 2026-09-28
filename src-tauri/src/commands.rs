@@ -282,6 +282,72 @@ pub async fn update_settings(patch: Value) -> Result<Settings, String> {
     settings::get_settings().await.map_err(|e| e.to_string())
 }
 
+// ==================== Plugin Commands ====================
+//
+// 统一约定：每个命令都返回**最新的插件列表**，前端拿到直接替换即可 ——
+// 少一次「装完再查一遍」的往返，也不会出现「安装成功但列表还是旧的」这种状态错位。
+
+async fn plugin_data_dir() -> Result<String, String> {
+    settings::get_data_dir().await.map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_plugins() -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    Ok(crate::plugin::list(&plugin_data_dir().await?))
+}
+
+/// 强制联网刷新清单（用户点「刷新」时用；平时列表只读缓存，避免进设置就卡一下）。
+#[command]
+pub async fn refresh_plugin_manifest() -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::fetch_manifest(&data_dir, true).await?;
+    Ok(crate::plugin::list(&data_dir))
+}
+
+#[command]
+pub async fn install_plugin(id: String) -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::install(&data_dir, &id).await?;
+    Ok(crate::plugin::list(&data_dir))
+}
+
+/// 从本地 zip 安装（离线/内网/测试用；包内需带 `plugin.json`）。
+#[command]
+pub async fn install_plugin_from_file(path: String) -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::install_from_zip(&data_dir, &path).await?;
+    Ok(crate::plugin::list(&data_dir))
+}
+
+#[command]
+pub async fn uninstall_plugin(id: String) -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::uninstall(&data_dir, &id)?;
+    Ok(crate::plugin::list(&data_dir))
+}
+
+#[command]
+pub async fn set_plugin_enabled(
+    id: String,
+    enabled: bool,
+) -> Result<Vec<crate::plugin::PluginInfo>, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::set_enabled(&data_dir, &id, enabled)?;
+    Ok(crate::plugin::list(&data_dir))
+}
+
+#[command]
+pub async fn get_plugin_manifest_url() -> Result<String, String> {
+    Ok(crate::plugin::manifest_url(&plugin_data_dir().await?))
+}
+
+#[command]
+pub async fn set_plugin_manifest_url(url: String) -> Result<String, String> {
+    let data_dir = plugin_data_dir().await?;
+    crate::plugin::set_manifest_url(&data_dir, &url)?;
+    Ok(crate::plugin::manifest_url(&data_dir))
+}
+
 // ==================== Modpack Commands ====================
 
 #[command]
@@ -1116,4 +1182,25 @@ pub async fn read_instance_log(instance_id: String) -> Result<String, String> {
     crate::launch::read_instance_log(&instance_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 渲染器健康检查：本次启动日志里有渲染器失败证据、且当前渲染器不是该版本推荐的那个时，
+/// 返回一份「建议切换」的说明（前端在玩家回到启动器后弹窗询问）。
+///
+/// 只读、只建议 —— 切换动作由前端调 `update_instance`（**只改这一个实例**）完成。
+#[command]
+pub async fn check_renderer_health(
+    instance_id: String,
+) -> Result<Option<crate::models::RendererIssue>, String> {
+    crate::renderer_health::check(&instance_id).await
+}
+
+/// 同上，但对象是「最近一次启动过的实例」（按 `logs/launch-*.log` 的修改时间挑）。
+///
+/// 玩家「回到启动器」时用这个：有些渲染器故障会让游戏线程死掉、JVM 却还挂着，
+/// 根本不会有正常的退出事件可听。
+#[command]
+pub async fn check_renderer_health_latest(
+) -> Result<Option<crate::models::RendererIssue>, String> {
+    crate::renderer_health::check_latest().await
 }

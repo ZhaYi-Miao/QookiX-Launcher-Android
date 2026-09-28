@@ -22,7 +22,7 @@ pub struct JreMirrorSource {
 ///
 /// ## 关于 `sha1` 全是空串
 ///
-/// 这 9 条的 `sha1` 都是空的（上游就没给）。**没有**去补真实 SHA1，因为这个格式
+/// 这些条目的 `sha1` 都是空的（上游就没给）。**没有**去补真实 SHA1，因为这个格式
 /// 自带完整性校验，重复校验的收益很低：
 ///   1. `tar.xz` 的 xz 容器自带 CRC64 校验，字节损坏在解压阶段就会失败；
 ///   2. 字节数被严格核对（`total` 取 Content-Length，缺失时回退 `size` 字段）；
@@ -94,7 +94,41 @@ const JRE_MIRRORS: &[JreMirrorSource] = &[
         sha1: "",
         size: 29_662_988,
     },
+    // ── Java 25：新版 Minecraft 需要它 ────────────────────────────────
+    // 26.3（2026-09-15）的版本 JSON 写着 `javaVersion.majorVersion = 25`，
+    // 缺这一档时启动会直接报 `JRE_ARCH_UNSUPPORTED: no JRE for Java 25`。
+    // 大小取自 GitHub 资产元数据（Content-Length），架构命名同上游。
+    JreMirrorSource {
+        java_version: 25,
+        arch: "arm64-v8a",
+        url: "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre25/jre25-android-arm64.tar.xz",
+        sha1: "",
+        size: 38_031_580,
+    },
+    JreMirrorSource {
+        java_version: 25,
+        arch: "armeabi-v7a",
+        url: "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre25/jre25-android-arm.tar.xz",
+        sha1: "",
+        size: 28_252_088,
+    },
+    JreMirrorSource {
+        java_version: 25,
+        arch: "x86_64",
+        url: "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre25/jre25-android-x86_64.tar.xz",
+        sha1: "",
+        size: 39_061_384,
+    },
 ];
+
+/// 当前能自动下载的 Java 主版本号（去重、升序）——用于「版本不支持」时的提示文案，
+/// 免得把可用版本写死在字符串里，加镜像后忘同步。
+pub fn supported_java_versions() -> Vec<i32> {
+    let mut v: Vec<i32> = JRE_MIRRORS.iter().map(|m| m.java_version).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
 
 pub fn resolve_download_url(java_version: i32, arch: &str) -> Result<&JreMirrorSource> {
     JRE_MIRRORS
@@ -603,7 +637,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_resolve_download_url_all_6_combinations() {
+    fn test_resolve_download_url_all_combinations() {
         let combos = [
             (8, "arm64-v8a"),
             (8, "armeabi-v7a"),
@@ -611,6 +645,14 @@ mod tests {
             (17, "armeabi-v7a"),
             (21, "arm64-v8a"),
             (21, "armeabi-v7a"),
+            // 新版 Minecraft：26.3 起要求 Java 25
+            (25, "arm64-v8a"),
+            (25, "armeabi-v7a"),
+            (25, "x86_64"),
+            // 模拟器用的 x86_64
+            (8, "x86_64"),
+            (17, "x86_64"),
+            (21, "x86_64"),
         ];
         for (java, arch) in &combos {
             let result = resolve_download_url(*java, arch);

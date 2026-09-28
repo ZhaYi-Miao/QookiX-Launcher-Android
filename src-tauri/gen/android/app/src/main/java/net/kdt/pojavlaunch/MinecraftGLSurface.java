@@ -36,6 +36,9 @@ import net.kdt.pojavlaunch.prefs.LauncherPreferences;
 import net.kdt.pojavlaunch.utils.JREUtils;
 import net.kdt.pojavlaunch.utils.MCOptionUtils;
 
+import org.libsdl.app.SDL;
+import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLSurface;
 import org.lwjgl.glfw.CallbackBridge;
 
 /**
@@ -58,10 +61,30 @@ public class MinecraftGLSurface extends View implements GrabListener {
     final Object mSurfaceReadyListenerLock = new Object();
     /* View holding the surface, either a SurfaceView or a TextureView */
     View mSurface;
-
+    /**
+     * SDL（MC 26.3+ 的窗口层）需要的真实 Android Surface。
+     *
+     * 用 static 是为了让 [pushSurfaceToSDL] 能在「SDL 初始化晚于 Surface 创建」时
+     * 由 [org.lwjgl.glfw.CallbackBridge.notifyLauncher] 回调过来把 Surface 交出去 ——
+     * 否则 SDL 拿不到 surface，会在自己内部空指针崩（实测 SIGSEGV in libSDL3.so）。
+     */
+    private static Surface mNativeSurface;
+    /**
+     * SDL 支持是否已启用。
+     *
+     * 判定权不在启动器：游戏侧的 LWJGL SDL 绑定在 `SDL_Init` 时会通过
+     * `CallbackBridge.nativeNotifyLauncher` 回调到 dalvik 侧，由
+     * [CallbackBridge.notifyLauncher] 把这里置 true（SDL3 的 Java 胶水同时初始化）。
+     * 老版本（GLFW 一系）永远不会置位，所有 SDL 分支都走不到。
+     */
+    public static boolean sdlEnabled = false;
+    /** SDLActivity 提供的手柄/鼠标事件监听，手柄事件转发用。 */
+    private static View.OnGenericMotionListener motionListener = (v, event) -> false;
     private final InGameEventProcessor mIngameProcessor = new InGameEventProcessor(mSensitivityFactor);
     private final InGUIEventProcessor mInGUIProcessor = new InGUIEventProcessor();
     private TouchEventProcessor mCurrentTouchProcessor = mInGUIProcessor;
+    /** 输入诊断日志限流计数。 */
+    private int sTouchLogTick;
     private AndroidPointerCapture mPointerCapture;
     private boolean mLastGrabState = false;
 
@@ -86,33 +109,108 @@ public class MinecraftGLSurface extends View implements GrabListener {
      * @param touchpad the optional cursor-emulating touchpad, used for touch event processing
      *                 when the cursor is not grabbed
      */
+    /**
+     * 初始化 SDL 的 Java 胶水层（MC 26.3+ 用）。
+     *
+     * 必须在**主线程**调用：SDL 的 Java 侧会创建 Handler，在非 looper 线程上会崩。
+     * 传入的 `layout` 是父容器 —— SDLActivity 需要一个 ViewGroup 来挂 SDLSurface。
+     */
+    private static void setupSDL(Context ctx, Surface nativeSurface, ViewGroup layout) {
+        // 先把 SDL3 载进 **当前（dalvik）VM**：SDL 的 JNI_OnLoad 在这里跑过才会
+        // 缓存 JavaVM，之后游戏 JVM 里 LWJGL 再 dlopen 同一份时不会重复初始化。
+        // 顺序很重要 —— 若让游戏侧先加载，SDL 后面会因为拿不到 JavaVM 空指针崩。
+        try {
+            System.loadLibrary("SDL3");
+        } catch (Throwable t) {
+            Log.w("MGLSurface", "提前加载 libSDL3.so 失败（稍后游戏侧还会再试）", t);
+        }
+        SDLSurface surface = new SDLSurface(ctx);
+        motionListener = SDLActivity.getMotionListener();
+        org.libsdl.app.SDL.initialize();
+        SDL.setContext((Activity) ctx);
+        SDLActivity.externalInitialize(surface, layout, nativeSurface);
+        Log.i("MGLSurface", "SDL 胶水已初始化（surface=" + nativeSurface + "）");
+    }
+
+    /**
+     * 把当前已经存在的 Surface 交给 SDL。
+     *
+     * 触发时机：游戏侧的 SDL 初始化（`SDL_Init`）通常**晚于** Surface 创建，
+     * 而 Surface 回调里那句 `if (sdlEnabled)` 在当时还是 false，于是 SDL 永远
+     * 拿不到 surface。SDL 初始化一建立（CallbackBridge.notifyLauncher）就由这里补交。
+     */
+    public static void pushSurfaceToSDL() {
+        if (mNativeSurface == null || !mNativeSurface.isValid()) {
+            Log.w("MGLSurface", "SDL 启用时 Surface 还不可用，等 surfaceCreated 回调再补");
+            return;
+        }
+        SDLSurface.setNativeSurface(mNativeSurface);
+        if (SDLActivity.getSDLSurface() != null) {
+            SDLActivity.getSDLSurface().surfaceChanged(null, 0,
+                    Tools.currentDisplayMetrics.widthPixels,
+                    Tools.currentDisplayMetrics.heightPixels);
+        }
+        Log.i("MGLSurface", "已把 Surface 交给 SDL：" + mNativeSurface);
+    }
+
     public void start(boolean isAlreadyRunning, AbstractTouchpad touchpad){
         if(Tools.isAndroid8OrHigher()) setUpPointerCapture(touchpad);
         mInGUIProcessor.setAbstractTouchpad(touchpad);
         if(LauncherPreferences.PREF_USE_ALTERNATE_SURFACE){
             SurfaceView surfaceView = new SurfaceView(getContext());
             mSurface = surfaceView;
+            mNativeSurface = surfaceView.getHolder().getSurface();
+            // SDL 侧提前初始化：它拿到的是「这块 Surface + 父布局」，
+            // 之后 surface 变化只需通知它（见下面的回调）。
+            setupSDL(getContext(), mNativeSurface, (ViewGroup) getParent());
 
             surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
                 private boolean isCalled = isAlreadyRunning;
                 @Override
                 public void surfaceCreated(@NonNull SurfaceHolder holder) {
+                    // 启动那一刻拿到的 Surface 还是占位对象（nativeObject=0），
+                    // 这里用 holder 里这份**有效**的覆盖掉，否则 SDL/EGL 拿到的是空 Surface。
+                    mNativeSurface = holder.getSurface();
                     if(isCalled) {
-                        JREUtils.setupBridgeWindow(surfaceView.getHolder().getSurface());
+                        JREUtils.setupBridgeWindow(mNativeSurface);
+                        if (sdlEnabled) SDLSurface.setNativeSurface(mNativeSurface);
+                        // 26.3 黑屏修复：SDL 只有在「尺寸变化」时才会重建 EGLSurface。
+                        // 解锁后尺寸没变 → SDL 继续用已死的旧 EGL surface → 全黑。
+                        // 先报一个小一档的尺寸再报真实尺寸，逼 SDL 走重建。
+                        if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                            int w = Tools.currentDisplayMetrics.widthPixels;
+                            int h = Tools.currentDisplayMetrics.heightPixels;
+                            SDLActivity.getSDLSurface().surfaceChanged(null, 0, w - 2, h - 2);
+                            SDLActivity.getSDLSurface().surfaceChanged(null, 0, w, h);
+                        }
+                        refreshSize(true);
                         return;
                     }
                     isCalled = true;
 
-                    realStart(surfaceView.getHolder().getSurface());
+                    realStart(mNativeSurface);
                 }
 
                 @Override
                 public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
+                    // 给 SDL 的尺寸必须是**真实屏幕像素**，不能用缩放后的游戏分辨率 ——
+                    // 否则 SDL 会渲染到离屏（画面全黑）。
+                    if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                        SDLActivity.getSDLSurface().surfaceChanged(holder, format,
+                                Tools.currentDisplayMetrics.widthPixels,
+                                Tools.currentDisplayMetrics.heightPixels);
+                    }
                     refreshSize();
                 }
 
                 @Override
-                public void surfaceDestroyed(@NonNull SurfaceHolder holder) {}
+                public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+                    // SurfaceView 的 Surface 会频繁销毁重建（切后台、浮窗）。
+                    // 不通知 SDL 的话它会继续持有已释放的 ANativeWindow → 崩溃。
+                    if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                        SDLActivity.getSDLSurface().surfaceDestroyed(holder);
+                    }
+                }
             });
 
             ((ViewGroup)getParent()).addView(surfaceView);
@@ -126,23 +224,45 @@ public class MinecraftGLSurface extends View implements GrabListener {
                 private boolean isCalled = isAlreadyRunning;
                 @Override
                 public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                    Surface tSurface = new Surface(surface);
+                    mNativeSurface = new Surface(surface);
                     if(isCalled) {
-                        JREUtils.setupBridgeWindow(tSurface);
+                        // 重建（锁屏/切后台回来）：SDL 胶水已经初始化过，**绝不能**再跑
+                        // setupSDL —— 那会再建一个 SDLSurface 塞进布局、重置 SDL 状态，
+                        // 游戏侧还持着旧的那套 → 画面全黑。这里只需把**新的 Surface**
+                        // 交给 SDL：setNativeSurface 内部会走 surfaceCreated，
+                        // 再补一个 surfaceChanged 让 SDL 用新 ANativeWindow 重建渲染目标
+                        // （尺寸没变时 onSurfaceTextureSizeChanged 不会回调，必须主动补）。
+                        JREUtils.setupBridgeWindow(mNativeSurface);
+                        if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                            SDLSurface.setNativeSurface(mNativeSurface);
+                            SDLActivity.getSDLSurface().surfaceChanged(null, 0,
+                                    Tools.currentDisplayMetrics.widthPixels,
+                                    Tools.currentDisplayMetrics.heightPixels);
+                        }
+                        refreshSize(true);
                         return;
                     }
+                    setupSDL(getContext(), mNativeSurface, (ViewGroup) getParent());
                     isCalled = true;
 
-                    realStart(tSurface);
+                    realStart(mNativeSurface);
                 }
 
                 @Override
                 public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                    if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                        SDLActivity.getSDLSurface().surfaceChanged(null, 0,
+                                Tools.currentDisplayMetrics.widthPixels,
+                                Tools.currentDisplayMetrics.heightPixels);
+                    }
                     refreshSize();
                 }
 
                 @Override
                 public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                    if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+                        SDLActivity.getSDLSurface().surfaceDestroyed(null);
+                    }
                     return true;
                 }
 
@@ -165,6 +285,10 @@ public class MinecraftGLSurface extends View implements GrabListener {
     public boolean onTouchEvent(MotionEvent e) {
         // Kinda need to send this back to the layout
         if(((ControlLayout)getParent()).getModifiable()) return false;
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN || e.getActionMasked() == MotionEvent.ACTION_MOVE)
+            org.lwjgl.glfw.CallbackBridge.inputDebugLogPub("GLSurface.onTouchEvent action=" + e.getActionMasked()
+                    + " grabbing=" + CallbackBridge.isGrabbing()
+                    + " processor=" + (mCurrentTouchProcessor == mIngameProcessor ? "INGAME" : "INGUI"));
 
         // Looking for a mouse to handle, won't have an effect if no mouse exists.
         for (int i = 0; i < e.getPointerCount(); i++) {
@@ -328,6 +452,10 @@ public class MinecraftGLSurface extends View implements GrabListener {
             }
         }
 
+        // SDL 侧也要知道新尺寸（它自己维护一套 surface 尺寸）
+        if (sdlEnabled && SDLActivity.getSDLSurface() != null) {
+            SDLActivity.getSDLSurface().nativeResize(windowWidth, windowHeight);
+        }
         CallbackBridge.sendUpdateWindowSize(windowWidth, windowHeight);
 
     }

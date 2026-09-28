@@ -140,8 +140,8 @@ async function launchWorld(name: string) {
     message.info(`此实例是 ${i.mc_version}，不支持命令行直达存档，将启动游戏后手动进入存档`);
   }
   try {
-    await instances.launch(i.id, name);
-    message.success(`正在进入世界「${name}」`);
+    const res = await instances.launch(i.id, name);
+    if (res) message.success(`正在进入世界「${name}」`);
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -160,8 +160,8 @@ async function launchServer(entry: ServerEntry) {
   }
   launchingServer.value = entry.address;
   try {
-    await instances.launch(i.id, undefined, entry.address);
-    message.success(`正在加入服务器「${entry.name || entry.address}」`);
+    const res = await instances.launch(i.id, undefined, entry.address);
+    if (res) message.success(`正在加入服务器「${entry.name || entry.address}」`);
   } catch (e) {
     message.error(String(e));
   } finally {

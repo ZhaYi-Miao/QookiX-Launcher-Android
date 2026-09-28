@@ -545,6 +545,8 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
         // 只铺了 mods/配置，游戏本体还没装 —— 这里写 true 会让那个按钮永久消失，
         // 游戏本体再也装不上。
         installed: false,
+        // 整合包导入的实例同样走「按版本自动挑渲染器」。
+        renderer: None,
     })
 }
 

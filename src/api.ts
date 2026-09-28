@@ -15,6 +15,7 @@ import type {
   ProjectDependency,
   ProjectHit,
   ProjectVersion,
+  RendererIssue,
   ServerConfig,
   ServerEntry,
   ServerStatus,
@@ -25,6 +26,8 @@ import type {
   UpdateInfo,
   PlaytimeStats,
   WorldBackupInfo,
+  PluginInfo,
+  ControlButtonInfo,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -199,6 +202,30 @@ function invoke<T>(
 }
 
 export const api = {
+  // plugins（组件/渲染器插件：查看、下载安装、启停、卸载）
+  // 每个写操作都返回最新列表，前端直接替换即可，省一次往返也避免状态错位。
+  getPlugins: () => invoke<PluginInfo[]>("get_plugins", undefined, { silent: true }),
+  refreshPluginManifest: () => invoke<PluginInfo[]>("refresh_plugin_manifest"),
+  // 静默刷新：启动时自动检查插件更新用，失败不弹加载条/提示
+  refreshPluginManifestSilent: () =>
+    invoke<PluginInfo[]>("refresh_plugin_manifest", undefined, { silent: true }),
+  installPlugin: (id: string) => invoke<PluginInfo[]>("install_plugin", { id }),
+  installPluginFromFile: (path: string) =>
+    invoke<PluginInfo[]>("install_plugin_from_file", { path }),
+  uninstallPlugin: (id: string) => invoke<PluginInfo[]>("uninstall_plugin", { id }),
+  setPluginEnabled: (id: string, enabled: boolean) =>
+    invoke<PluginInfo[]>("set_plugin_enabled", { id, enabled }),
+  getPluginManifestUrl: () =>
+    invoke<string>("get_plugin_manifest_url", undefined, { silent: true }),
+  setPluginManifestUrl: (url: string) =>
+    invoke<string>("set_plugin_manifest_url", { url }),
+
+  // 控制布局：按键透传（按住这个键时拖动也能转视角）
+  getControlButtons: () =>
+    invoke<ControlButtonInfo[]>("get_control_buttons", undefined, { silent: true }),
+  setControlButtonPassthru: (index: number, enabled: boolean) =>
+    invoke<ControlButtonInfo[]>("set_control_button_passthru", { index, enabled }),
+
   // settings & java
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (patch: Record<string, unknown>) => invoke<Settings>("set_settings", { patch }),
@@ -303,6 +330,12 @@ export const api = {
     invoke<WorldBackupInfo>("create_world_backup", { instanceId, world }),
   restoreWorldBackup: (instanceId: string, world: string, filename: string) =>
     invoke<void>("restore_world_backup", { instanceId, world, filename }),
+  /** 渲染器健康检查：有问题时返回建议切换的信息，否则 null */
+  checkRendererHealth: (instanceId: string) =>
+    invoke<RendererIssue | null>("check_renderer_health", { instanceId }),
+  /** 同上，对象是「最近一次启动过的实例」——玩家回到启动器时用（可能没有退出事件） */
+  checkRendererHealthLatest: () =>
+    invoke<RendererIssue | null>("check_renderer_health_latest"),
   deleteWorldBackup: (instanceId: string, world: string, filename: string) =>
     invoke<void>("delete_world_backup", { instanceId, world, filename }),
   estimateDownload: (mcVersion: string) =>

@@ -63,8 +63,9 @@ function fmtDuration(secs: number): string {
 
 async function launch() {
   try {
-    await instances.launch(props.instance.id);
-    message.success("游戏已启动");
+    // launch 可能返回 null（渲染器确认弹窗拦下了，等用户决定）—— 那时别提示「已启动」
+    const res = await instances.launch(props.instance.id);
+    if (res) message.success("游戏已启动");
   } catch (e) {
     message.error(String(e));
   }

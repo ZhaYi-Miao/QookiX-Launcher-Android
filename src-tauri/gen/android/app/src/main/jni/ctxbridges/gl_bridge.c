@@ -10,6 +10,7 @@
 #include <jvm_hooks/jvm_hooks.h>
 #include "gl_bridge.h"
 #include "egl_loader.h"
+#include "../perf_counters.h"
 
 #define TAG __FILE_NAME__
 #include <log.h>
@@ -165,13 +166,15 @@ void gl_swap_buffers() {
         eglMakeCurrent_p(g_EglDisplay, currentBundle->surface, currentBundle->surface, currentBundle->context);
         currentBundle->state = STATE_RENDERER_ALIVE;
     }
-    if(currentBundle->surface != NULL)
+    if(currentBundle->surface != NULL) {
         if(!eglSwapBuffers_p(g_EglDisplay, currentBundle->surface) && eglGetError_p() == EGL_BAD_SURFACE) {
             eglMakeCurrent_p(g_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             currentBundle->newNativeSurface = NULL;
             gl_swap_surface(currentBundle);
             eglMakeCurrent_p(g_EglDisplay, currentBundle->surface, currentBundle->surface, currentBundle->context);
             LOGI("The window has died, awaiting window change");
+        }
+        perf_frame(); /* 性能面板的帧计数（含 MobileGlues：EGL 就来自 MG 那份） */
     }
 
 }

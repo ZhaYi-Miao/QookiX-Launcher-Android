@@ -37,6 +37,7 @@ import net.kdt.pojavlaunch.EfficientAndroidLWJGLKeycode
 import net.kdt.pojavlaunch.Logger
 import net.kdt.pojavlaunch.LwjglGlfwKeycode
 import net.kdt.pojavlaunch.MinecraftGLSurface
+import org.libsdl.app.SDLActivity
 import net.kdt.pojavlaunch.customcontrols.ControlButtonMenuListener
 import net.kdt.pojavlaunch.customcontrols.ControlData
 import net.kdt.pojavlaunch.customcontrols.ControlDrawerData
@@ -107,10 +108,10 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
          * 版本不一致就**覆盖一次**内置 default.json（玩家自己另存/另选的布局文件不受影响，
          * 只有名为 default.json 的这一份会被刷新）。
          */
-        private const val CONTROL_STYLE_VERSION = 2
+        private const val CONTROL_STYLE_VERSION = 3
         private const val STYLE_MARKER = ".qk-control-style"
 
-        /** `R.array.menu_ingame` 六项对应的图标（顺序必须与数组一致）。 */
+        /** `R.array.menu_ingame` 七项对应的图标（顺序必须与数组一致）。 */
         private val GAME_MENU_ICONS = intArrayOf(
             R.drawable.ic_qk_power,     // 强制关闭
             R.drawable.ic_qk_log,       // 日志输出
@@ -118,6 +119,14 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             R.drawable.ic_qk_sliders,   // 快速设置
             R.drawable.ic_qk_gamepad,   // 自定义控制布局
             R.drawable.ic_qk_camera,    // 截图
+            R.drawable.ic_qk_speed,     // 性能面板
+        )
+
+        /** 性能面板的二级菜单：启用/停用、功能设置、返回。 */
+        private val PERF_MENU_ICONS = intArrayOf(
+            R.drawable.ic_qk_speed,     // 显示/隐藏
+            R.drawable.ic_qk_sliders,   // 功能设置
+            R.drawable.ic_qk_close,     // 返回
         )
 
         /** `R.array.menu_customcontrol` 七项对应的图标（顺序必须与数组一致）。 */
@@ -189,6 +198,12 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
     private lateinit var mHotbarView: HotbarView
     private var mGyroControl: GyroControl? = null
     private var mQuickSettingSideDialog: QuickSettingSideDialog? = null
+    private var mPerfOverlay: PerfOverlayView? = null
+    private var mPerfSettingsDialog: PerfSettingsDialog? = null
+    /** 启动阶段（黑屏那几十秒）的日志浮层，见 [StartupOverlay]。 */
+    private var startupOverlay: StartupOverlay? = null
+    private var perfMenuAdapter: QookixMenuAdapter? = null
+    private var perfMenuListener: AdapterView.OnItemClickListener? = null
 
     private lateinit var gameMenuAdapter: QookixMenuAdapter
     private lateinit var gameActionClickListener: AdapterView.OnItemClickListener
@@ -243,6 +258,19 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             window.setSustainedPerformanceMode(LauncherPreferences.PREF_SUSTAINED_PERFORMANCE)
         }
 
+        // 性能面板的二级菜单（抽屉里点「性能面板」后切换过去）
+        perfMenuAdapter = QookixMenuAdapter(this, perfMenuEntries())
+        perfMenuListener = AdapterView.OnItemClickListener { _, _, position, _ ->
+            when (position) {
+                0 -> {
+                    togglePerfPanel()
+                    perfMenuAdapter?.submit(perfMenuEntries())
+                }
+                1 -> openPerfSettings()
+                2 -> backToGameMenu()
+            }
+        }
+
         // 就地控制编辑器（抽屉里点「自定义控制布局」后切换过去）
         editorMenuAdapter = QookixMenuAdapter(
             this,
@@ -263,6 +291,36 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         // 快捷栏缩放跟随游戏内 GUI Scale 选项
         MCOptionUtils.addMCOptionListener { MCOptionUtils.getMcScale() }
         mControlLayout.setModifiable(false)
+
+        // ── 启动日志浮层 ────────────────────────────────────────────────────
+        // 加在 content_frame 上：和 ControlLayout 同级但绘制在其上方，
+        // 抽屉是 DrawerLayout 的直接子级，仍然盖得住它。
+        // 存在的意义：从点启动到 Mojang 图标出现之间画面全黑，用户分不清
+        // 「在加载」还是「卡死了」—— 这个浮层把启动日志实时显示出来。
+        try {
+            val contentFrame = findViewById<FrameLayout>(R.id.content_frame)
+            startupOverlay = StartupOverlay(this).also { overlay ->
+                overlay.visibility = View.GONE
+                overlay.onDismiss = { startupOverlay = null }
+                contentFrame.addView(
+                    overlay,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w(TAG, "启动日志浮层创建失败（不影响游戏）", e)
+            startupOverlay = null
+        }
+
+        // 上次退出时开着性能面板就自动恢复
+        if (getSharedPreferences(PerfOverlayView.PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PerfOverlayView.KEY_ENABLED, false)
+        ) {
+            mControlLayout.post { togglePerfPanel() }
+        }
 
         mControlLayout.setMenuListener(this)
         mDrawerPullButton.setOnClickListener { onClickedMenu() }
@@ -322,6 +380,8 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
                 3 -> openQuickSettings()
                 4 -> openCustomControls()
                 5 -> takeScreenshot()
+                // post：点击回调之后抽屉会被关掉，二级菜单要等那之后再开
+                6 -> mControlLayout.post { openPerfMenu() }
             }
             drawerLayout.closeDrawers()
         }
@@ -334,6 +394,21 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             // 虚拟鼠标按偏好预开启（Pojav: 启动前 setup virtual mouse）
             if (LauncherPreferences.PREF_VIRTUAL_MOUSE_START) {
                 touchpad?.post { touchpad?.switchState() }
+            }
+            // 只有「这次真的要起一个新的游戏进程」才显示启动浮层；
+            // 复用后台还在跑的 JVM 时（alreadyRunning）直接不显示。
+            val freshStart = try {
+                !TauriBridge.isGameRunning()
+            } catch (e: Throwable) {
+                android.util.Log.w(TAG, "查询游戏状态失败，按新启动处理", e)
+                true
+            }
+            startupOverlay?.let { overlay ->
+                if (freshStart) {
+                    overlay.start(File(filesDir, "logs/launch-$instanceId.log"))
+                } else {
+                    overlay.hideNow()
+                }
             }
             startGameOnce()
         }
@@ -540,6 +615,71 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         mQuickSettingSideDialog?.appear(true)
     }
 
+    /** 性能小窗：可拖动、可收起，只占自己那一小块。 */
+    private fun togglePerfPanel() {
+        val overlay = mPerfOverlay ?: PerfOverlayView(this).also { mPerfOverlay = it }
+        if (overlay.parent != null) {
+            mControlLayout.removeView(overlay)
+        } else {
+            // 必须显式给 WRAP_CONTENT：默认布局参数会把小窗撑满整个
+            // ControlLayout，背景的半透明黑就成了全屏遮罩，触摸也全被它吃掉
+            mControlLayout.addView(
+                overlay,
+                android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+            overlay.bringToFront()
+            overlay.applyStyle()
+        }
+        // 记住开关状态，下次进游戏自动恢复
+        getSharedPreferences(PerfOverlayView.PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PerfOverlayView.KEY_ENABLED, overlay.parent != null)
+            .apply()
+    }
+
+    private fun perfMenuEntries(): List<MenuEntry> {
+        val showing = mPerfOverlay?.parent != null
+        return listOf(
+            MenuEntry(
+                getString(if (showing) R.string.perf_hide else R.string.perf_show),
+                R.drawable.ic_qk_speed
+            ),
+            MenuEntry(getString(R.string.perf_settings), R.drawable.ic_qk_sliders),
+            MenuEntry(getString(R.string.perf_back), R.drawable.ic_qk_close)
+        )
+    }
+
+    private fun openPerfMenu() {
+        perfMenuAdapter?.submit(perfMenuEntries())
+        navDrawer.adapter = perfMenuAdapter
+        navDrawer.onItemClickListener = perfMenuListener
+        menuTitle.setText(R.string.perf_title)
+        menuSubtitle.setText(R.string.qk_menu_subtitle_hint)
+        mDrawerPullButton.visibility = View.VISIBLE
+        drawerLayout.openDrawer(navContainer)
+    }
+
+    private fun backToGameMenu() {
+        navDrawer.adapter = gameMenuAdapter
+        navDrawer.onItemClickListener = gameActionClickListener
+        menuTitle.setText(R.string.qk_menu_title_ingame)
+        menuSubtitle.setText(R.string.qk_menu_subtitle_hint)
+        mDrawerPullButton.visibility =
+            if (mControlLayout.hasMenuButton()) View.GONE else View.VISIBLE
+    }
+
+    private fun openPerfSettings() {
+        if (mPerfSettingsDialog == null) {
+            mPerfSettingsDialog = PerfSettingsDialog(this, mControlLayout) {
+                mPerfOverlay?.applyStyle()
+            }
+        }
+        drawerLayout.closeDrawers()
+        mControlLayout.post { mPerfSettingsDialog?.appear(true) }
+    }
+
     /** Pojav `MainActivity.openCustomControls()`：把抽屉换成布局编辑器菜单。 */
     private fun openCustomControls() {
         val adapter = editorMenuAdapter ?: return
@@ -637,6 +777,9 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
     override fun onResume() {
         super.onResume()
         if (LauncherPreferences.PREF_ENABLE_GYRO) mGyroControl?.enable()
+        // SDL（26.3+）是嵌入使用的：surface 销毁时它把渲染线程暂停了（PAUSED），
+        // 回到前台必须显式恢复，否则就是"进程活着但画面全黑"（锁屏/切任务回来的黑屏）。
+        if (MinecraftGLSurface.sdlEnabled) SDLActivity.notifyAppResume()
         setWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 1)
     }
 
@@ -648,8 +791,17 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             CallbackBridge.sendKeyPress(LwjglGlfwKeycode.GLFW_KEY_ESCAPE.toInt())
         }
         mQuickSettingSideDialog?.cancel()
+        // 同步把 SDL 渲染线程暂停（surface 马上要销毁，别让它继续画）。
+        if (MinecraftGLSurface.sdlEnabled) SDLActivity.notifyAppPause()
         setWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 0)
         super.onPause()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // 从别的窗口（对话框/分屏切回）拿回焦点时，SDL 状态机也要恢复——
+        // 它的暂停条件里包含失去焦点。
+        if (hasFocus && MinecraftGLSurface.sdlEnabled) SDLActivity.notifyAppResume()
     }
 
     override fun onPostResume() {
@@ -674,6 +826,12 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
 
     override fun onDestroy() {
         super.onDestroy()
+        // 浮层里的 Handler 必须停掉，否则泄漏 Activity
+        try {
+            startupOverlay?.stop()
+        } catch (_: Throwable) {
+        }
+        startupOverlay = null
         try {
             CallbackBridge.removeGrabListener(touchpad)
             CallbackBridge.removeGrabListener(minecraftGLView)

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <environ/environ.h>
 #include "osm_bridge.h"
+#include "../perf_counters.h"
 #define TAG __FILE_NAME__
 #include <log.h>
 
@@ -122,9 +123,11 @@ void osm_swap_buffers() {
     osm_apply_current_ll();
     glFinish_p(); // this will force osmesa to write the last rendered image into the buffer
 
-    if(currentBundle->nativeSurface != NULL && !currentBundle->disable_rendering)
+    if(currentBundle->nativeSurface != NULL && !currentBundle->disable_rendering) {
         if(ANativeWindow_unlockAndPost(currentBundle->nativeSurface) != 0)
             osm_release_window();
+        perf_frame(); /* 性能面板的帧计数（Zink 路径） */
+    }
 }
 
 void osm_setup_window() {

@@ -177,7 +177,8 @@ pub async fn browse(
     page_size: i32,
 ) -> Result<BrowseResult> {
     let client = crate::util::http_client().await;
-    let _offset = page * page_size;
+    // Modrinth 的分页参数是 `offset`（不是 page），下面拼 URL 时会用到。
+    let offset = page * page_size;
 
     if provider == "curseforge" {
         return browse_curseforge(&client, query, project_type, category, page, page_size).await;
@@ -217,11 +218,13 @@ pub async fn browse(
         "&index=relevance"
     };
 
+    // `offset` 不能漏：漏了的话不管翻到第几页都只返回第一页（用户实测踩到）。
     let url = format!(
-        "{}/search?query={}&limit={}{}{}",
+        "{}/search?query={}&limit={}&offset={}{}{}",
         MODRINTH_API,
         urlencoding::encode(query),
         page_size,
+        offset,
         sort_param,
         facets_json,
     );

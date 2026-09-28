@@ -3,12 +3,14 @@ import { onMounted, onBeforeUnmount, computed, watch, ref, provide } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { darkTheme, lightTheme, NConfigProvider, NDialogProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider } from "naive-ui";
 import { api } from "./api";
+import { checkUpdate, isAutoCheckEnabled } from "./updater";
 import SideBar from "./components/SideBar.vue";
 import MobileNav from "./components/MobileNav.vue";
 import TitleBar from "./components/TitleBar.vue";
 import LoadingBarBridge from "./components/LoadingBarBridge.vue";
 import LaunchProgress from "./components/LaunchProgress.vue";
 import CrashDialog from "./components/CrashDialog.vue";
+import RendererHintDialog from "./components/RendererHintDialog.vue";
 import { useSettingsStore } from "./stores/settings";
 import { MessageBridge } from "./composables/notify";
 
@@ -215,6 +217,25 @@ async function boot() {
 let unlistenShareErr: (() => void) | null = null;
 onMounted(async () => {
   void boot();
+  // 启动时静默检查更新（可在「设置 → 关于」里关掉）；结果留在 updater 的共享状态里，
+  // 用户打开关于页就能看到，不弹窗打扰
+  if (isAutoCheckEnabled()) {
+    setTimeout(() => void checkUpdate(true), 2500);
+  }
+  // 启动时静默检查插件更新：清单走 TTL 缓存，不会频繁打网络；
+  // 有可更新插件就提示一句，不弹窗打断（没网 / 没配插件源就静默跳过）
+  setTimeout(async () => {
+    try {
+      const list = await api.refreshPluginManifestSilent();
+      const n = list.filter((p) => p.update_available).length;
+      if (n > 0) {
+        const { notifyWarning } = await import("./composables/notify");
+        notifyWarning(`有 ${n} 个插件可以更新，到「设置 → 插件」处理`);
+      }
+    } catch {
+      /* 静默失败 */
+    }
+  }, 4000);
   // 对照探针：验证「前端 → log_debug → 落盘」这条日志通道本身可用
   api.logDebug("[fe] App 启动，日志通道自检");
   try {
@@ -264,6 +285,7 @@ onBeforeUnmount(() => {
                 <MobileNav :side="navSide" />
                 <LaunchProgress />
                 <CrashDialog />
+                <RendererHintDialog />
               </div>
             </n-notification-provider>
           </n-message-provider>
@@ -307,6 +329,12 @@ onBeforeUnmount(() => {
 .content {
   flex: 1;
   min-height: 0;
+  /* 页面自身是**容器查询的参照物**：界面缩放用 zoom 实现，媒体查询看到的仍是视口宽度，
+     而真实可用的布局宽度是 innerWidth / ui-scale（实测 150% 时 853 → 568）。
+     按媒体查询写「宽屏两栏」会在手机上误命中，把右栏压成 233px、卡片内容互相重叠
+     （首页踩过）。子页面用 `@container page (min-width: …)` 才是按真实宽度判断。 */
+  container-type: inline-size;
+  container-name: page;
   /* 页面本身不滚动：横屏手机纵向只有约 393px，整页滚动会让标题栏/底部导航
      之外的可用高度变得不可预测。改成「每个视图自己滚」——
      放得下的页面完全不滑，放不下的也只是页内滚动，观感与原来一致，

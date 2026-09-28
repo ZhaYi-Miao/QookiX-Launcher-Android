@@ -113,6 +113,9 @@ pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfi
         is_symlink: config["isSymlink"].as_bool(),
         source_path: config["sourcePath"].as_str().map(|s| s.to_string()),
         installed: false,
+        // 渲染器默认「自动」：按 MC 版本挑（26.x → MobileGlues，其余 → GL4ES），
+        // 见 launch::resolve_renderer。创建实例时也允许直接指定。
+        renderer: config["renderer"].as_str().map(|s| s.to_string()),
     };
 
     let file_path = instance_dir.join("instance.json");
@@ -181,6 +184,13 @@ pub async fn update_instance(patch: serde_json::Value) -> Result<MinecraftProfil
     }
     if let Some(v) = patch.get("memoryMode").and_then(|v| v.as_str()) {
         instance.memory_mode = Some(v.to_string());
+    }
+    // 渲染器：`auto` / `global` / `opengles2` / `mobileglues` / `vulkan_zink`。
+    // 传 null 表示回到「自动」（旧实例文件本来就没有这个键）。
+    if patch.get("renderer").is_some() {
+        instance.renderer = patch.get("renderer")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
     }
 
     let content = serde_json::to_string_pretty(&instance)?;

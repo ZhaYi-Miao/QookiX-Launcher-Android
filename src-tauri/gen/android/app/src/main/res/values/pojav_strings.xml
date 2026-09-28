@@ -431,4 +431,21 @@
     <string name="bta_installer_nightly_versions">Nightly BTA versions</string>
     <string name="newdl_extracting_native_libraries">Extracting native libraries (%d/%d)</string>
     <string name="toast_not_available_demo">This is not available in demo mode</string>
+    <string name="menu_perf">性能面板</string>
+    <string name="perf_title">性能</string>
+    <string name="perf_show">显示性能面板</string>
+    <string name="perf_hide">隐藏性能面板</string>
+    <string name="perf_settings">功能设置</string>
+    <string name="perf_back">返回</string>
+    <string name="perf_close">关闭</string>
+    <string name="startup_title">正在启动 Minecraft</string>
+    <string name="startup_stage_env">正在准备运行环境…</string>
+    <string name="startup_stage_window">正在加载窗口库…</string>
+    <string name="startup_stage_renderer">正在初始化渲染器…</string>
+    <string name="startup_stage_game">正在创建游戏窗口…</string>
+    <string name="startup_stage_resources">正在加载资源…</string>
+    <string name="startup_stage_spawn">正在生成世界…</string>
+    <string name="startup_failed">启动似乎出了问题，请看下面的日志</string>
+    <string name="startup_elapsed">已用时 %1$d 秒</string>
+    <string name="startup_hint">点按可隐藏 · 完整日志：菜单 → 日志输出</string>
 </resources>

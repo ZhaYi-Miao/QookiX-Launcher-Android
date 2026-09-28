@@ -87,6 +87,9 @@ public class AndroidPointerCapture implements ViewTreeObserver.OnWindowFocusChan
             // Position is updated by many events, hence it is send regardless of the event value
             CallbackBridge.mouseX += (mVector[0] * LauncherPreferences.PREF_SCALE_FACTOR);
             CallbackBridge.mouseY += (mVector[1] * LauncherPreferences.PREF_SCALE_FACTOR);
+            // SDL 路径要的是相对位移（抓取鼠标时），先把本次位移记下来再发绝对坐标
+            CallbackBridge.deltaX = (float) (mVector[0] * LauncherPreferences.PREF_SCALE_FACTOR);
+            CallbackBridge.deltaY = (float) (mVector[1] * LauncherPreferences.PREF_SCALE_FACTOR);
             CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
         }
 

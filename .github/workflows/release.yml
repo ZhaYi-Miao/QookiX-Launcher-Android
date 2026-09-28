@@ -1,6 +1,6 @@
 name: Release
 
-# 只在推送 v* 标签时触发：构建 arm64 release APK 并发布 GitHub Release。
+# 只在推送 v* 标签时触发：构建 arm64 / x86_64 release APK 并发布 GitHub Release。
 # 签名密钥经仓库 Secrets 注入（不出现任何密钥明文）：
 #   QOOKIX_KEYSTORE_BASE64    keystore 文件的 Base64
 #   QOOKIX_KEYSTORE_PASSWORD  keystore 密码
@@ -64,12 +64,16 @@ jobs:
             echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android24-clang++"
             echo "AR_aarch64_linux_android=$BIN/llvm-ar"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang"
+            echo "CC_x86_64_linux_android=$BIN/x86_64-linux-android24-clang"
+            echo "CXX_x86_64_linux_android=$BIN/x86_64-linux-android24-clang++"
+            echo "AR_x86_64_linux_android=$BIN/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$BIN/x86_64-linux-android24-clang"
           } >> $GITHUB_ENV
 
-      - name: 安装 Rust (aarch64-linux-android)
+      - name: 安装 Rust (aarch64 / x86_64 linux-android)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Rust 缓存
         uses: Swatinem/rust-cache@v2
@@ -85,13 +89,15 @@ jobs:
       # ② Rust：release 交叉编译（assets 会被 generate_context! 编进 .so，必须在 cargo 之前）
       - name: 构建 Rust 库
         working-directory: src-tauri
-        run: cargo build --release --target aarch64-linux-android
+        run: cargo build --release --target aarch64-linux-android --target x86_64-linux-android
 
       - name: 复制 .so 到 jniLibs
         working-directory: src-tauri
         run: |
           cp target/aarch64-linux-android/release/libqookix_lib.so \
              gen/android/app/src/main/jniLibs/arm64-v8a/libqookix_lib.so
+          cp target/x86_64-linux-android/release/libqookix_lib.so \
+             gen/android/app/src/main/jniLibs/x86_64/libqookix_lib.so
 
       # ③ tauri 的两个自动生成文件（内容含本机绝对路径，故被 .gitignore 排除、不入库）：
       #    tauri.settings.gradle（include :tauri-android 与插件的 projectDir）
@@ -145,10 +151,10 @@ jobs:
             echo "未配置 QOOKIX_KEYSTORE_BASE64，退回 debug 签名"
           fi
 
-      # ⑤ Gradle 打包（arm64 一个 flavor；universal 缺其它 ABI 的 Rust 库，不出）
+      # ⑤ Gradle 打包（arm64 / x86_64 两个 flavor；universal 缺 armeabi-v7a、x86 的 Rust 库，不出）
       - name: Gradle 打包
         working-directory: src-tauri/gen/android
-        run: ./gradlew :app:assembleArm64Release --no-daemon
+        run: ./gradlew :app:assembleArm64Release :app:assembleX86_64Release --no-daemon
 
       # ⑥ 产物改名：带版本号（多版本下载时不会认错）
       - name: 整理产物
@@ -157,6 +163,8 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           cp src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk \
              "dist/QookiX-Launcher-Android-${TAG}-arm64.apk"
+          cp src-tauri/gen/android/app/build/outputs/apk/x86_64/release/app-x86_64-release.apk \
+             "dist/QookiX-Launcher-Android-${TAG}-x86_64.apk"
           # 同时给出校验值，方便用户核对下载完整性
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
           ls -lh dist
@@ -169,15 +177,12 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           NOTES=".github/release-notes/${TAG}.md"
           if [ -f "$NOTES" ]; then
+            # 整篇自定义说明优先（个别版本想完全手写时用）
             cp "$NOTES" /tmp/release-body.md
             echo "使用自定义说明：$NOTES"
           else
-            CHANGELOG="https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
-            sed -e "s/{{VERSION}}/${TAG}/g" \
-                -e "s|{{DATE}}|$(date -u '+%Y-%m-%d')|g" \
-                -e "s|{{CHANGELOG}}|${CHANGELOG}|g" \
-                .github/release-notes/DEFAULT.md > /tmp/release-body.md
-            echo "使用默认模板 DEFAULT.md"
+            # 默认：CHANGELOG.md 里该 tag 的那一节 + DEFAULT.md 的安装/说明部分
+            node scripts/generate-release-notes.mjs "$TAG" /tmp/release-body.md
           fi
           echo "--- 发布说明预览 ---"; cat /tmp/release-body.md
 

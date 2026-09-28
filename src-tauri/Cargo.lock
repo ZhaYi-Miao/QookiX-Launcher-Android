@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "qookix-launcher"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3012,6 +3012,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "tar",
  "tauri",
  "tauri-build",

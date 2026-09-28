@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="@dimen/padding_moderate"
+    android:paddingVertical="@dimen/padding_moderate">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="字号"
+        android:textColor="#FFFFFF" />
+
+    <SeekBar
+        android:id="@+id/perf_font_seek"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="100" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="背景不透明度"
+        android:textColor="#FFFFFF" />
+
+    <SeekBar
+        android:id="@+id/perf_alpha_seek"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="100" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="文字颜色"
+        android:textColor="#FFFFFF" />
+
+    <LinearLayout
+        android:id="@+id/perf_color_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="显示内容"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_fps"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="帧率"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_frame"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="帧时间"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_low1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="1% low"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_max"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="最差帧"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_cpu"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="CPU"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_mem"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="内存"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_gpu"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="GPU（仅 Adreno）"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_renderer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="渲染器"
+        android:textColor="#FFFFFF" />
+
+    <CheckBox
+        android:id="@+id/perf_cb_resolution"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="分辨率"
+        android:textColor="#FFFFFF" />
+</LinearLayout>

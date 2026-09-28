@@ -4,4 +4,6 @@
   <cache-path name="my_cache_images" path="." />
   <!-- 导出控制布局：<files>/controlmap/*.json 通过 FileProvider 分享给其他应用 -->
   <files-path name="controlmap" path="controlmap/" />
+  <!-- 自动更新下载的 APK：<files>/updates/*.apk 交给系统安装器 -->
+  <files-path name="updates" path="updates/" />
 </paths>

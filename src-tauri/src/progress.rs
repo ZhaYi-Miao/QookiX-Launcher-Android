@@ -174,6 +174,25 @@ pub fn emit_download(
     }
 }
 
+/// 插件安装进度（设置 → 插件页的进度条靠它）。
+///
+/// `phase`：download / verify / extract / done；
+/// `done`/`total`：下载按字节，其它阶段可给 0。
+pub fn emit_plugin_progress(plugin_id: &str, phase: &str, done: u64, total: u64, message: &str) {
+    if let Some(app) = app() {
+        let _ = app.emit(
+            "plugin://progress",
+            serde_json::json!({
+                "id": plugin_id,
+                "phase": phase,
+                "done": done,
+                "total": total,
+                "message": message,
+            }),
+        );
+    }
+}
+
 /// 启动阶段进度（前端的悬浮启动卡片 `LaunchProgress.vue` 靠它显示步骤与百分比）。
 pub fn emit_launch_progress(step: &str, progress: f64) {
     if let Some(app) = app() {

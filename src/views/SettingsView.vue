@@ -15,6 +15,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { listen } from "@tauri-apps/api/event";
 import { pickFile as open } from "../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useMemoryInfo } from "../composables/useMemoryInfo";
@@ -60,19 +61,43 @@ import {
   IconHeart,
   IconImage,
   IconList,
+  IconPackage,
   IconUsers,
   IconRefresh,
   IconPlay,
   IconSliders,
   IconTrash,
 } from "../components/icons";
-import type { MirrorPreset, StorageStats } from "../types";
+import type {
+  ControlButtonInfo,
+  MirrorPreset,
+  PluginInfo,
+  PluginProgressEvent,
+  StorageStats,
+} from "../types";
+import { getVersion } from "@tauri-apps/api/app";
+import {
+  checkUpdate,
+  downloadUpdate,
+  installUpdate,
+  updateInfo,
+  updateChecking,
+  updateDownloading,
+  updateError,
+  updatePackage,
+  updateProgress,
+  isAutoCheckEnabled,
+  setAutoCheck,
+  dismissVersion,
+  clearDismissed,
+  dismissedVersion as getDismissedVersion,
+} from "../updater";
 import devWeimoshengUrl from "../assets/dev-weimosheng.jpg";
 import devZhayiUrl from "../assets/dev-zhayi.jpg";
 import logoUrl from "../assets/logo.png";
 import AboutShowcase from "../components/AboutShowcase.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.0.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.1.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -367,6 +392,7 @@ watch(tab, () => {
 
 const tabs = [
   { key: "general", label: "常规", icon: IconSliders },
+  { key: "plugins", label: "插件", icon: IconPackage },
   { key: "appearance", label: "外观", icon: IconImage },
   { key: "download", label: "下载", icon: IconDownload },
   { key: "content", label: "内容服务", icon: IconGlobe },
@@ -420,10 +446,17 @@ const pojav = ref<Record<string, number | boolean | string>>({ ...POJAV_DEFAULTS
  *  GL4ES = libgl4es_114.so；Zink = libOSMesa.so + libvulkan_freedreno.so（Turnip）；
  *  MobileGlues（MG）= libmobileglues.so —— ZL/FCL 同款渲染器（OpenGL → GLES 3.2）。 */
 const rendererOptions = [
-  { label: "GL4ES（兼容，推荐）", value: "opengles2" },
-  { label: "MobileGlues（ZL/FCL 同款）", value: "mobileglues" },
+  { label: "GL4ES（兼容，默认）", value: "opengles2" },
+  { label: "MobileGlues（实验·老版本很卡）", value: "mobileglues" },
   { label: "Zink + Turnip（实验）", value: "vulkan_zink" },
 ];
+
+/** 渲染器键 → 给人看的名字（插件列表里用，别直接显示 mobileglues 这种键）。 */
+const rendererNames: Record<string, string> = {
+  opengles2: "GL4ES",
+  mobileglues: "MobileGlues",
+  vulkan_zink: "Zink",
+};
 
 async function loadPojav() {
   try {
@@ -473,7 +506,7 @@ async function savePojav(key: string, value: number | boolean | string) {
       { name: "Turnip（Mesa Vulkan 驱动）", version: "", license: "MIT", url: "https://gitlab.freedesktop.org/mesa/mesa", licenseUrl: "https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/license.rst" },
       { name: "FreeType", version: "2.13", license: "FreeType/GPL-2.0", url: "https://freetype.org", licenseUrl: "https://gitlab.freedesktop.org/freetype/freetype/-/blob/master/docs/FTL.TXT" },
       { name: "OpenAL Soft", version: "", license: "LGPL-2.1", url: "https://openal-soft.org", licenseUrl: "https://github.com/kcat/openal-soft/blob/master/COPYING" },
-      { name: "MobileGlues", version: "", license: "", url: "https://github.com/MobileGL-Dev/MobileGlues-release", licenseUrl: "https://github.com/MobileGL-Dev/MobileGlues-release" },
+      { name: "MobileGlues", version: "", license: "LGPL-2.1", url: "https://github.com/MobileGL-Dev/MobileGlues-release", licenseUrl: "https://github.com/MobileGL-Dev/MobileGlues/blob/main/LICENSE" },
     ],
   };
   const aboutGroupLabels: Record<"frontend" | "rust" | "bundled", string> = {
@@ -639,6 +672,140 @@ function confirmClear() {
   });
 }
 
+/* ── 按键透传（按住这个键时拖动也能转视角）────────────────────────── */
+const controlButtons = ref<ControlButtonInfo[]>([]);
+const controlButtonBusy = ref<number | null>(null);
+
+async function loadControlButtons() {
+  try {
+    controlButtons.value = await api.getControlButtons();
+  } catch {
+    controlButtons.value = [];
+  }
+}
+
+async function setPassthru(index: number, enabled: boolean) {
+  controlButtonBusy.value = index;
+  try {
+    controlButtons.value = await api.setControlButtonPassthru(index, enabled);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    controlButtonBusy.value = null;
+  }
+}
+
+/* ── 更新（查 GitHub Release → 下 APK → 交给系统装）──────────────────── */
+const appVersion = ref("1.0.0");
+const autoCheck = ref(isAutoCheckEnabled());
+const dismissedVersion = ref<string | null>(getDismissedVersion());
+
+function toggleAutoCheck() {
+  autoCheck.value = !autoCheck.value;
+  setAutoCheck(autoCheck.value);
+}
+
+function dismissUpdate() {
+  const version = updateInfo.value?.version;
+  if (!version) return;
+  dismissVersion(version);
+  dismissedVersion.value = version;
+  message.success("已忽略这个版本");
+}
+
+function restoreDismissed() {
+  clearDismissed();
+  dismissedVersion.value = null;
+  message.success("已恢复提醒");
+}
+
+/* ── 插件（组件 / 渲染器）─────────────────────────────────────────────
+ * 后端约定：每个写操作都返回**最新列表**，这里直接覆盖 `plugins` 即可。
+ * 进度走 `plugin://progress`：download 阶段按字节，verify/extract 只有文案。 */
+const plugins = ref<PluginInfo[]>([]);
+const pluginsLoading = ref(false);
+/** 正在安装/卸载的插件 id（同一时刻只允许一个操作，避免并发写同一目录）。 */
+const pluginBusy = ref<string | null>(null);
+const pluginProgress = ref<PluginProgressEvent | null>(null);
+const pluginManifestUrl = ref("");
+let unlistenPlugin: (() => void) | null = null;
+
+async function loadPlugins(refresh = false) {
+  pluginsLoading.value = true;
+  try {
+    plugins.value = refresh ? await api.refreshPluginManifest() : await api.getPlugins();
+  } catch (e) {
+    // 只有用户主动点「刷新」才提示失败；进页面时静默（离线是常态）
+    if (refresh) message.warning(String(e));
+  } finally {
+    pluginsLoading.value = false;
+  }
+}
+
+async function pluginAction(id: string, fn: () => Promise<PluginInfo[]>, okText: string) {
+  pluginBusy.value = id;
+  try {
+    plugins.value = await fn();
+    message.success(okText);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    pluginBusy.value = null;
+    pluginProgress.value = null;
+  }
+}
+
+const installPlugin = (id: string) =>
+  pluginAction(id, () => api.installPlugin(id), "已安装");
+const togglePlugin = (p: PluginInfo) =>
+  pluginAction(p.id, () => api.setPluginEnabled(p.id, !p.enabled), p.enabled ? "已停用" : "已启用");
+const uninstallPlugin = (p: PluginInfo) =>
+  dialog.warning({
+    title: "卸载插件",
+    content: `卸载「${p.name}」？`,
+    positiveText: "卸载",
+    negativeText: "取消",
+    onPositiveClick: () => pluginAction(p.id, () => api.uninstallPlugin(p.id), "已卸载"),
+  });
+
+/** 本地 zip 安装：离线、内网分发、调试都走这条路（包内需带 plugin.json）。 */
+async function installLocalPlugin() {
+  const file = await open({
+    multiple: false,
+    filters: [{ name: "插件包", extensions: ["zip"] }],
+  });
+  if (!file) return;
+  pluginBusy.value = "local";
+  try {
+    plugins.value = await api.installPluginFromFile(file as string);
+    message.success("已安装");
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    pluginBusy.value = null;
+    pluginProgress.value = null;
+  }
+}
+
+async function savePluginManifestUrl() {
+  try {
+    pluginManifestUrl.value = await api.setPluginManifestUrl(pluginManifestUrl.value.trim());
+    message.success("已保存");
+    await loadPlugins(true);
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+function pluginPercent(p: PluginProgressEvent | null): number {
+  if (!p || !p.total) return 0;
+  return Math.min(100, Math.round((p.done / p.total) * 100));
+}
+
+function fmtBytes(v: number | null | undefined): string {
+  return v ? fmtSize(v) : "—";
+}
+
 onMounted(() => {
   settings.load();
   loadPojav();
@@ -646,10 +813,27 @@ onMounted(() => {
   void refreshSystemProxy();
   startPolling();
   loadStats();
+  void getVersion().then((v) => (appVersion.value = v));
+  // 打开「关于」页就顺手查一次（静默失败）；打开「游戏内」页读一次控制布局
+  watch(tab, (key) => {
+    if (key === "about" && !updateInfo.value && !updateChecking.value) {
+      void checkUpdate(true);
+    }
+    if (key === "game") void loadControlButtons();
+  });
+  void loadPlugins();
+  void api.getPluginManifestUrl().then((u) => (pluginManifestUrl.value = u));
+  // 安装进度：下载按字节推进，校验/解压阶段只有文案
+  void listen<PluginProgressEvent>("plugin://progress", (e) => {
+    pluginProgress.value = e.payload;
+  }).then((fn) => {
+    unlistenPlugin = fn;
+  });
 });
 onUnmounted(() => {
   stopPolling();
   if (saveTimer) clearTimeout(saveTimer);
+  unlistenPlugin?.();
 });
 </script>
 
@@ -666,6 +850,10 @@ onUnmounted(() => {
         >
           <component :is="t.icon" class="nav-icon" />
           <span>{{ t.label }}</span>
+          <span
+            v-if="t.key === 'about' && updateInfo && updateInfo.available"
+            class="nav-dot"
+          ></span>
         </button>
       </nav>
     </aside>
@@ -1149,6 +1337,101 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- 插件 -->
+      <div v-show="tab === 'plugins'" class="settings-pane">
+        <div class="grid">
+          <div class="card glass plugin-card">
+            <div class="plugin-head">
+              <h3>插件</h3>
+              <div class="plugin-head-actions">
+                <button class="mini-btn" :disabled="pluginsLoading" @click="loadPlugins(true)">
+                  <IconRefresh /> 刷新
+                </button>
+                <button class="mini-btn" :disabled="pluginBusy !== null" @click="installLocalPlugin">
+                  <IconPackage /> 本地安装
+                </button>
+              </div>
+            </div>
+
+            <div v-if="!plugins.length" class="plugin-empty">
+              还没有插件。点「刷新」从插件源拉，或用「本地安装」选 zip。
+            </div>
+
+            <div v-for="p in plugins" :key="p.id" class="plugin-row">
+              <div class="plugin-row-main">
+                <div class="plugin-title">
+                  <span class="plugin-name">{{ p.name }}</span>
+                  <span v-if="p.version" class="plugin-badge">{{ p.version }}</span>
+                  <span v-else class="plugin-badge">本地</span>
+                  <span v-if="p.update_available" class="plugin-badge update">可更新</span>
+                  <span v-if="!p.abi_supported" class="plugin-badge warn">
+                    无本机架构包（{{ p.device_abi }}）
+                  </span>
+                </div>
+                <div class="plugin-summary">{{ p.summary }}</div>
+                <div class="plugin-meta">
+                  <span>{{ p.installed_version ? `已安装 ${p.installed_version}` : "未安装" }}</span>
+                  <span v-if="p.size">· 需下载 {{ fmtBytes(p.size) }}</span>
+                  <span v-if="p.installed_size">· 占用 {{ fmtBytes(p.installed_size) }}</span>
+                  <span v-if="p.installed_version && !p.enabled">· 已停用（用随包的）</span>
+                  <span v-if="p.renderers && p.renderers.length">
+                    · 对应渲染器：{{ p.renderers.map((r) => rendererNames[r] ?? r).join("、") }}
+                  </span>
+                </div>
+                <div
+                  v-if="pluginBusy === p.id && pluginProgress && pluginProgress.id === p.id"
+                  class="plugin-progress"
+                >
+                  <div class="plugin-bar">
+                    <div
+                      class="plugin-fill"
+                      :class="{ indet: !pluginProgress.total }"
+                      :style="{
+                        width: pluginProgress.total ? pluginPercent(pluginProgress) + '%' : '100%',
+                      }"
+                    ></div>
+                  </div>
+                  <span class="plugin-progress-text">{{ pluginProgress.message }}</span>
+                </div>
+              </div>
+              <div class="plugin-actions">
+                <button
+                  class="mini-btn primary"
+                  :disabled="pluginBusy !== null || !p.abi_supported"
+                  @click="installPlugin(p.id)"
+                >
+                  {{ p.installed_version ? (p.update_available ? "更新" : "重装") : "下载" }}
+                </button>
+                <button
+                  v-if="p.installed_version"
+                  class="mini-btn"
+                  :disabled="pluginBusy !== null"
+                  @click="togglePlugin(p)"
+                >
+                  {{ p.enabled ? "停用" : "启用" }}
+                </button>
+                <button
+                  v-if="p.installed_version"
+                  class="mini-btn danger"
+                  :disabled="pluginBusy !== null"
+                  @click="uninstallPlugin(p)"
+                >
+                  <IconTrash /> 卸载
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card glass">
+            <h3>插件源</h3>
+            <NInput v-model:value="pluginManifestUrl" placeholder="https://…/manifest.json" />
+            <div class="plugin-source-actions">
+              <button class="mini-btn primary" @click="savePluginManifestUrl">保存并刷新</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 存储 -->
       <div v-show="tab === 'storage'" class="settings-pane">
         <div class="grid storage-grid">
@@ -1247,14 +1530,6 @@ onUnmounted(() => {
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">渲染器</span>
-                <p class="choice-hint">
-                  <b>GL4ES</b>：把 OpenGL 翻译成 GLES，兼容性最好，默认选它。<br />
-                  <b>MobileGlues</b>：Zalith/FCL 同款新渲染器（OpenGL → GLES 3.2），
-                  性能与画质都不错，部分老模组可能不兼容。<br />
-                  <b>Zink + Turnip</b>：OpenGL → Vulkan（Mesa Zink + Turnip 驱动），
-                  在 Adreno 设备上通常帧率更高、支持更多现代特性；但部分设备会黑屏/花屏，
-                  遇到问题就切回 GL4ES。切换后需要重新启动游戏生效。
-                </p>
               </div>
               <n-select
                 :value="(pojav.renderer as string) ?? 'opengles2'"
@@ -1302,6 +1577,24 @@ onUnmounted(() => {
               <n-switch
                 :value="!!pojav.sustained_performance"
                 @update:value="(v: boolean) => savePojav('sustained_performance', v)"
+              />
+            </div>
+          </div>
+
+          <div class="card glass">
+            <h3>按键透传</h3>
+            <p class="hint">打开后，按住这个键的时候拖动也能转视角。改完重开游戏生效。</p>
+            <div v-if="!controlButtons.length" class="hint">
+              还没有布局文件，先进一次游戏。
+            </div>
+            <div v-for="b in controlButtons" :key="b.index" class="choice-row">
+              <div class="choice-info">
+                <span class="choice-label">{{ b.name }}</span>
+              </div>
+              <n-switch
+                :value="b.passThru"
+                :loading="controlButtonBusy === b.index"
+                @update:value="(v: boolean) => setPassthru(b.index, v)"
               />
             </div>
           </div>
@@ -1449,11 +1742,93 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.0.0</span>
+            >v1.1.0</span>
           </div>
           <p class="about-hero-slogan">现代化、简洁、无广告的 Minecraft 启动器</p>
         </div>
+
         <div class="grid about-grid">
+          <!-- 更新 -->
+          <div class="card glass updater-card">
+            <div class="updater-head">
+              <h3>更新</h3>
+              <div class="updater-head-actions">
+                <button
+                  class="mini-btn primary"
+                  :disabled="updateChecking || updateDownloading"
+                  @click="checkUpdate()"
+                >
+                  <IconRefresh /> {{ updateChecking ? "检查中…" : "检查更新" }}
+                </button>
+              </div>
+            </div>
+
+            <p v-if="updateError" class="hint updater-error">{{ updateError }}</p>
+            <p v-else-if="!updateInfo" class="hint">
+              当前版本 v{{ appVersion }}。点「检查更新」看看有没有新版本。
+            </p>
+            <template v-else>
+              <p v-if="!updateInfo.available" class="hint">
+                已是最新版本（v{{ updateInfo.currentVersion }}）。
+              </p>
+              <template v-else>
+                <p class="updater-new">
+                  发现新版本 v{{ updateInfo.version }}
+                  <span class="hint">（当前 v{{ updateInfo.currentVersion }}）</span>
+                </p>
+
+                <div v-if="updateDownloading" class="updater-progress">
+                  <div class="plugin-bar">
+                    <div
+                      class="plugin-fill indet"
+                      :style="{
+                        width: updateProgress?.total
+                          ? Math.round((updateProgress.downloaded / updateProgress.total) * 100) + '%'
+                          : '100%',
+                      }"
+                    ></div>
+                  </div>
+                  <span class="plugin-progress-text">
+                    {{
+                      updateProgress?.total
+                        ? `下载中 ${fmtBytes(updateProgress.downloaded)} / ${fmtBytes(updateProgress.total)}`
+                        : "下载中…"
+                    }}
+                  </span>
+                </div>
+
+                <div class="updater-actions">
+                  <button
+                    v-if="!updatePackage"
+                    class="mini-btn primary"
+                    :disabled="updateDownloading"
+                    @click="downloadUpdate()"
+                  >
+                    下载
+                  </button>
+                  <button v-else class="mini-btn primary" @click="installUpdate()">安装</button>
+                  <button class="mini-btn" @click="dismissUpdate()">忽略此版本</button>
+                </div>
+
+                <p v-if="updatePackage" class="hint">
+                  安装包已下载：{{ updatePackage.split("/").pop() }}
+                </p>
+              </template>
+            </template>
+
+            <div class="updater-auto">
+              <button
+                class="mini-btn"
+                :class="{ primary: autoCheck }"
+                @click="toggleAutoCheck()"
+              >
+                {{ autoCheck ? "启动时自动检查：开" : "启动时自动检查：关" }}
+              </button>
+              <button v-if="dismissedVersion" class="mini-btn" @click="restoreDismissed()">
+                恢复 v{{ dismissedVersion }} 的提醒
+              </button>
+            </div>
+          </div>
           <div class="card glass about-card">
             <div class="about-devs-title">开发者</div>
             <div class="dev-list">
@@ -1494,19 +1869,19 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="about-links-row">
-            <button class="about-link" @click="openUrl('https://qookix.swkj1.cn/')">
+            <button class="about-link" @click="openUrl('https://www.qookix.cn/')">
               <span class="link-left"><IconGlobe /> 官方网站</span>
               <span class="link-arrow">→</span>
             </button>
-            <button class="about-link" @click="openUrl('https://github.com/weimosheng/QookiX-Launcher')">
+            <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android')">
               <span class="link-left"><IconGithub /> GitHub 仓库</span>
               <span class="link-arrow">→</span>
             </button>
-            <button class="about-link" @click="openUrl('https://github.com/weimosheng/QookiX-Launcher/issues')">
+            <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/issues')">
               <span class="link-left"><IconExternal /> 问题反馈</span>
               <span class="link-arrow">→</span>
             </button>
-            <button class="about-link" @click="openUrl('https://github.com/weimosheng/QookiX-Launcher/releases')">
+            <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/blob/master/CHANGELOG.md')">
               <span class="link-left"><IconList /> 更新日志</span>
               <span class="link-arrow">→</span>
             </button>
@@ -1522,18 +1897,18 @@ onUnmounted(() => {
           <div class="card glass about-license-card">
             <h3>许可证</h3>
             <p class="license-text">
-              QookiX Launcher 基于
+              QookiX Launcher Android 基于
               <span class="license-accent">GPL-3.0</span>
               开源协议发布。图标、名称与品牌归属 QookiX 开发组所有，未经许可请勿用于商业用途。
             </p>
-            <button class="about-link" @click="openUrl('https://github.com/weimosheng/QookiX-Launcher/blob/main/LICENSE')">
+            <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/blob/master/LICENSE')">
               <span class="link-left"><IconFile /> 查看 GPL-3.0 完整文本</span>
               <span class="link-arrow">→</span>
             </button>
           </div>
           <div class="card glass about-deps-card">
             <h3>许可与版权声明</h3>
-            <p class="license-text">QookiX Launcher 的构建得益于以下优秀的开源项目。</p>
+            <p class="license-text">QookiX Launcher Android 的构建得益于以下优秀的开源项目。</p>
             <div class="deps-groups">
               <div class="deps-group" v-for="(list, group) in aboutDeps" :key="group">
                 <div class="deps-group-title">{{ aboutGroupLabels[group] }}</div>
@@ -1651,6 +2026,14 @@ onUnmounted(() => {
 }
 .nav-item.active .nav-icon {
   opacity: 1;
+}
+/* 「关于」有新版本时的小圆点 */
+.nav-dot {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
 }
 .settings-body {
   flex: 1;
@@ -2253,7 +2636,9 @@ textarea.text-input {
   color: var(--text-1);
 }
 .about-grid {
-  grid-template-columns: 1fr 1fr;
+  /* 更新卡与开发者卡并排同一行；容器真的放不下两列时才退成一列，
+     避免硬撑两列把卡片内容挤到互相压。写法与 .grid 一致（min() 兜住窄容器）。 */
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
 }
 .about-card {
   display: flex;
@@ -2827,6 +3212,136 @@ textarea.text-input {
   gap: 4px;
   flex-shrink: 0;
   width: clamp(120px, 26vw, 200px);
+}
+
+/* ---- 插件页 ---- */
+.plugin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plugin-head-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.plugin-empty {
+  padding: 14px 0 4px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.plugin-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.plugin-row-main {
+  min-width: 0;
+  flex: 1;
+}
+.plugin-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.plugin-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.plugin-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--text-2);
+  background: var(--border);
+}
+.plugin-badge.update {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.plugin-badge.warn {
+  color: #ffb27a;
+  background: rgba(255, 178, 122, 0.15);
+}
+.plugin-summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.plugin-meta {
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.plugin-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.plugin-progress {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--border);
+}
+.plugin-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+/* 校验/解压阶段没有字节总数：用「走动的条纹」表示仍在进行，别显示假的 0% */
+.plugin-fill.indet {
+  animation: plugin-indet 1.1s ease-in-out infinite;
+}
+@keyframes plugin-indet {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.plugin-progress-text {
+  font-size: 11px;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.plugin-source-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+/* 竖屏：操作按钮换到下一行，别把文字挤成一条 */
+@media (max-width: 640px) {
+  .plugin-row {
+    flex-direction: column;
+  }
+  .plugin-actions {
+    justify-content: flex-start;
+  }
 }
 </style>
 

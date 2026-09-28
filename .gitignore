@@ -29,6 +29,19 @@ src-tauri/.cargo/config.toml
 src-tauri/gen/android/app/src/main/jniLibs/*/libqookix_lib.so
 app/src/main/jniLibs/*/libqookix_lib.so
 
+# 本机编译「插件」用的中间资产：**不入库**。
+# 一旦入库，CI 的 checkout 里也会有它们 → 会被 Gradle 打进 APK，
+# 等于把已经插件化的渲染器 / 驱动又塞回包里（体积与行为都变，且 SDL3 会触发
+# 那条跑不通的 SDL 窗口路径）。渲染器/驱动的库源放在 `gen/android/plugin-libs/`。
+src-tauri/gen/android/app/src/main/jniLibs/*/libSDL3.so
+src-tauri/gen/android/app/src/main/jniLibs/*/libspirv-cross-c-shared.so
+src-tauri/gen/android/app/src/main/jniLibs/*/libc++_shared.so
+src-tauri/gen/android/app/src/main/jniLibs/*/*.bak-unpatched
+
+# 组件（LWJGL 3.4.1 jar/natives + spirv-cross）：同理。当前策略是「插件优先、
+# 随包兜底」，CI 产物本来就不带它们，别因为本地有就顺手入库改变发布行为。
+src-tauri/gen/android/app/src/main/assets-components/
+
 # vite 产物：会被 `tauri::generate_context!` 编进 .so，属于生成物。
 # 注意同名目录在仓库里有两处（另一处是遗留脚手架），一起忽略免得混淆。
 src-tauri/gen/android/app/src/main/assets/
@@ -47,14 +60,22 @@ app/src/main/assets/
 /*.txt
 /*.jar
 /*.bin
+/*.so
 /*.json.bak
 /*setp*
 dev.log
 device_settings.json
 mf_probe.json
 v1211.json
+v263.json
 /check_*.mjs
 /scan_jar.mjs
 /mcjar_out/
 /*_out/
 /maps*.txt
+
+# 插件打包产物（分发的中间物，体积大）
+dist-plugins/
+
+# 补丁脚本的编译产物（每次重跑会重建）
+scripts/lwjgl-glfw-patch/build/

@@ -5,7 +5,7 @@
  * 内存仪表）、实例别名、JVM/游戏参数、账号覆盖、分辨率、实例图标，
  * 以及 edit 草稿的防抖自动保存。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   NButton,
   NInput,
@@ -17,9 +17,11 @@ import {
 } from "naive-ui";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
+import { api } from "../../api";
 import { useSettingsStore } from "../../stores/settings";
 import { useMemoryInfo } from "../../composables/useMemoryInfo";
 import { fmtMem } from "../../utils/format";
+import { autoRendererFor, rendererNames, rendererOptions } from "../../utils/renderer";
 import AppIcon from "../AppIcon.vue";
 import IconPickerDialog from "../IconPickerDialog.vue";
 
@@ -41,6 +43,28 @@ const edit = ref({
   account_id: "",
   resolution_w: "",
   resolution_h: "",
+  // 渲染器：auto（按版本自动）/ global（跟随全局设置）/ custom（指定下面这个）
+  renderer_mode: "auto" as "auto" | "global" | "custom",
+  renderer: "opengles2",
+});
+
+/** 全局渲染器（读自 Pojav 偏好），只在「跟随全局」时要显示。 */
+const globalRenderer = ref<string>("opengles2");
+
+/** 本实例最终会用的渲染器 + 一句「为什么」。 */
+const effectiveRenderer = computed(() => {
+  const mode = edit.value.renderer_mode;
+  if (mode === "custom") {
+    return { key: edit.value.renderer, why: "本实例指定" };
+  }
+  if (mode === "global") {
+    return { key: globalRenderer.value, why: "跟随全局设置" };
+  }
+  const key = autoRendererFor(instance.value?.mc_version);
+  return {
+    key,
+    why: `按版本自动（MC ${instance.value?.mc_version ?? "未知"}）`,
+  };
 });
 // 别名不进自动保存的 edit 对象：每敲一个字符触发一次 patch + 列表重载
 // 会非常卡。改为独立草稿 + 显式保存按钮。
@@ -92,37 +116,79 @@ const allocWidth = computed(() =>
   Math.max(0, Math.min(allocPercent.value, 100 - usedPercent.value))
 );
 
-let skipNextEditSync = false;
+/**
+ * 用 store 里的实例回填 edit 草稿。
+ *
+ * 两个守卫缺一不可（都是为「选了跟随全局却没落盘」这个 bug 加的）：
+ *  1. `savingDepth > 0` 时**绝不回填** —— 否则会用盘上的旧值把用户刚选的值冲掉，
+ *     随后自动保存又把旧值写回盘，表现就是「改了像没改」。
+ *  2. 值没变就不赋值 —— 列表刷新会给出新的对象引用，无脑赋值会触发下面的自动保存
+ *     watcher 反复写盘（并发时还会互相覆盖）。
+ */
+let syncingEdit = false;
+let savingDepth = 0;
+
+function draftOf(i: NonNullable<typeof instance.value>): typeof edit.value {
+  return {
+    icon: i.icon ?? "",
+    max_memory_mb: i.max_memory_mb ?? 4096,
+    memory_mode: (i.memory_mode as "global" | "auto" | "custom") ?? "global",
+    jvm_args: i.jvm_args ?? "",
+    game_args: i.game_args ?? "",
+    account_id: i.account_id ?? "",
+    resolution_w: i.resolution?.[0]?.toString() ?? "",
+    resolution_h: i.resolution?.[1]?.toString() ?? "",
+    // 缺省 / null / "auto" 都算「自动」；旧实例文件本来就没有这个字段
+    renderer_mode:
+      !i.renderer || i.renderer === "auto"
+        ? "auto"
+        : i.renderer === "global"
+          ? "global"
+          : "custom",
+    renderer: i.renderer && i.renderer !== "auto" && i.renderer !== "global"
+      ? i.renderer
+      : "opengles2",
+  };
+}
+
+function sameDraft(a: typeof edit.value, b: typeof edit.value): boolean {
+  return (
+    a.icon === b.icon &&
+    a.max_memory_mb === b.max_memory_mb &&
+    a.memory_mode === b.memory_mode &&
+    a.jvm_args === b.jvm_args &&
+    a.game_args === b.game_args &&
+    a.account_id === b.account_id &&
+    a.resolution_w === b.resolution_w &&
+    a.resolution_h === b.resolution_h &&
+    a.renderer_mode === b.renderer_mode &&
+    a.renderer === b.renderer
+  );
+}
+
 watch(
   () => instance.value,
   (i) => {
-    if (!i) return;
-    if (skipNextEditSync) {
-      skipNextEditSync = false;
-      return;
-    }
-    edit.value = {
-      icon: i.icon ?? "",
-      max_memory_mb: i.max_memory_mb ?? 4096,
-      memory_mode: (i.memory_mode as "global" | "auto" | "custom") ?? "global",
-      jvm_args: i.jvm_args ?? "",
-      game_args: i.game_args ?? "",
-      account_id: i.account_id ?? "",
-      resolution_w: i.resolution?.[0]?.toString() ?? "",
-      resolution_h: i.resolution?.[1]?.toString() ?? "",
-    };
+    if (!i || savingDepth > 0) return;
+    const next = draftOf(i);
+    if (sameDraft(next, edit.value)) return;
+    syncingEdit = true;
+    edit.value = next;
     aliasDraft.value = i.alias ?? "";
+    nextTick(() => {
+      syncingEdit = false;
+    });
   },
   { immediate: true }
 );
 
 async function saveSettings() {
+  savingDepth += 1;
   try {
     const mem =
       edit.value.memory_mode === "custom"
         ? Math.min(edit.value.max_memory_mb, sliderMax.value)
         : 0;
-    skipNextEditSync = true;
     await instances.patch({
       id: props.instanceId,
       icon: edit.value.icon,
@@ -131,6 +197,11 @@ async function saveSettings() {
       jvm_args: edit.value.jvm_args,
       game_args: edit.value.game_args,
       account_id: edit.value.account_id,
+      // auto / global 直接存字符串；custom 存具体渲染器键
+      renderer:
+        edit.value.renderer_mode === "custom"
+          ? edit.value.renderer
+          : edit.value.renderer_mode,
       resolution:
         edit.value.resolution_w && edit.value.resolution_h
           ? [Number(edit.value.resolution_w), Number(edit.value.resolution_h)]
@@ -138,7 +209,39 @@ async function saveSettings() {
     });
   } catch (e) {
     message.error(String(e));
+  } finally {
+    savingDepth -= 1;
   }
+}
+
+/**
+ * 渲染器改动**显式立刻保存**，不走防抖、也不依赖 watcher。
+ *
+ * 渲染器的典型用法是「选完马上点启动」—— 启动会把 WebView 切到后台，防抖定时器可能
+ * 还没触发就没机会了；而 watcher 又被「首次跳过」这类标志吃过一次，两件事叠在一起
+ * 就是「我明明选了跟随全局，启动还是按版本自动」。
+ */
+async function onRendererMode(mode: "auto" | "global" | "custom") {
+  // 切到「指定」时把**当前实际生效**的那个带过去 —— 否则默认值会把渲染器悄悄换掉
+  if (mode === "custom") {
+    edit.value.renderer = effectiveRenderer.value.key;
+  }
+  edit.value.renderer_mode = mode;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await saveSettings();
+}
+
+/** 指定具体渲染器（下拉框）同样立刻保存。 */
+async function onRendererKey(key: string) {
+  edit.value.renderer = key;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await saveSettings();
 }
 
 /** 显式保存实例别名（点按钮触发，不走自动保存） */
@@ -156,14 +259,15 @@ async function saveAlias() {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-let skipFirstSave = true;
+// 只有**用户改动**才进防抖保存：回填（syncingEdit）不算，保存自身不改 edit 所以不会自激。
+// 渲染器不走这里 —— 它由 onRendererMode / onRendererKey 显式立刻保存（见那里注释）。
+//
+// 注意**不能**因为「正在保存」就 return：那会把保存期间发生的改动整段吞掉
+// （滑杆连拖的最后一次就丢了）。照常重新计时，保存本身是幂等的。
 watch(
   edit,
   () => {
-    if (skipFirstSave) {
-      skipFirstSave = false;
-      return;
-    }
+    if (syncingEdit) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(saveSettings, 500);
   },
@@ -172,6 +276,16 @@ watch(
 
 onMounted(() => {
   startPolling();
+  // 全局渲染器存在安卓 SharedPreferences 里，「跟随全局」时要把它显示出来
+  api
+    .getPojavPrefs()
+    .then((p) => {
+      const r = p?.renderer;
+      if (typeof r === "string" && r) globalRenderer.value = r;
+    })
+    .catch(() => {
+      /* 读不到就用默认 GL4ES 显示 */
+    });
 });
 onBeforeUnmount(() => {
   stopPolling();
@@ -221,6 +335,39 @@ onBeforeUnmount(() => {
           <span><i class="dot total"></i>总内存 {{ fmtMem(memTotal) }} / 可用 {{ fmtMem(memAvailable) }}</span>
         </div>
       </div>
+    </div>
+
+    <div class="set-card glass">
+      <h4>渲染器</h4>
+      <n-radio-group
+        :value="edit.renderer_mode"
+        size="small"
+        class="mem-modes"
+        @update:value="onRendererMode"
+      >
+        <n-radio-button value="auto">自动（推荐）</n-radio-button>
+        <n-radio-button value="global">跟随全局</n-radio-button>
+        <n-radio-button value="custom">指定</n-radio-button>
+      </n-radio-group>
+
+      <template v-if="edit.renderer_mode === 'custom'">
+        <n-select
+          :value="edit.renderer"
+          :options="rendererOptions"
+          size="small"
+          style="margin-top: 10px"
+          @update:value="onRendererKey"
+        />
+      </template>
+
+      <p class="hint">
+        当前生效：<b>{{ rendererNames[effectiveRenderer.key] ?? effectiveRenderer.key }}</b>
+        （{{ effectiveRenderer.why }}）
+      </p>
+      <p class="hint">
+        自动规则：26.x 换用了新版着色器（GL4ES 跑不动）→ MobileGlues；其余 1.x 版本
+        GL4ES 兼容性更好（MobileGlues 在 1.8.9 这类老版本上会因后处理着色器翻译失败崩在启动阶段）。
+      </p>
     </div>
 
     <div class="set-card glass">
@@ -369,6 +516,10 @@ textarea.text-input {
   gap: 8px;
   margin-bottom: 10px;
   flex-wrap: wrap;
+  /* naive-ui 的按钮组把高度写死成单个按钮高（默认假定只有一行）。我们允许换行，
+     就必须把高度放开，否则第二行会**压在下面内容上**（实测：窄卡片/高缩放时
+     「自定义」折行叠在 2048 MB 那行字上）。 */
+  height: auto;
 }
 .mem-mode {
   display: inline-flex;

@@ -12,6 +12,7 @@ mod accounts;
 mod modpack;
 mod servers;
 mod crash;
+mod renderer_health;
 mod storage;
 mod natives;
 mod jvm_launcher;
@@ -28,6 +29,12 @@ mod world_backup;
 mod playtime;
 mod fsutil;
 mod progress;
+/// 插件系统（v1 组件插件；渲染器/驱动沿用同一套机制）。
+mod plugin;
+/// 启动器自更新（查 GitHub Release → 下 APK → 交给系统安装器）。
+mod updater;
+/// 控制布局里「按键透传」的读取与修改。
+mod controls;
 
 #[cfg(target_os = "android")]
 mod jni_bridge;
@@ -83,6 +90,16 @@ pub fn run() {
             // Settings commands
             commands::get_settings,
             commands::update_settings,
+
+            // Plugin commands（组件/渲染器插件：下载、校验、启停）
+            commands::get_plugins,
+            commands::refresh_plugin_manifest,
+            commands::install_plugin,
+            commands::install_plugin_from_file,
+            commands::uninstall_plugin,
+            commands::set_plugin_enabled,
+            commands::get_plugin_manifest_url,
+            commands::set_plugin_manifest_url,
             
             // Modpack commands
             commands::import_modpack,
@@ -163,6 +180,8 @@ pub fn run() {
             // Playtime
             commands::playtime_stats,
             commands::read_instance_log,
+        commands::check_renderer_health,
+        commands::check_renderer_health_latest,
             commands::get_pojav_prefs,
             commands::set_pojav_prefs,
 
@@ -198,6 +217,15 @@ pub fn run() {
             commands::set_orientation,
             commands::resolve_picked_path,
             commands::detect_system_proxy,
+
+            // 启动器自更新
+            updater::check_for_update,
+            updater::download_update,
+            updater::install_update,
+
+            // 控制布局的按键透传
+            controls::get_control_buttons,
+            controls::set_control_button_passthru,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qookix application");

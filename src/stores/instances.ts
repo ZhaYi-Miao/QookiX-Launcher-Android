@@ -1,6 +1,60 @@
 import { defineStore } from "pinia";
 import { api } from "../api";
 import type { Instance, InstanceGroup } from "../types";
+import { autoRendererFor, effectiveRendererKey, rendererLabel } from "../utils/renderer";
+
+/** 启动前的渲染器确认（由全局弹窗消费），见 `rendererGuard`。 */
+export interface RendererGuard {
+  instanceId: string;
+  mcVersion: string;
+  /** 当前会用的渲染器键 */
+  used: string;
+  usedName: string;
+  /** 版本推荐的渲染器键 */
+  recommended: string;
+  recommendedName: string;
+  world?: string;
+  server?: string;
+}
+
+/**
+ * 本地「已经问过」标记。两套 key：
+ *  - `warned`：启动后（日志里发现失败证据）已经问过；
+ *  - `guardOk`：启动前确认弹窗里用户已经选过「仍用 x 启动」。
+ * 分开记是因为两者的确认语义不同：启动前点「仍用」= 每次启动就这么跑；
+ * 事后点「暂不切换」≠ 允许以后每次启动都再白屏一次。
+ */
+function rendererWarnKey(instanceId: string, renderer: string) {
+  return `qk.rendererWarned.${instanceId}.${renderer}`;
+}
+function rendererGuardKey(instanceId: string, renderer: string) {
+  return `qk.rendererGuardOk.${instanceId}.${renderer}`;
+}
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeFlag(key: string): void {
+  try {
+    localStorage.setItem(key, "1");
+  } catch {
+    /* 隐私模式下写不了就算了，最多多问一次 */
+  }
+}
+
+export function hasRendererWarned(instanceId: string, renderer: string): boolean {
+  return readFlag(rendererWarnKey(instanceId, renderer));
+}
+export function markRendererWarned(instanceId: string, renderer: string): void {
+  writeFlag(rendererWarnKey(instanceId, renderer));
+}
+/** 用户在启动前确认里选了「仍用该渲染器启动」，记下来别再问。 */
+export function markRendererGuardOk(instanceId: string, renderer: string): void {
+  writeFlag(rendererGuardKey(instanceId, renderer));
+}
 
 export const useInstancesStore = defineStore("instances", {
   state: () => ({
@@ -14,6 +68,10 @@ export const useInstancesStore = defineStore("instances", {
     installTotal: 0,
     /** 最近一次成功拉取的时间戳，用于短 TTL 内跳过重复请求 */
     lastLoadedAt: 0,
+    /** 等用户决定的「渲染器不推荐」确认（弹窗消费后置 null） */
+    pendingRendererGuard: null as RendererGuard | null,
+    /** 全局渲染器（Pojav 偏好，懒加载缓存） */
+    globalRenderer: null as string | null,
   }),
   getters: {
     /** 分组名 -> 分组对象，便于 UI 快速取色 */
@@ -143,7 +201,17 @@ export const useInstancesStore = defineStore("instances", {
      * 后端很多失败用的是 `INSTANCE_NOT_INSTALLED` 这类码，直接 message.error(String(e))
      * 用户只会看到一串英文常量。所有启动入口都走这里，翻译一次到处受益。
      */
-    async launch(id: string, world?: string, server?: string) {
+    async launch(id: string, world?: string, server?: string, opts?: { force?: boolean }) {
+      // ── 启动前拦一道：渲染器和版本推荐不一致时先问一句 ──────────────────
+      // 这是**秒级**判断，不用等游戏跑到一半再发现渲染器不行（1.8.9 + MG 会白屏卡住，
+      // 等系统把 Activity 收掉要几十秒）。点「仍用 xxx 启动」会记住，不再重复问。
+      if (!opts?.force) {
+        const guard = await this.rendererGuard(id);
+        if (guard) {
+          this.pendingRendererGuard = { ...guard, world, server };
+          return null;
+        }
+      }
       this.launchingId = id;
       try {
         const res = await api.launchInstance(id, world, server);
@@ -166,6 +234,49 @@ export const useInstancesStore = defineStore("instances", {
     },
     async stop() {
       await api.stopGame();
+    },
+
+    /** 读全局渲染器（存在安卓 SharedPreferences 里，只有后端读得到），带缓存。 */
+    async ensureGlobalRenderer(): Promise<string> {
+      if (this.globalRenderer) return this.globalRenderer;
+      try {
+        const p = await api.getPojavPrefs();
+        const r = p?.renderer;
+        this.globalRenderer = typeof r === "string" && r ? r : "opengles2";
+      } catch {
+        this.globalRenderer = "opengles2";
+      }
+      return this.globalRenderer ?? "opengles2";
+    },
+
+    /**
+     * 启动前的渲染器判断：会用的 ≠ 版本推荐的 → 返回一份待确认信息（否则 null）。
+     *
+     * `auto`（缺省）不会触发 —— 它本身就是推荐值；只有「跟随全局」和手动指定才可能跑偏。
+     */
+    async rendererGuard(id: string): Promise<RendererGuard | null> {
+      let inst = this.get(id);
+      // 冷启动时列表可能还没加载（例如从实例详情页点启动），先拉一次再判断
+      if (!inst) {
+        await this.load(true);
+        inst = this.get(id);
+      }
+      if (!inst) return null;
+      const key = inst.renderer ?? "auto";
+      if (key === "auto" || key === "") return null;
+      const globalKey = key === "global" ? await this.ensureGlobalRenderer() : null;
+      const used = effectiveRendererKey(key, inst.mc_version, globalKey);
+      const recommended = autoRendererFor(inst.mc_version);
+      if (used === recommended) return null;
+      if (readFlag(rendererGuardKey(id, used))) return null;
+      return {
+        instanceId: id,
+        mcVersion: inst.mc_version,
+        used,
+        usedName: rendererLabel(used),
+        recommended,
+        recommendedName: rendererLabel(recommended),
+      };
     },
   },
 });

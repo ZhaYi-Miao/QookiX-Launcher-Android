@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.content.pm.ActivityInfo
@@ -13,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
+import android.widget.Toast
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -277,7 +279,38 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * 拉起游戏界面（由 Rust 的 launch_game 命令调用）。
+   * 拉起系统安装器安装更新包（由 Rust 的 install_update 命令调用）。
+   *
+   * 用 FileProvider 把 `<files>/updates` 里下载好的 apk 暴露成 content:// —— 安卓 7 以后
+   * 不允许把 file:// 路径交给别的应用（会 FileUriExposedException）。
+   * 系统会弹「是否安装」确认框，装完是覆盖安装（签名不一致会被系统拒绝）。
+   */
+  fun installApk(path: String) {
+    runOnUiThread {
+      try {
+        val file = File(path)
+        if (!file.isFile) {
+          Toast.makeText(this, "安装包不存在：$path", Toast.LENGTH_SHORT).show()
+          return@runOnUiThread
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+          this,
+          "$packageName.fileprovider",
+          file
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+          setDataAndType(uri, "application/vnd.android.package-archive")
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(intent)
+      } catch (e: Exception) {
+        Log.e(TAG, "拉起安装器失败", e)
+        Toast.makeText(this, "拉起安装器失败：${e.message}", Toast.LENGTH_SHORT).show()
+      }
+    }
+  }
+
+  /** 拉起游戏界面（由 Rust 的 launch_game 命令调用）。
    *
    * 游戏必须跑在 [GameActivity] 里：它挂着 GameSurfaceView，GL4ES 才有真正的 Surface 可画。
    * 真正的 JVM 启动由 GameActivity → TauriBridge.launchGame 触发。
@@ -288,6 +321,29 @@ class MainActivity : TauriActivity() {
         GameActivity.start(this, instanceId, accountUuid)
       } catch (e: Exception) {
         Log.e(TAG, "启动游戏界面失败", e)
+      }
+    }
+  }
+
+  /** 26.3+ 的 SDL 窗口层需要启动器侧的整合（由 Rust 在启动前调用）。
+   *
+   * 为什么必须做：SDL3 在安卓上要靠 Java 胶水（org.libsdl.app.SDL）拿 Surface 与 IME 等，
+   * 这些事情得由启动器侧准备好。参考实现 Amethyst-Android 是在 hook 住的
+   * `SDL_InitSubSystem` 里发这条通知，我们没装那个 hook，就在起游戏前主动发一次
+   * （Amethyst 的 MainActivity 也是这么干的）。
+   *
+   * 少了它，游戏侧 SDL 建窗口时拿不到 Surface → 空指针崩，tombstone 全在 libSDL3.so 里。
+   */
+  fun enableSdlIntegration() {
+    runOnUiThread {
+      try {
+        val ok = org.lwjgl.glfw.CallbackBridge.notifyLauncher(
+          org.lwjgl.glfw.CallbackBridge.NOTIF_TYPE_SDL,
+          org.lwjgl.glfw.CallbackBridge.ACTION_INIT_LAUNCHER_INTEGRATION,
+        )
+        Log.i(TAG, "SDL 启动器侧整合：$ok")
+      } catch (e: Throwable) {
+        Log.e(TAG, "SDL 启动器侧整合失败", e)
       }
     }
   }
