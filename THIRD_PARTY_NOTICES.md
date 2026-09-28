@@ -18,6 +18,17 @@
 | `src-tauri/assets/cacio8|cacio17/*.jar` | Caciocavallo（AWT on Android） |
 | `src-tauri/gen/android/app/src/main/jniLibs/<abi>/*.so` | `liblwjgl*.so`、`libgl4es_114.so`、`libopenal.so`、`libfreetype.so`、`libOSMesa.so`、`libunpack200.so`、`libjnidispatch.so` |
 
+### 我们在 `lwjgl-glfw-classes.jar` 上的修改
+
+该 jar 里被我们**重新注入**过两个类（LWJGL 为 BSD-3-Clause，修改一并披露）：
+
+| 类 | 我们的改动 | 补丁源码 |
+|---|---|---|
+| `org/lwjgl/glfw/GLFW.class` | 把「类初始化时需要 native 库」的动作全部延后到 `glfwInit()`（fork 版 `JNI_OnLoad` 会在库还没加载完时触发 `GLFW.<clinit>`，而类初始化失败不可恢复） | `scripts/lwjgl-glfw-patch/src/org/lwjgl/glfw/GLFW.java` |
+| `org/lwjgl/sdl/SDLMouse.class` | 输入调试日志落盘（`files/logs/input_debug.log`） | `scripts/lwjgl-glfw-patch/src/org/lwjgl/sdl/SDLMouse.java` |
+
+注入脚本：`scripts/patch-lwjgl-glfw.ps1`。
+
 ## 游戏内控制层（2026-09 从 PojavLauncher 原样移植，LGPL-3.0）
 
 「进入游戏之后的逻辑」整体对齐 PojavLauncher 的 `MainActivity` 与 `customcontrols` 包。
