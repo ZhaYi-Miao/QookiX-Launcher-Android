@@ -96,6 +96,28 @@
 > Android 15+ 的 16 KB 页设备上可能无法 dlopen —— 详见 `MOBILE_AUDIT_NATIVE.md` 第一节。
 > `libqookix_lib.so` 由我们自己编译，已经改成 16 KB 对齐。
 
+## MobileGlues 渲染器（LGPL-2.1，**分发的是修改版**）
+
+「设置 → 游戏内 → 渲染器」里的 MobileGlues 由上游编译而来，但**我们改过它的源码**，
+因此按 LGPL-2.1 的要求一并公开修改后的源码：
+
+| 项 | 值 |
+|---|---|
+| 上游 | https://github.com/MobileGL-Dev/MobileGlues（基线提交 `97558a6`） |
+| 许可证 | GNU Lesser General Public License v2.1 |
+| 我们的修改 | `patches/mobileglues/0001-glsl-uniform-word-boundary.patch`（`glsl_for_es.cpp`，+19 −1：`uniform` 关键字改为整词匹配，否则 26.x 的地形着色器会被改写成非法语句） |
+| 修改说明与复现构建步骤 | `patches/mobileglues/README.md` |
+| 分发形式 | 「渲染器插件」zip（本仓库 `plugins` Release）→ 用户按需下载，**不随 APK 分发** |
+
+`libmobileglues_info_getter.so` 是上游同一次构建的配套库，未作修改。
+
+LGPL 义务的履行方式与其他 LGPL 组件一致：**以独立 `.so` 形式提供**（用户可自行替换后重新打包），
+且修改后的源码（基线提交 + 上述补丁）公开在本仓库 `patches/mobileglues/`。
+
+> 同类组件还有 Mesa（`libOSMesa.so`、`libvulkan_freedreno.so`，MIT）、
+> Khronos 时间线信号量层（Apache-2.0）与 GL4ES / LWJGL / OpenAL 等，
+> 均以「渲染器 / 驱动插件」形式按需分发，未随 APK 打包。
+
 ## 本项目的许可与「LGPL 并入 GPL」声明
 
 本项目以 **GPL-3.0** 发布，其中包含 **LGPL-3.0** 的 PojavLauncher 代码（游戏内控制层）

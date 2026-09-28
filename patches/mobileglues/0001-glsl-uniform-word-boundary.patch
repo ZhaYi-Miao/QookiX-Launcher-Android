@@ -1,0 +1,31 @@
+diff --git a/MobileGlues-cpp/gl/glsl/glsl_for_es.cpp b/MobileGlues-cpp/gl/glsl/glsl_for_es.cpp
+index c7eee88..dca1e28 100644
+--- a/MobileGlues-cpp/gl/glsl/glsl_for_es.cpp
++++ b/MobileGlues-cpp/gl/glsl/glsl_for_es.cpp
+@@ -249,7 +249,25 @@ std::string process_uniform_declarations(const std::string& glslCode) {
+     result.reserve(glslCode.length());
+ 
+     while (scan_pos < length) {
+-        if (glslCode.compare(scan_pos, 7, "uniform") == 0) {
++        /* QookiX 修复：必须整词匹配 "uniform"。
++         *
++         * 原来的裸 compare 会命中**标识符中间**的 uniform 子串。MC 26.x 起着色器全面
++         * 使用 UBO，spirv-cross 把 UBO 改写为 `_uniform_00_00` / 实例
++         * `_uniform_instance_00_00`，于是 `if (_uniform_instance_00_00.UseRgss == 1)`
++         * 里的 "uniform" 被当成关键字，整句被改写成 `if (_uniform _instance_00_00 ;`
++         * （type 吃到 `_instance_00_00`、name 为空、`==` 被当成初始化器）——
++         * 地形等核心着色器全部编译失败，游戏世界一片虚无（26.3 实测）。
++         * 修复：前一个字符不能是标识符字符（[A-Za-z0-9_]），后一个字符同理。 */
++        const bool prev_is_word_char =
++            scan_pos > 0 &&
++            (std::isalnum(static_cast<unsigned char>(glslCode[scan_pos - 1])) ||
++             glslCode[scan_pos - 1] == '_');
++        const bool next_is_word_char =
++            scan_pos + 7 < length &&
++            (std::isalnum(static_cast<unsigned char>(glslCode[scan_pos + 7])) ||
++             glslCode[scan_pos + 7] == '_');
++        if (!prev_is_word_char && !next_is_word_char &&
++            glslCode.compare(scan_pos, 7, "uniform") == 0) {
+             if (scan_pos > chunk_start) {
+                 result.append(glslCode, chunk_start, scan_pos - chunk_start);
+             }
