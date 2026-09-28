@@ -24,9 +24,9 @@
 param(
     [string]$BaseUrl = "",
     [string[]]$Abis = @("arm64-v8a", "x86_64"),
-    [string]$ComponentsVersion = "3.4.1-1",
-    [string]$RendererVersion = "1.0.0",
-    [string]$DriverVersion = "1.0.0",
+    [string]$ComponentsVersion = "3.4.1-2",
+    [string]$RendererVersion = "1.0.1",
+    [string]$DriverVersion = "1.0.1",
     # 只打某一类/某个 id（comma 分隔的 kind 或 id，例如 "renderer" / "qookix-renderer-mobileglues"）
     [string[]]$Only = @()
 )
@@ -61,6 +61,11 @@ $defs = @(
         layout = [ordered]@{ classpath = "jars"; lightgl = "natives"; librarypath = "libs" }
         pack = "components"
         libs = @()
+        notice = @(
+            "包含的第三方组件：",
+            "  - LWJGL（AngelAuraMC fork）—— BSD-3-Clause，未作修改",
+            "  - SPIRV-Cross —— Apache-2.0，未作修改"
+        )
     }
     [ordered]@{
         id = "qookix-renderer-mobileglues"
@@ -72,6 +77,17 @@ $defs = @(
         layout = [ordered]@{ librarypath = "libs" }
         pack = "libs"
         libs = @("libmobileglues.so", "libmobileglues_info_getter.so")
+        notice = @(
+            "MobileGlues —— GNU LGPL-2.1",
+            "  上游：https://github.com/MobileGL-Dev/MobileGlues（基线提交 97558a6）",
+            "",
+            "★ 本包内的 libmobileglues.so 是**修改版**：",
+            "  glsl/glsl_for_es.cpp 的 uniform 关键字改为整词匹配（否则 26.x 的地形着色器",
+            "  会被改写成非法语句，进世界后一片虚无）。",
+            "  修改后的源码（补丁 + 复现构建步骤）：",
+            "  https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/tree/master/patches/mobileglues",
+            "  许可原文见上游仓库的 LICENSE。"
+        )
     }
     [ordered]@{
         id = "qookix-renderer-gl4es"
@@ -83,6 +99,7 @@ $defs = @(
         layout = [ordered]@{ librarypath = "libs" }
         pack = "libs"
         libs = @("libgl4es_114.so")
+        notice = @("GL4ES（ptitSeb）—— MIT，未作修改")
     }
     [ordered]@{
         id = "qookix-renderer-zink-osmesa"
@@ -94,6 +111,7 @@ $defs = @(
         layout = [ordered]@{ librarypath = "libs" }
         pack = "libs"
         libs = @("libOSMesa.so")
+        notice = @("Mesa 3D（OSMesa / zink）—— MIT，未作修改")
     }
     [ordered]@{
         id = "qookix-driver-turnip"
@@ -105,6 +123,10 @@ $defs = @(
         layout = [ordered]@{ librarypath = "libs" }
         pack = "libs"
         libs = @("libvulkan_freedreno.so", "libVkLayer_khronos_timeline_semaphore.so")
+        notice = @(
+            "  - Mesa 3D（Turnip）—— MIT，未作修改",
+            "  - Khronos Vulkan-ExtensionLayer —— Apache-2.0，未作修改"
+        )
     }
 )
 
@@ -132,6 +154,22 @@ function New-PluginZip {
         renderers = $def.renderers
     }
     $descriptor | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $stage "plugin.json") -Encoding UTF8
+
+    # 随包 NOTICE：许可 + （LGPL 组件的）修改声明与源码位置。
+    # 只把 .so 发给用户、不带许可与修改声明，LGPL 的「显著声明修改 + 提供源码」就没落到
+    # 用户手上（仓库里有不等于分发包里有）。
+    $notice = @(
+        "$($def.name)（$($def.id)）",
+        "版本 $($def.version)　目标 ABI $abi",
+        "",
+        "分发者：QookiX Launcher Android",
+        "第三方声明全文：https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/blob/master/THIRD_PARTY_NOTICES.md",
+        ""
+    ) + $def.notice + @(
+        "",
+        "本包内二进制均以独立 .so / .jar 形式提供，用户可自行替换后重新打包。"
+    )
+    $notice | Set-Content -Path (Join-Path $stage "NOTICE.txt") -Encoding UTF8
 
     $counts = [ordered]@{ jar = 0; native = 0; lib = 0 }
 
