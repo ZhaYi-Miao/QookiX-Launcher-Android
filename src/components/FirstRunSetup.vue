@@ -2,10 +2,11 @@
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
-import { NButton, NModal, useMessage } from "naive-ui";
+import { NButton, useMessage } from "naive-ui";
 import { api } from "../api";
 import { fmtBytes } from "../utils/format";
 import type { PluginInfo, PluginProgressEvent, PluginSetupStatus } from "../types";
+import AppSheet from "../ui/AppSheet.vue";
 
 /**
  * 首启准备：渲染器 / 驱动 / 图形组件都是插件分发的，新装的应用里一个都没有
@@ -137,14 +138,11 @@ onBeforeUnmount(() => unlisten?.());
 </script>
 
 <template>
-  <n-modal
+  <app-sheet
     v-model:show="show"
-    preset="card"
     :title="$t('first-run-setup.title')"
     class="frs-card"
-    style="width: 460px; max-width: 92vw"
     :mask-closable="false"
-    :close-on-esc="false"
     :closable="false"
   >
     <template v-if="status?.error">
@@ -185,7 +183,7 @@ onBeforeUnmount(() => unlisten?.());
         <n-button v-if="!finished" @click="dismiss">{{ $t("first-run-setup.later") }}</n-button>
       </template>
     </div>
-  </n-modal>
+  </app-sheet>
 </template>
 
 <style>

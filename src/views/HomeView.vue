@@ -10,13 +10,14 @@ import { useSettingsStore } from "../stores/settings";
 import { latencyInfo, loaderBadge } from "../utils/format";
 import { api } from "../api";
 import { supportsQuickPlay } from "../version";
-import { useMessage, NModal } from "naive-ui";
+import { useMessage } from "naive-ui";
 // 底部弹层走 AppPopup（默认 teleport 到 #van-layer：跳出 .content 的层叠上下文 + 跟 zoom 同步）
 import AppPopup from "../ui/AppPopup.vue";
 import AppIcon from "../components/AppIcon.vue";
 import PlaytimeCard from "../components/PlaytimeCard.vue";
 import type { ServerStatus } from "../types";
 import { IconClose, IconCompass, IconFolder, IconGlobe, IconPlay, IconRepeat, IconUser } from "../components/icons";
+import AppSheet from "../ui/AppSheet.vue";
 
 const router = useRouter();
 const instances = useInstancesStore();
@@ -361,15 +362,12 @@ onMounted(() => {
 
     <!-- 完整游戏统计：柱状图 + 每实例时长（首页左下角统计卡的详情）。
          n-modal Teleport 到 body，不参与 #app 的 zoom，宽高用固定上限。 -->
-    <n-modal
+    <app-sheet
       v-model:show="showPlaytime"
-      preset="card"
       :title="$t('home.play-stats')"
-      :style="{ width: 'min(560px, 92vw)' }"
-      :bordered="false"
     >
       <PlaytimeCard />
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

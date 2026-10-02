@@ -14,7 +14,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
 import { usePinsStore, type PinTarget } from "../stores/pins";
-import { useMessage, NButton, NModal, NMenu } from "naive-ui";
+import { useMessage, NButton, NMenu } from "naive-ui";
 import { api } from "../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import LogViewer from "../components/LogViewer.vue";
@@ -25,6 +25,7 @@ import SavesTab from "../components/instance/SavesTab.vue";
 import SettingsTab from "../components/instance/SettingsTab.vue";
 import KeysTab from "../components/instance/KeysTab.vue";
 import { fmtDateLocale as fmtDate, fmtSize } from "../utils/format";
+import AppSheet from "../ui/AppSheet.vue";
 import {
   IconBox,
   IconCamera,
@@ -428,14 +429,10 @@ watch(
     </div>
 
     <!-- confirm dialog -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="confirmState !== null"
-      preset="card"
       :title="confirmState?.title ?? ''"
-      style="width: 420px; max-width: 92vw"
       :mask-closable="true"
-      :close-on-esc="true"
       @update:show="(v: boolean) => { if (!v) confirmState = null; }"
       @mask-click="confirmState = null"
     >
@@ -446,21 +443,17 @@ watch(
           <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <!-- screenshot preview -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       v-model:show="showPreview"
-      preset="card"
       :title="$t('instance-detail.screenshot-preview')"
-      style="width: min(860px, 92vw)"
       :mask-closable="true"
-      :close-on-esc="true"
       @mask-click="showPreview = false"
     >
       <img ref="previewCardRef" :src="previewImg" class="preview-img" alt="" />
-    </n-modal>
+    </app-sheet>
   </div>
   <div v-else class="center">{{ $t("instance-detail.instance-gone") }}</div>
 </template>

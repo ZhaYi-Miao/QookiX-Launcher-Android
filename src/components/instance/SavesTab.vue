@@ -9,7 +9,7 @@ import { onMounted, ref, watch } from "vue";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
 import { usePinsStore } from "../../stores/pins";
-import { NButton, NModal, useDialog, useMessage } from "naive-ui";
+import { NButton, useDialog, useMessage } from "naive-ui";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../../api";
 import { supportsQuickPlay } from "../../version";
@@ -24,6 +24,7 @@ import {
   IconTrash,
 } from "../icons";
 import type { ServerEntry, ServerStatus, WorldBackupInfo } from "../../types";
+import AppSheet from "../../ui/AppSheet.vue";
 
 const props = defineProps<{ instanceId: string }>();
 
@@ -483,14 +484,10 @@ watch(
     </template>
 
     <!-- 备份管理弹窗 -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       v-model:show="backupOpen"
-      preset="card"
       :title="$t('instance-saves.backup-name', { p1: backupWorld })"
-      style="width: 560px; max-width: 94vw"
       :mask-closable="true"
-      :close-on-esc="true"
     >
       <div class="bk-body">
         <div class="bk-toolbar">
@@ -519,7 +516,7 @@ watch(
           </div>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

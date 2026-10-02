@@ -85,8 +85,10 @@
   --van-sidebar-padding: 4px 4px;
   --van-sidebar-line-height: 1.2;
 
-  /* ── 弹层 / 底部抽屉（Popup） ── */
-  --van-popup-background: var(--panel);
+  /* ── 弹层 / 底部抽屉（Popup） ──
+     底板要比面板稍实一点：完全透明时背后页面的文字会透上来（多人页「创建第一个
+     服务器」那段就撞在弹窗正文中间，非常难读）。94% + 模糊，保留玻璃感又能看清字。 */
+  --van-popup-background: color-mix(in srgb, var(--bg-2) 94%, transparent);
   --van-popup-round-radius: 16px;
   /* ── 对话框（确认/输入） ── */
   --van-dialog-background: var(--panel);

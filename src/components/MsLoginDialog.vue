@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { ref, watch } from "vue";
-import { NButton, NModal } from "naive-ui";
+import { NButton } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAccountsStore } from "../stores/accounts";
+import AppSheet from "../ui/AppSheet.vue";
 
 const accounts = useAccountsStore();
 const show = ref(false);
@@ -51,12 +52,9 @@ async function retry() {
 </script>
 
 <template>
-  <n-modal
-      :auto-focus="false"
+  <app-sheet
     :show="show || !!accounts.msError"
-    preset="card"
     :title="$t('ms-login-dialog.login-title')"
-    style="width: 460px; max-width: 92vw"
     :mask-closable="false"
   >
     <div class="qkms-box">
@@ -81,7 +79,7 @@ async function retry() {
         <n-button v-if="accounts.msError" type="primary" @click="retry">{{ $t("first-run-setup.retry") }}</n-button>
       </div>
     </template>
-  </n-modal>
+  </app-sheet>
 </template>
 
 <style>

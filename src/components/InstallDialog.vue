@@ -2,7 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NModal, NSelect, NButton, NInput, useMessage } from "naive-ui";
+import { NSelect, NButton, NInput, useMessage } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -13,6 +13,7 @@ import { useSettingsStore } from "../stores/settings";
 import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import { IconCopy, IconExternal, IconGlobe } from "./icons";
 import type { ProjectDependency, ProjectHit, ProjectVersion } from "../types";
+import AppSheet from "../ui/AppSheet.vue";
 
 const props = defineProps<{
   show: boolean;
@@ -403,16 +404,12 @@ async function install() {
 </script>
 
 <template>
-  <n-modal
-      :auto-focus="false" class="install-dialog-card"
+  <app-sheet
+    class="install-dialog-card"
     :show="props.show"
-    preset="card"
     :title="props.project?.title ?? $t('install-dialog.install-content')"
-    style="width: 640px; max-width: 94vw"
     :mask-closable="true"
-    :close-on-esc="true"
     @update:show="(v: boolean) => emit('update:show', v)"
-    @mask-click="() => emit('update:show', false)"
     @after-enter="onOpen"
   >
     <div v-if="props.project" ref="cardRef" class="id-modal">
@@ -574,7 +571,7 @@ async function install() {
         >{{ $t("install-dialog.mcreator") }}</n-button>
       </div>
     </div>
-  </n-modal>
+  </app-sheet>
 </template>
 
 <style>
@@ -967,21 +964,12 @@ async function install() {
 </style>
 
 <!--
-  这个安装弹窗是从桌面端搬来的：宽度限了（640px / 94vw）但**高度没限**，
-  而手机横屏视口只有约 393 CSS px 高，内容一长就直接溢出屏幕、下面的按钮点不到。
-  n-modal 会被 Teleport 到 body，组件里的 scoped 样式够不到它，
-  所以这里单独用一个非 scoped 的全局样式块。 -->
+  安装弹窗的额外约束：内容区必须**内部滚动**，否则版本列表一长就把底部按钮顶出屏幕。
+  AppSheet 的 .sheet-body 已经处理好滚动与安全区，这里只剩「让弹窗本身别超过一屏」。 -->
 <style>
 .install-dialog-card {
-  /* 同上：n-modal 在 <body> 下，不参与 #app 的 zoom，不除 --ui-scale */
   max-height: 92vh;
   display: flex;
   flex-direction: column;
-}
-/* naive-ui 的卡片内容区类名是 .n-card-content（不是 __content）——
-   写错了就变成「裁切」而不是「滚动」，底部的版本列表会点不到。 */
-.install-dialog-card .n-card-content {
-  overflow-y: auto;
-  min-height: 0;
 }
 </style>

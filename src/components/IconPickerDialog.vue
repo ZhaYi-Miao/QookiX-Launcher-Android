@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
-import { NModal, useMessage } from "naive-ui";
+import { useMessage } from "naive-ui";
 import { pickFile as open } from "../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../api";
 import AppIcon from "./AppIcon.vue";
 import { parseIcon } from "../instance-icons";
 import { IconCheck, IconClose } from "./icons";
+import AppSheet from "../ui/AppSheet.vue";
 
 const props = defineProps<{ show: boolean; value: string; instanceId?: string }>();
 const emit = defineEmits<{ "update:show": [v: boolean]; save: [value: string] }>();
@@ -90,12 +91,9 @@ function save() {
 </script>
 
 <template>
-  <n-modal
-      :auto-focus="false"
+  <app-sheet
     :show="props.show"
-    preset="card"
     :title="$t('icon-picker-dialog.pick-icon')"
-    style="width: 560px; max-width: 94vw"
     @update:show="(v: boolean) => emit('update:show', v)"
   >
     <div class="ip-body">
@@ -157,7 +155,7 @@ function save() {
           <IconCheck />{{ $t("common.save") }}</button>
       </div>
     </template>
-  </n-modal>
+  </app-sheet>
 </template>
 
 <style>

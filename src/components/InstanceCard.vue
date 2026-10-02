@@ -5,7 +5,7 @@ import { openMenuId, bindMenuOutside } from "../composables/instanceMenu";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import { usePinsStore, type PinTarget } from "../stores/pins";
-import { useMessage, NModal, NButton } from "naive-ui";
+import { useMessage, NButton } from "naive-ui";
 import { loaderBadge } from "../utils/format";
 import AppIcon from "./AppIcon.vue";
 import {
@@ -18,6 +18,7 @@ import {
   IconTrash,
 } from "./icons";
 import type { Instance } from "../types";
+import AppSheet from "../ui/AppSheet.vue";
 
 const props = defineProps<{ instance: Instance }>();
 const emit = defineEmits<{ move: [instance: Instance] }>();
@@ -221,12 +222,9 @@ function confirmDelete() {
       </div>
     </div>
   </div>
-  <n-modal
-      :auto-focus="false"
+  <app-sheet
     :show="confirmState !== null"
-    preset="card"
     :title="confirmState?.title ?? ''"
-    style="width: 420px; max-width: 92vw"
     @update:show="(v: boolean) => { if (!v) confirmState = null; }"
   >
     <div v-if="confirmState" style="display: flex; flex-direction: column; gap: 16px;">
@@ -236,7 +234,7 @@ function confirmDelete() {
         <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
       </div>
     </div>
-  </n-modal>
+  </app-sheet>
 </template>
 
 <style scoped>

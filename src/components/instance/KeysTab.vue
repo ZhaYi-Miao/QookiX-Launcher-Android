@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { t as $t } from "../../i18n";
 import { computed, onMounted, ref } from "vue";
-import { NButton, NInput, NModal, useDialog, useMessage } from "naive-ui";
+import { NButton, NInput, useDialog, useMessage } from "naive-ui";
 import { api } from "../../api";
 import type { ControlLayoutInfo } from "../../types";
+import AppSheet from "../../ui/AppSheet.vue";
 
 // 手机端的「按键」= 屏幕上的触控控制层。布局文件放在 <files>/controlmap/，
 // **全局共享、不区分实例**（所以这里不按实例过滤），当前生效的那份由 pojav 偏好
@@ -182,12 +183,10 @@ function fmtTime(sec: number): string {
       </div>
     </div>
 
-    <n-modal
+    <app-sheet
       v-model:show="renameShow"
-      preset="card"
       :title="$t('instance-keys.rename')"
       class="keys-rename-card"
-      style="width: 420px; max-width: 92vw"
     >
       <n-input v-model:value="renameTo" :placeholder="$t('instance-keys.new-name')" @keyup.enter="submitRename" />
       <p class="rename-hint">{{ $t("instance-keys.name-hint") }}</p>
@@ -195,7 +194,7 @@ function fmtTime(sec: number): string {
         <n-button @click="renameShow = false">{{ $t("common.cancel") }}</n-button>
         <n-button type="primary" @click="submitRename">{{ $t("file-manager.ok") }}</n-button>
       </div>
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

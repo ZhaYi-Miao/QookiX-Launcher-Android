@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, onMounted, ref, watch } from "vue";
-import { NTabs, NTabPane, NInput, NButton, NSwitch, NModal, useMessage, useDialog } from "naive-ui";
+import { NTabs, NTabPane, NInput, NButton, NSwitch, useMessage, useDialog } from "naive-ui";
 import { pickFile as open } from "../composables/filePicker";
 import { api } from "../api";
 import { fmtSize as formatSize } from "../utils/format";
@@ -10,6 +10,7 @@ import { loadOfflineSkin, saveOfflineSkinCache } from "../composables/useOffline
 import { useAccountsStore } from "../stores/accounts";
 import SkinThumb from "../components/SkinThumb.vue";
 import { BUILTIN_SKINS } from "../assets/builtin-skins";
+import AppSheet from "../ui/AppSheet.vue";
 import {
   IconRefresh,
   IconTrash,
@@ -724,8 +725,10 @@ onMounted(async () => {
       </section>
     </div>
 
-    <n-modal
-      :auto-focus="false" v-model:show="playerModalShow" preset="card" :title="$t('skins.fetch-by-premium-name')" style="max-width: 420px;">
+    <app-sheet
+      v-model:show="playerModalShow"
+      :title="$t('skins.fetch-by-premium-name')"
+    >
       <div class="modal-body">
         <n-input
           v-model:value="playerInput"
@@ -738,17 +741,19 @@ onMounted(async () => {
             <template #icon><IconSearch /></template>{{ $t("skins.fetch-and-save") }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
-    <n-modal
-      :auto-focus="false" v-model:show="offlineHintShow" preset="card" :title="$t('skins.offline-apply')" style="max-width: 420px;">
+    <app-sheet
+      v-model:show="offlineHintShow"
+      :title="$t('skins.offline-apply')"
+    >
       <div class="modal-body">
         <p class="offline-hint-text">{{ $t("skins.offline-apply-desc") }}</p>
         <div class="modal-actions">
           <n-button type="primary" @click="offlineHintShow = false">{{ $t("crash-dialog.got-it") }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <Teleport to="body">
       <Transition name="cape">
@@ -786,8 +791,10 @@ onMounted(async () => {
       </Transition>
     </Teleport>
 
-    <n-modal
-      :auto-focus="false" v-model:show="renameModalShow" preset="card" :title="$t('skins.named-skin')" style="max-width: 420px;">
+    <app-sheet
+      v-model:show="renameModalShow"
+      :title="$t('skins.named-skin')"
+    >
       <div class="modal-body">
         <n-input
           v-model:value="renameInput"
@@ -799,7 +806,7 @@ onMounted(async () => {
           <n-button type="primary" @click="confirmRename">{{ $t("common.save") }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

@@ -3,13 +3,14 @@ import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import { fmtSize } from "../utils/format";
 import { useRoute, useRouter } from "vue-router";
-import { NInput, NInputNumber, NCheckbox, NSwitch, NSelect, NModal, useMessage } from "naive-ui";
+import { NInput, NInputNumber, NCheckbox, NSwitch, NSelect, useMessage } from "naive-ui";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
 import { useServersStore } from "../stores/servers";
 import ServerFileManager from "../components/ServerFileManager.vue";
 import { CORE_COLORS, CORE_LABELS } from "../utils/cores";
+import AppSheet from "../ui/AppSheet.vue";
 import {
   IconBox,
   IconChevronLeft,
@@ -851,12 +852,9 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 配置文件编辑器 -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="editor !== null"
-      preset="card"
       :title="editor?.name ?? ''"
-      style="width: 780px; max-width: 94vw"
       @update:show="(v: boolean) => { if (!v) editor = null; }"
     >
       <div v-if="editor" class="editor-body">
@@ -882,7 +880,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <!-- 删除确认。Teleport 到 body 的原因见 FileManager `确认弹窗` 注释：
          `.body` 是层叠上下文，而 `.mobile-nav` 是它的兄弟，会恒在遮罩之上。 -->

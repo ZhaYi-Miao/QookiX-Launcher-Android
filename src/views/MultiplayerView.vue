@@ -5,13 +5,14 @@ import { fmtBytes } from "../utils/format";
 import { CORE_COLORS, CORE_LABELS } from "../utils/cores";
 import { isAprilFools } from "../utils/versions";
 import { useRouter } from "vue-router";
-import { NModal, NInput, NProgress, useMessage } from "naive-ui";
+import { NInput, NProgress, useMessage } from "naive-ui";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { useAccountsStore } from "../stores/accounts";
 import { useServersStore } from "../stores/servers";
 import type { ServerCore, TerracottaDownloadProgress, TerracottaInfo } from "../types";
+import AppSheet from "../ui/AppSheet.vue";
 import {
   IconBox,
   IconCheck,
@@ -431,11 +432,11 @@ onMounted(async () => {
   }
 });
 
-// 标题栏的“创建服务器”按钮仅在“服务器”标签页显示
+// 标题栏的"创建服务器"按钮仅在"服务器"标签页显示
 watch(tab, (v) => servers.setCanCreate(v === "servers"), { immediate: true });
 onUnmounted(() => servers.setCanCreate(false));
 
-// 响应标题栏的“创建服务器”按钮
+// 响应标题栏的"创建服务器"按钮
 watch(
   () => servers.createRequest,
   (n) => {
@@ -751,12 +752,9 @@ onUnmounted(() => stopTcPoll());
     </template>
 
     <!-- 创建服务器（仅名称 / 核心 / 版本）-->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="dialog !== null"
-      preset="card"
       :title="$t('title-bar.new-server')"
-      style="width: 560px; max-width: 92vw"
       @update:show="(v: boolean) => { if (!v) dialog = null; }"
     >
       <div v-if="dialog" class="dialog-body">
@@ -819,15 +817,12 @@ onUnmounted(() => stopTcPoll());
           </button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <!-- 删除确认 -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="confirmState !== null"
-      preset="card"
       :title="$t('multiplayer.delete-server')"
-      style="width: 420px; max-width: 92vw"
       @update:show="(v: boolean) => { if (!v) confirmState = null; }"
     >
       <div v-if="confirmState" class="confirm-body">
@@ -837,17 +832,14 @@ onUnmounted(() => stopTcPoll());
           <button class="btn danger" @click="doDelete">{{ $t("common.delete") }}</button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <!-- 核心下载进度 -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="installing !== null"
-      preset="card"
       :title="$t('multiplayer.preparing-server')"
-      style="width: 460px; max-width: 92vw"
       :mask-closable="false"
-      :close-on-esc="false"
+      :closable="false"
     >
       <div v-if="installing" class="install-body">
         <div class="install-spin"><IconServer /></div>
@@ -867,7 +859,7 @@ onUnmounted(() => stopTcPoll());
           </span>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

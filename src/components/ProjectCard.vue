@@ -360,6 +360,10 @@ async function copyName() {
   cursor: pointer;
   font-family: inherit;
   transition: filter 0.12s;
+  /* 竖屏更窄：作为 flex 子项被压缩时，「安装」会竖排成两行（实测）。
+     按钮文字不折行、也不参与收缩 —— 空间不够时让同行别的元素先让。 */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .install-btn:hover {
   filter: brightness(1.1);

@@ -9,7 +9,7 @@
 import { t as $t } from "../../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, NInput, NModal, useMessage } from "naive-ui";
+import { NButton, NInput, useMessage } from "naive-ui";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { pickFile as open } from "../../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -28,6 +28,7 @@ import {
   IconTrash,
 } from "../icons";
 import type { ContentItem, ProjectVersion, UpdateInfo } from "../../types";
+import AppSheet from "../../ui/AppSheet.vue";
 
 const props = defineProps<{
   instanceId: string;
@@ -481,14 +482,10 @@ defineExpose({
     </div>
 
     <!-- confirm dialog -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       :show="confirmState !== null"
-      preset="card"
       :title="confirmState?.title ?? ''"
-      style="width: 420px; max-width: 92vw"
       :mask-closable="true"
-      :close-on-esc="true"
       @update:show="(v: boolean) => { if (!v) confirmState = null; }"
       @mask-click="confirmState = null"
     >
@@ -499,17 +496,13 @@ defineExpose({
           <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
 
     <!-- switch version -->
-    <n-modal
-      :auto-focus="false"
+    <app-sheet
       v-model:show="switchState.show"
-      preset="card"
       :title="$t('instance-content.switch-version-to', { p1: switchState.item?.record.name ?? switchState.item?.record.filename ?? '' })"
-      style="width: 520px; max-width: 94vw"
       :mask-closable="true"
-      :close-on-esc="true"
       @mask-click="switchState.show = false"
     >
       <div ref="switchCardRef" class="sv-body">
@@ -537,7 +530,7 @@ defineExpose({
           >{{ $t("instance-content.switch") }}</n-button>
         </div>
       </div>
-    </n-modal>
+    </app-sheet>
   </div>
 </template>
 

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, reactive, ref, watch } from "vue";
-import { NButton, NInput, NModal, NPopover, useDialog, useMessage } from "naive-ui";
+import { NButton, NInput, NPopover, useDialog, useMessage } from "naive-ui";
 import { useAccountsStore } from "../stores/accounts";
 import { loadOfflineSkin } from "../composables/useOfflineSkin";
 import { api } from "../api";
 import MsLoginDialog from "./MsLoginDialog.vue";
 import { IconCheck, IconChevronDown, IconTrash, IconUser, IconPlus } from "./icons";
 import type { Account } from "../types";
+import AppSheet from "../ui/AppSheet.vue";
 
 const props = defineProps<{ collapsed?: boolean }>();
 
@@ -302,12 +303,9 @@ function typeLabel(a: Account) {
   </n-popover>
 
   <!-- offline account name dialog -->
-  <n-modal
-      :auto-focus="false"
+  <app-sheet
     v-model:show="showOfflineDialog"
-    preset="card"
     :title="$t('account-chip.add-offline')"
-    style="width: 380px; max-width: 90vw"
   >
     <div class="acctm-offline-box">
       <n-input
@@ -325,7 +323,7 @@ function typeLabel(a: Account) {
         <n-button type="primary" :loading="addingOffline" @click="addOffline">{{ $t("account-chip.add") }}</n-button>
       </div>
     </template>
-  </n-modal>
+  </app-sheet>
 
   <MsLoginDialog />
 </template>
