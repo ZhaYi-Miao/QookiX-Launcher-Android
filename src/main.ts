@@ -4,6 +4,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import App from "./App.vue";
 import router from "./router";
 import "./styles.css";
+// Vant（移动端组件库）基础样式 + 主题映射。
+// 顺序：先库样式，再我们的覆盖（vant.css 里全是 --van-* 变量映射，必须后写才生效）。
+import "vant/lib/index.css";
+import "./vant.css";
 
 // ── 输入法统一设置（安卓 IME 的自动大写 / 拼写替换）────────────────────
 // 安卓输入法默认 `autocapitalize=sentences` 并且会做拼写替换 ——

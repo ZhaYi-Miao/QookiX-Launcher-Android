@@ -15,7 +15,13 @@ import { useTasksStore } from "../stores/tasks";
 import { useSettingsStore } from "../stores/settings";
 import AccountChip from "./AccountChip.vue";
 import { useIsMobile } from "../composables/useMediaQuery";
-import { t } from "../i18n";
+import { t as $t } from "../i18n";
+import {
+  Tabbar as VanTabbar,
+  TabbarItem as VanTabbarItem,
+  Sidebar as VanSidebar,
+  SidebarItem as VanSidebarItem,
+} from "../ui/vant";
 
 const route = useRoute();
 const isMobile = useIsMobile();
@@ -38,15 +44,15 @@ defineProps<{ side?: "bottom" | "left" }>();
 // 新闻是可关闭的次要入口，启用时并入（总宽度靠 flex 压缩，不会溢出）。
 const nav = computed(() => {
   const list = [
-    { name: "home", label: t("nav.home"), icon: IconHome, to: "/" },
-    { name: "instances", label: t("nav.instances"), icon: IconGrid, to: "/instances" },
-    { name: "browse", label: t("nav.browse"), icon: IconCompass, to: "/browse" },
-    { name: "multiplayer", label: t("nav.multiplayer"), icon: IconUsers, to: "/multiplayer" },
-    { name: "skins", label: t("nav.skins"), icon: IconSkin, to: "/skins" },
-    { name: "settings", label: t("nav.settings"), icon: IconSettings, to: "/settings" },
+    { name: "home", label: $t("nav.home"), icon: IconHome, to: "/" },
+    { name: "instances", label: $t("nav.instances"), icon: IconGrid, to: "/instances" },
+    { name: "browse", label: $t("nav.browse"), icon: IconCompass, to: "/browse" },
+    { name: "multiplayer", label: $t("nav.multiplayer"), icon: IconUsers, to: "/multiplayer" },
+    { name: "skins", label: $t("nav.skins"), icon: IconSkin, to: "/skins" },
+    { name: "settings", label: $t("nav.settings"), icon: IconSettings, to: "/settings" },
   ];
   if (settingsStore.settings?.show_news ?? true) {
-    list.splice(3, 0, { name: "news", label: t("nav.news"), icon: IconNewspaper, to: "/news" });
+    list.splice(3, 0, { name: "news", label: $t("nav.news"), icon: IconNewspaper, to: "/news" });
   }
   return list;
 });
@@ -64,40 +70,63 @@ function isActive(n: { to: string }) {
   }
   return route.path.startsWith(n.to);
 }
+
+/** 当前页对应的入口名（Vant 的 v-model 认这个）。都不匹配时留空 = 无高亮。 */
+const activeName = computed(() => nav.value.find((n) => isActive(n))?.name ?? "");
 </script>
 
 <template>
   <nav class="mobile-nav" :class="{ 'nav-left': side === 'left' }">
-    <router-link
-      v-for="n in nav"
-      :key="n.name"
-      :to="n.to"
-      class="mobile-nav-item"
-      :class="{ active: isActive(n) }"
-      :title="n.label"
-      :aria-label="n.label"
+    <!-- 底部横条：Vant Tabbar。
+         定位与挖孔避让**仍由外层 .mobile-nav 负责**（fixed + 安全区 + 左右让开），
+         所以这里 fixed / safe-area 都关掉，Tabbar 只负责铺满并画图标+文字。 -->
+    <van-tabbar
+      v-if="side !== 'left'"
+      v-model="activeName"
+      :fixed="false"
+      :safe-area-inset-bottom="false"
+      :border="false"
+      class="mn-bar"
     >
-      <component :is="n.icon" class="mobile-nav-icon" />
-      <span class="mobile-nav-label">{{ n.label }}</span>
-    </router-link>
-    <router-link
-      to="/downloads"
-      class="mobile-nav-item"
-      :class="{ active: route.path.startsWith('/downloads') }"
-      :title="t('nav.downloads')"
-      :aria-label="t('nav.downloads')"
-    >
-      <IconDownload class="mobile-nav-icon" />
-      <span class="mobile-nav-label">{{ t("nav.downloads") }}</span>
-      <span
-        v-if="downloadCount > 0"
-        class="mobile-nav-badge"
-      >{{ downloadCount }}</span>
-    </router-link>
+      <van-tabbar-item v-for="n in nav" :key="n.name" :name="n.name" :to="n.to">
+        <template #icon>
+          <component :is="n.icon" class="mn-icon" />
+        </template>
+        {{ n.label }}
+      </van-tabbar-item>
+      <van-tabbar-item
+        name="downloads"
+        to="/downloads"
+        :badge="downloadCount > 0 ? String(downloadCount) : ''"
+      >
+        <template #icon>
+          <IconDownload class="mn-icon" />
+        </template>
+        {{ $t("nav.downloads") }}
+      </van-tabbar-item>
+    </van-tabbar>
 
-    <!-- 账号：从标题栏搬到底部导航（横屏手机上底栏是固定的，标题栏还要留给当前页的操作） -->
-    <div class="mobile-nav-item mobile-nav-account">
-      <AccountChip v-if="isMobile" :collapsed="true" />
+    <!-- 左侧竖栏：Vant Sidebar（等分布满高度，永不滚动，见 .nav-left 的 overflow） -->
+    <van-sidebar v-else v-model="activeName" class="mn-rail">
+      <van-sidebar-item v-for="n in nav" :key="n.name" :name="n.name" :to="n.to">
+        <template #title>
+          <component :is="n.icon" class="mn-icon" />
+        </template>
+      </van-sidebar-item>
+      <van-sidebar-item
+        name="downloads"
+        to="/downloads"
+        :badge="downloadCount > 0 ? String(downloadCount) : ''"
+      >
+        <template #title>
+          <IconDownload class="mn-icon" />
+        </template>
+      </van-sidebar-item>
+    </van-sidebar>
+
+    <!-- 账号：从标题栏搬到导航栏（横屏手机上底栏是固定的，标题栏还要留给当前页的操作） -->
+    <div v-if="isMobile" class="mobile-nav-account">
+      <AccountChip :collapsed="true" />
     </div>
   </nav>
 </template>
@@ -112,7 +141,6 @@ function isActive(n: { to: string }) {
   right: 0;
   height: var(--nav-h, 56px);
   align-items: center;
-  justify-content: space-around;
   background: color-mix(in srgb, var(--bg-1) 92%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -126,20 +154,17 @@ function isActive(n: { to: string }) {
 /* 左侧竖栏形态（设置 → 导航栏位置）。
    好处：横屏手机的可用高度只有约 384px，底栏要吃掉约 70px；挪到左侧后
    这段高度全部还给内容区，而横向空间（853px）本来就用不完。
-   项目用等高分布（flex:1）而不是写死高度：9 个入口在 384px 高的机器上
-   正好铺满、不用滚动；更矮的机器上等分自动压缩。
+   栏体**顶到屏幕最左缘**，避让宽度 --nav-offset 由用户在校准遮罩里拖线决定
+   （0 = 紧贴边缘）：它同时作用于「栏总宽」与「padding-left」，即挖孔区在
+   **栏内部**让开、图标整体右移，而背景不断。
    顶部从标题栏（40px）以下开始，避免盖住页面标题。 */
 .mobile-nav.nav-left {
-  /* 标题栏高 40px + 顶部安全区（竖屏有顶部挖孔时标题栏会变高，跟着下移） */
   top: calc(40px + var(--safe-t, 0px));
   bottom: 0;
-  /* **顶到屏幕最左缘**：栏体背景一直铺到 x=0（不留空白条）。
-     避让宽度 --nav-offset 由用户在校准遮罩里拖线决定（0 = 紧贴边缘）：
-     它同时作用于「栏总宽」与「padding-left」，即挖孔区在**栏内部**让开，
-     图标整体右移，而背景不断 —— 两全。 */
   left: 0;
   width: calc(var(--nav-w, 64px) + var(--nav-offset, 0px));
   height: auto;
+  /* 图标列之外还要给账号头像留位置，所以整体是纵向 flex */
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -152,31 +177,52 @@ function isActive(n: { to: string }) {
      入口等分压缩已经保证 9 项在最低的机器上也放得下。 */
   overflow: hidden;
 }
-.mobile-nav.nav-left .mobile-nav-item {
-  /* 弹性等分：无论屏幕多矮都平均分，永不溢出、永不出现滚动条 */
-  flex: 1 1 0;
-  height: auto;
+
+/* Tabbar / Sidebar 铺满外层容器 */
+.mn-bar,
+.mn-rail {
+  width: 100%;
+  background: transparent;
+}
+.mn-rail {
+  /* 等分铺满剩余高度（左侧栏那一列），与账号头像共享纵向空间 */
+  flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mn-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* 侧栏项：等分高度 + 居中（Vant 默认是内容高度、左对齐，不适合竖排图标栏） */
+.mn-rail :deep(.van-sidebar-item) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px;
   border-radius: 12px;
 }
-/* 没有文字说明，激活态必须比底栏更明显：加一层品牌色胶囊 */
-.mobile-nav.nav-left .mobile-nav-item.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+.mn-rail :deep(.van-sidebar-item__text) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
 }
-.mobile-nav.nav-left .mobile-nav-label {
-  display: none;
-}
-.mobile-nav.nav-left .mobile-nav-badge {
-  top: 3px;
-  right: 6px;
-}
-/* 账号头像：折叠态的容器是 48×48，塞进 ~35px 高的项里会被裁成**非正方形**，
+
+/* 账号头像：折叠态容器是 48×48，塞进 ~35px 高的项里会被裁成**非正方形**，
    非常难看。左栏里强制小号正方形，并去掉卡片底色（贴着栏背景即可）。
    必须用 :deep() —— AccountChip 是子组件，它内部的 .avatar 不带本组件的
    scoped 属性，普通选择器根本匹配不上（实测头像仍是 48×48）。 */
-.mobile-nav.nav-left .mobile-nav-account {
+.mobile-nav-account {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px;
+  min-width: 0;
 }
 .mobile-nav.nav-left :deep(.acct-chip) {
   height: auto;
@@ -194,66 +240,8 @@ function isActive(n: { to: string }) {
 :global(.has-bg) .mobile-nav {
   background: var(--panel);
 }
-.mobile-nav-account {
-  align-items: center;
-  justify-content: center;
-}
-.mobile-nav-item {
-  position: relative;
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  /* 手机上最多 7 个入口，必须可压缩，否则图标会溢出被裁切 */
-  min-width: 0;
-  overflow: hidden;
-  height: 48px;
-  padding: 4px 2px;
-  border-radius: 10px;
-  color: var(--text-3);
-  font-size: 10px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: color 0.14s, background 0.14s;
-  -webkit-tap-highlight-color: transparent;
-}
-.mobile-nav-item:active {
-  transform: scale(0.92);
-}
-.mobile-nav-item.active {
-  color: var(--accent);
-}
-.mobile-nav-icon {
-  width: 20px;
-  height: 20px;
-}
-.mobile-nav-label {
-  line-height: 1;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mobile-nav-badge {
-  position: absolute;
-  top: 2px;
-  right: 4px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
-  pointer-events: none;
-}
 
-/* 仅在「窄屏 + 竖屏」显示底部导航；横屏与宽屏继续用桌面侧边栏（阈值与 App.vue 保持一致） */
+/* 仅在「窄屏 + 竖屏」显示导航栏；横屏与宽屏继续用桌面侧边栏（阈值与 App.vue 保持一致） */
 @media (max-width: 1100px), (pointer: coarse) {
   .mobile-nav {
     display: flex;

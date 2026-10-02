@@ -289,6 +289,9 @@ onBeforeUnmount(() => {
                 <CrashDialog />
                 <RendererHintDialog />
                 <FirstRunSetup />
+                <!-- Vant 弹层挂载点：放在 .app 内（而不是 body），这样 #app 上的 zoom
+                     能作用到弹层，界面缩放时弹层与页面同步大小（见 src/ui/vant.ts）。 -->
+                <div id="van-layer"></div>
               </div>
             </n-notification-provider>
           </n-message-provider>
