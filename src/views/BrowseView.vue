@@ -2,7 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { NButton, NDrawer, NDrawerContent, useMessage, type SelectOption } from "naive-ui";
+import { useMessage, type SelectOption } from "naive-ui";
 import { api } from "../api";
 import InstallDialog from "../components/InstallDialog.vue";
 import ProjectCard from "../components/ProjectCard.vue";
@@ -25,6 +25,7 @@ import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import type { Instance, ProjectDependency, ProjectHit } from "../types";
 import AppInput from "../ui/AppInput.vue";
 import AppSelect from "../ui/AppSelect.vue";
+import AppSheet from "../ui/AppSheet.vue";
 
 const message = useMessage();
 const route = useRoute();
@@ -621,8 +622,9 @@ onMounted(async () => {
     </div>
     </div>
 
-    <n-drawer v-model:show="showFilter" :width="330" placement="right">
-      <n-drawer-content :title="$t('browse.filter')" closable>
+    <!-- 筛选：手机上用底部弹层（原右侧抽屉是桌面形态，竖屏里只占 330px 宽的一条还
+         挡住内容）。底部操作行走 AppSheet 的 #footer，会钉在弹层底部。 -->
+    <app-sheet v-model:show="showFilter" :title="$t('browse.filter')">
         <div class="filter-group">
           <label>{{ $t("browse.game-version") }}</label>
           <app-select v-model:value="gameVersion" :options="displayVersionOptions" size="small" />
@@ -652,12 +654,13 @@ onMounted(async () => {
           </div>
           <p v-if="provider === 'all'" class="filter-hint">{{ $t("browse.category-note") }}</p>
         </div>
+      <template #footer>
         <div class="filter-actions">
-          <n-button size="small" @click="resetFilters">{{ $t("browse.reset") }}</n-button>
-          <n-button size="small" type="primary" @click="showFilter = false">{{ $t("common.done") }}</n-button>
+          <button class="fa-btn" @click="resetFilters">{{ $t("browse.reset") }}</button>
+          <button class="fa-btn primary" @click="showFilter = false">{{ $t("common.done") }}</button>
         </div>
-      </n-drawer-content>
-    </n-drawer>
+      </template>
+    </app-sheet>
 
     <InstallDialog v-model:show="showInstall" :project="installTarget" :default-instance="selectedInstanceId" @install-dep="openInstallDep" />
   </div>
@@ -812,7 +815,24 @@ onMounted(async () => {
 .filter-actions {
   display: flex;
   gap: 10px;
-  margin-top: 8px;
+}
+/* 弹层底部的操作按钮（原来是 naive 的 n-button）：等宽通栏 + 触控高度 */
+.filter-actions .fa-btn {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.filter-actions .fa-btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #1a1208;
 }
 .cf-hint {
   padding: 12px 16px;
