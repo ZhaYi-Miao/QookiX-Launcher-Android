@@ -131,7 +131,8 @@ const emit = defineEmits<{ (e: "update:show", v: boolean): void }>();
    手机上主操作（「创建」「保存」）不能要滚动才看见。用 sticky 而不是 flex 布局，
    这样长内容照样能滚过去。负 margin 是为了抵消 .sheet-body 的内边距、让条铺满。 */
 .sheet-body :deep(.dialog-foot:last-child),
-.sheet-body :deep(.modal-actions:last-child) {
+.sheet-body :deep(.modal-actions:last-child),
+.sheet-body :deep(.id-footer:last-child) {
   position: sticky;
   bottom: -16px;
   margin: 12px -18px -16px;

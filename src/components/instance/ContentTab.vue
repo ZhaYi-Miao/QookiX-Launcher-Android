@@ -29,6 +29,7 @@ import {
 } from "../icons";
 import type { ContentItem, ProjectVersion, UpdateInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
+import AppPopup from "../../ui/AppPopup.vue";
 import AppInput from "../../ui/AppInput.vue";
 
 const props = defineProps<{
@@ -59,6 +60,24 @@ const loadingContent = ref(false);
 
 // 搜索过滤：匹配文件名 / 名称 / 中文名 / slug
 const filterText = ref("");
+/** 条目操作面板的目标（手机：点行弹底部清单，替代桌面那排小图标按钮） */
+const actionTarget = ref<ContentItem | null>(null);
+
+function openActions(item: ContentItem) {
+  actionTarget.value = item;
+}
+
+/** 执行动作并关闭面板（面板里点完还停在那会挡住结果） */
+async function runAction(fn: () => unknown) {
+  const target = actionTarget.value;
+  actionTarget.value = null;
+  try {
+    await fn();
+  } finally {
+    void target;
+  }
+}
+
 const filteredItems = computed(() => {
   const q = filterText.value.trim().toLowerCase();
   if (!q) return contentItems.value;
@@ -409,7 +428,12 @@ defineExpose({
       </template>
     </div>
     <div v-else class="content-list glass">
-      <div v-for="item in filteredItems" :key="item.record.filename" class="c-row">
+      <div
+        v-for="item in filteredItems"
+        :key="item.record.filename"
+        class="c-row"
+        @click="openActions(item)"
+      >
         <div class="c-icon">
           <img
             v-if="item.record.icon && !iconErrors.has(item.record.filename)"
@@ -435,52 +459,52 @@ defineExpose({
             <span v-if="!item.exists" class="missing">{{ $t("instance-content.file-missing") }}</span>
           </div>
         </div>
-        <div class="c-actions">
-          <button
-            v-if="updates[item.record.filename]"
-            class="icon-btn ok"
-            :title="$t('instance-content.update-to', { p1: updates[item.record.filename].latestVersion })" :aria-label="$t('instance-content.update-to', { p1: updates[item.record.filename].latestVersion })"
-            @click="applyUpdate(updates[item.record.filename])"
-          >
-            <IconDownload />
-          </button>
-          <button
-            v-if="(item.record.source === 'modrinth' || item.record.source === 'curseforge') && item.record.project_id"
-            class="icon-btn"
-            :title="$t('instance-content.switch-version')" :aria-label="$t('instance-content.switch-version')"
-            @click="openSwitchVersion(item)"
-          >
-            <IconRepeat />
-          </button>
-          <button
-            class="icon-btn"
-            :title="$t('instance-content.search-in-browse')" :aria-label="$t('instance-content.search-in-browse')"
-            @click="router.push({ name: 'browse', query: buildModSearchQuery(item) })"
-          >
-            <IconSearch />
-          </button>
-          <button
-            v-if="item.record.enabled"
-            class="icon-btn warn"
-            :title="$t('instance-content.disable')" :aria-label="$t('instance-content.disable')"
-            @click="toggleContent(item)"
-          >
-            <IconClose />
-          </button>
-          <button
-            v-else
-            class="icon-btn ok"
-            :title="$t('instance-content.enable')" :aria-label="$t('instance-content.enable')"
-            @click="toggleContent(item)"
-          >
-            <IconCheck />
-          </button>
-          <button class="icon-btn danger" :title="$t('account-chip.positive-text')" :aria-label="$t('account-chip.positive-text')" @click="removeContent(item)">
-            <IconTrash />
-          </button>
-        </div>
+        <!-- 手机：条目不再挂 5 个图标按钮（桌面式的密集操作簇，手指点不准也看不清），
+             改成「点整行 → 底部操作面板」，每项都是带文字的整行按钮。 -->
+        <button class="c-more" :aria-label="$t('instance-content.switch-version')" @click.stop="openActions(item)">
+          <IconMoreVertical />
+        </button>
       </div>
     </div>
+
+    <!-- 条目操作面板：手机上的「每行操作」就该是这样一块从底部升起的清单 -->
+    <app-popup
+      :show="actionTarget !== null"
+      position="bottom"
+      round
+      @update:show="(v: boolean) => { if (!v) actionTarget = null; }"
+    >
+      <div v-if="actionTarget" class="ct-actions">
+        <div class="ct-actions-title text-ellipsis">
+          {{ actionTarget.record.cn_name ?? actionTarget.record.name ?? actionTarget.record.filename }}
+        </div>
+        <button
+          v-if="updates[actionTarget.record.filename]"
+          class="ct-act primary"
+          @click="runAction(() => applyUpdate(updates[actionTarget!.record.filename]))"
+        >
+          <IconDownload />{{ $t("instance-content.update-to", { p1: updates[actionTarget.record.filename].latestVersion }) }}
+        </button>
+        <button
+          v-if="(actionTarget.record.source === 'modrinth' || actionTarget.record.source === 'curseforge') && actionTarget.record.project_id"
+          class="ct-act"
+          @click="runAction(() => openSwitchVersion(actionTarget!))"
+        >
+          <IconRepeat />{{ $t("instance-content.switch-version") }}
+        </button>
+        <button class="ct-act" @click="runAction(() => router.push({ name: 'browse', query: buildModSearchQuery(actionTarget!) }))">
+          <IconSearch />{{ $t("instance-content.search-in-browse") }}
+        </button>
+        <button class="ct-act" @click="runAction(() => toggleContent(actionTarget!))">
+          <IconCheck v-if="!actionTarget.record.enabled" />
+          <IconClose v-else />
+          {{ actionTarget.record.enabled ? $t("instance-content.disable") : $t("instance-content.enable") }}
+        </button>
+        <button class="ct-act danger" @click="runAction(() => removeContent(actionTarget!))">
+          <IconTrash />{{ $t("account-chip.positive-text") }}
+        </button>
+      </div>
+    </app-popup>
 
     <!-- confirm dialog -->
     <app-sheet

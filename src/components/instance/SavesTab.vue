@@ -22,9 +22,11 @@ import {
   IconPlay,
   IconRefresh,
   IconTrash,
+  IconMoreVertical,
 } from "../icons";
 import type { ServerEntry, ServerStatus, WorldBackupInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
+import AppPopup from "../../ui/AppPopup.vue";
 
 const props = defineProps<{ instanceId: string }>();
 
@@ -112,6 +114,20 @@ const fileItems = ref<
 >([]);
 const loadingFiles = ref(false);
 const launchingWorld = ref("");
+/** 世界操作面板的目标（手机：备份/固定这类次要动作收进底部清单） */
+const worldTarget = ref<{ name: string; icon: string | null } | null>(null);
+
+/** 面板里两个动作：都要先收起面板再执行（否则面板挡住结果与提示） */
+function openWorldBackups() {
+  const w = worldTarget.value;
+  worldTarget.value = null;
+  if (w) openBackups(w.name);
+}
+function toggleWorldPinTarget() {
+  const w = worldTarget.value;
+  worldTarget.value = null;
+  if (w) toggleWorldPin(w);
+}
 
 async function loadFiles() {
   const seq = ++loadSeqFiles;
@@ -391,27 +407,17 @@ watch(
               <span v-if="f.modified" class="ver">{{ fmtDate(f.modified) }}</span>
             </div>
           </div>
+          <!-- 手机：主操作（启动）留在行内，备份/固定这类次要动作收进「更多」面板 -->
           <div class="c-actions">
-            <button
-              class="mini-btn"
-              :title="$t('instance-saves.backup-restore')" :aria-label="$t('instance-saves.backup-restore')"
-              @click="openBackups(f.name)"
-            >
-              <IconBox />{{ $t("instance-saves.backup") }}</button>
-            <button
-              class="mini-btn pin"
-              :class="{ active: pins.isPinned(worldPinId(f.name)) }"
-              :title="pins.isPinned(worldPinId(f.name)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')" :aria-label="pins.isPinned(worldPinId(f.name)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')"
-              @click="toggleWorldPin(f)"
-            >
-              <IconMapPin />
-            </button>
             <button
               class="mini-btn play"
               :disabled="!!launchingWorld"
-              @click="launchWorld(f.name)"
+              @click.stop="launchWorld(f.name)"
             >
               <IconPlay /> {{ launchingWorld === f.name ? $t('instance-saves.launching') : $t('instance-saves.launch') }}
+            </button>
+            <button class="world-more" :aria-label="$t('instance-saves.backup-restore')" @click.stop="worldTarget = f">
+              <IconMoreVertical />
             </button>
           </div>
         </div>
@@ -517,6 +523,24 @@ watch(
         </div>
       </div>
     </app-sheet>
+
+    <!-- 世界操作面板（手机形态）：备份/固定这类次要动作从行内小图标挪到这里 -->
+    <app-popup
+      :show="worldTarget !== null"
+      position="bottom"
+      round
+      @update:show="(v: boolean) => { if (!v) worldTarget = null; }"
+    >
+      <div v-if="worldTarget" class="w-actions">
+        <div class="w-title text-ellipsis">{{ worldTarget.name }}</div>
+        <button class="w-act" @click="openWorldBackups">
+          <IconBox />{{ $t("instance-saves.backup-restore") }}
+        </button>
+        <button class="w-act" :class="{ on: pins.isPinned(worldPinId(worldTarget.name)) }" @click="toggleWorldPinTarget">
+          <IconMapPin />{{ pins.isPinned(worldPinId(worldTarget.name)) ? $t("instance-saves.unpin") : $t("instance-saves.pin-home") }}
+        </button>
+      </div>
+    </app-popup>
   </div>
 </template>
 
@@ -787,5 +811,56 @@ watch(
 .bk-del:hover {
   color: #e5534b;
   border-color: rgba(229, 83, 75, 0.5);
+}
+/* 世界行：整行可点 + 主操作（启动）常显 */
+.world-row {
+  min-height: 64px;
+}
+.world-more {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+/* 世界操作面板 */
+.w-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.w-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.w-act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+.w-act.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 手机：备份列表的「还原」是主操作，按钮给足高度 */
+.bk-row .n-button {
+  min-height: 38px;
 }
 </style>

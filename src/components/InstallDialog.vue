@@ -821,8 +821,10 @@ async function install() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 200px;
-  overflow-y: auto;
+  /* 手机：不再自己开小滚动区（200px 高只能看 3 行），版式交给 AppSheet 的
+     整体滚动，列表有多长都能顺畅滑完 */
+  max-height: none;
+  overflow: visible;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 6px;
@@ -835,8 +837,10 @@ async function install() {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-2);
-  padding: 6px 10px;
-  border-radius: 8px;
+  /* 手机：版本行是点选目标，行高按手指给足（原来 6px 内边距只有 ~30px 高） */
+  min-height: 46px;
+  padding: 10px 12px;
+  border-radius: 10px;
   cursor: pointer;
   font-family: inherit;
   text-align: left;
@@ -960,8 +964,18 @@ async function install() {
 }
 .id-footer {
   display: flex;
-  justify-content: flex-end;
   gap: 10px;
+}
+/* 手机：安装是这一步的主操作，两个键平分一行、高度给足（sticky 由 AppSheet 负责）。
+   注意这里用的是全局样式块（弹层内容 teleport 到 #van-layer，scoped 够不到）。 */
+.id-footer .n-button {
+  flex: 1;
+  min-height: 46px;
+  font-size: 15px;
+}
+/* 反馈面板的小按钮也抬到可点高度 */
+.id-feedback-actions .n-button {
+  min-height: 38px;
 }
 </style>
 
