@@ -1,731 +1,264 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onMounted, ref, watch, inject } from "vue";
+import { computed, inject, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
-import InstanceCard from "../components/InstanceCard.vue";
 import { useMessage } from "naive-ui";
-// 弹层统一走 ui/：AppPopup 默认 teleport 到 #van-layer（跳出 .content 的层叠
-// 上下文并跟 zoom 同步），confirmDialog 等 命令式 API 由 ui/vant 包好了 teleport
-import AppPopup from "../ui/AppPopup.vue";
-import { Field as VanField, Button as VanButton, confirmDialog } from "../ui/vant";
-// 必须走 filePicker：插件的 open() 在安卓上返回 SAF 的 content:// URI，
-// 后端拿它当真实路径必然失败（桌面正常，所以只有手机炸）。
-import { pickFile as dialogOpen } from "../composables/filePicker";
-import { api } from "../api";
+import { Button as VanButton } from "vant";
+import InstanceCard from "../components/InstanceCard.vue";
+import { IconPlus } from "../components/icons";
 import type { Instance, InstanceGroup } from "../types";
-import {
-  IconChevronDown,
-  IconChevronRight,
-  IconGrid,
-  IconPlus,
-  IconTrash,
-} from "../components/icons";
+import type { Ref } from "vue";
 
-const instances = useInstancesStore();
 const router = useRouter();
 const message = useMessage();
+const instances = useInstancesStore();
+const pageAction = inject<Ref<{ text: string; run: () => void } | null>>("pageAction");
 
+const PALETTE = ["#e89a4b", "#5ab0ff", "#7ad08a", "#c78aff", "#ff7a90", "#ffd166", "#4ecdc4", "#a0a4b8"];
 const FILTER_KEY = "qookix.instances.filter";
-const COLLAPSE_KEY = "qookix.instances.collapsedGroups";
 
-const PALETTE = [
-  "#e89a4b",
-  "#5ab0ff",
-  "#7ad08a",
-  "#c78aff",
-  "#ff7a90",
-  "#ffd166",
-  "#4ecdc4",
-  "#a0a4b8",
-];
+const filter = ref<string>(localStorage.getItem(FILTER_KEY) ?? "all");
+const showNewGroup = ref(false);
+const groupName = ref("");
+const groupColor = ref<string | null>(null);
+const savingGroup = ref(false);
+const moving = ref<Instance | null>(null);
 
-/** "all" | "ungrouped" | 分组 id */
-const filter = ref<string>("all");
-const collapsed = ref<Record<string, boolean>>({});
-const movingInstance = ref<Instance | null>(null);
+const totalCount = computed(() => instances.instances.length);
 
-type GroupDialog = {
-  mode: "create" | "rename";
-  id: string | null;
-  name: string;
-  color: string | null;
-};
-const groupDialog = ref<GroupDialog | null>(null);
-const groupSaving = ref(false);
-
-/**
- * 危险操作确认：Vant 命令式对话框（替代桌面式居中卡片弹窗）。
- * 返回 true = 用户点了确认；取消 / 点遮罩 / 按返回走 reject，这里吞掉返回 false。
- */
-function askConfirm(o: {
-  title: string;
-  content: string;
-  positiveText: string;
-}): Promise<boolean> {
-  return confirmDialog({
-    title: o.title,
-    message: o.content,
-    confirmButtonText: o.positiveText,
-    cancelButtonText: $t("common.cancel"),
-    confirmButtonColor: "#e5534b",
-  })
-    .then(() => true)
-    .catch(() => false);
-}
-
-// ---- 导入实例分享包 ----
-const importingPack = ref(false);
-
-/**
- * 分享包导入 / 导出后端**不存在**：`import_instance_pack`、`export_instance_pack`
- * 在 `api.ts` 里被标为未实现，Rust 的命令注册表里也只有 `import_modpack`
- * （见 `lib.rs` 的 "Modpack commands" 段）。先隐藏入口，避免用户点进去只拿到报错；
- * 后端补齐后把这里打开即可恢复。
- */
-const INSTANCE_PACK_ENABLED = false;
-async function importPack() {
-  const file = await dialogOpen({
-    multiple: false,
-    filters: [{ name: $t("instances.share-pack"), extensions: ["qkxinst"] }],
-  });
-  if (!file) return;
-  importingPack.value = true;
-  try {
-    const r = await api.importInstancePack(file as string);
-    message.success(
-      r.pendingDownloads > 0
-        ? $t("instances.import-downloading", { p1: r.instance.name, p2: r.pendingDownloads })
-        : $t("instances.import-installing", { p1: r.instance.name })
-    );
-    await instances.refresh();
-    router.push(`/instance/${r.instance.id}`);
-  } catch (e) {
-    message.error(String(e));
-  } finally {
-    importingPack.value = false;
-  }
-}
-
-function loadCollapsed() {
-  try {
-    const raw = localStorage.getItem(COLLAPSE_KEY);
-    collapsed.value = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-  } catch {
-    collapsed.value = {};
-  }
-}
-
-function saveCollapsed() {
-  try {
-    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed.value));
-  } catch {
-    /* localStorage 不可用时忽略 */
-  }
-}
-
-onMounted(() => {
-  loadCollapsed();
-  const saved = localStorage.getItem(FILTER_KEY);
-  if (saved) filter.value = saved;
-  instances.load();
-});
-
-watch(filter, (v) => {
-  if (v === "all") localStorage.removeItem(FILTER_KEY);
-  else localStorage.setItem(FILTER_KEY, v);
-});
-
-// 分组被删除后回退到"全部"，避免出现空页面
-watch(
-  () => instances.groups.map((g) => g.id).join(","),
-  () => {
-    if (filter.value === "all" || filter.value === "ungrouped") return;
-    if (!instances.groups.some((g) => g.id === filter.value)) filter.value = "all";
-  }
-);
-
-function toggleCollapse(id: string) {
-  collapsed.value = { ...collapsed.value, [id]: !collapsed.value[id] };
-  saveCollapsed();
-}
-
-/** 全部视图下的展示顺序：各分组（按后端顺序）+ 未分组收尾 */
 const sections = computed(() => {
-  const list = instances.groups.map((g) => ({
-    key: g.id,
-    group: g as InstanceGroup | null,
-    name: g.name,
-    color: g.color,
-    items: instances.inGroup(g.id),
-  }));
-  list.push({
-    key: "__ungrouped__",
-    group: null,
-    name: $t("create-instance.ungrouped"),
-    color: null,
-    items: instances.ungrouped,
-  });
+  if (filter.value !== "all") return [];
+  const list: { key: string; name: string; color: string | null; group: InstanceGroup | null; items: Instance[] }[] = instances.groups
+    .map((g) => ({ key: g.id, name: g.name, color: g.color as string | null, group: g, items: instances.inGroup(g.id) }))
+    .filter((s) => s.items.length || s.group);
+  const rest = instances.ungrouped;
+  if (rest.length) list.push({ key: "__ungrouped__", name: $t("create-instance.ungrouped"), color: null, group: null, items: rest });
   return list;
 });
 
-const filtered = computed<Instance[]>(() => {
-  if (filter.value === "all") return instances.instances;
+const filtered = computed(() => {
+  if (filter.value === "all") return [];
   if (filter.value === "ungrouped") return instances.ungrouped;
   return instances.inGroup(filter.value);
 });
 
-const totalCount = computed(() => instances.instances.length);
-
-function openCreateGroup() {
-  groupDialog.value = {
-    mode: "create",
-    id: null,
-    name: "",
-    color: PALETTE[instances.groups.length % PALETTE.length],
-  };
+function setFilter(id: string) {
+  filter.value = id;
+  localStorage.setItem(FILTER_KEY, id);
 }
 
-// 监听标题栏“新建分组”按钮的触发信号
-const groupDialogRequest = inject<{ value: number }>("groupDialogRequest", { value: 0 });
-watch(groupDialogRequest, () => openCreateGroup());
-
-function openRenameGroup(g: InstanceGroup) {
-  groupDialog.value = { mode: "rename", id: g.id, name: g.name, color: g.color };
-}
-
-async function saveGroupDialog() {
-  const d = groupDialog.value;
-  if (!d) return;
-  const name = d.name.trim();
-  if (!name) {
-    message.warning($t("instances.group-name-required"));
-    return;
-  }
-  groupSaving.value = true;
+async function saveGroup() {
+  if (!groupName.value.trim()) return;
+  savingGroup.value = true;
   try {
-    if (d.mode === "create") {
-      await instances.createGroup(name, d.color);
-      message.success($t("instances.group-created", { p1: name }));
-    } else if (d.id) {
-      await instances.renameGroup(d.id, name, d.color);
-      message.success($t("instances.group-updated"));
-    }
-    groupDialog.value = null;
-  } catch (e) {
-    message.error(String(e));
-  } finally {
-    groupSaving.value = false;
-  }
-}
-
-async function confirmDeleteGroup(g: InstanceGroup) {
-  const count = instances.inGroup(g.id).length;
-  const ok = await askConfirm({
-    title: $t("instances.positive-text"),
-    content: count
-      ? $t("instances.delete-group-hint", { p1: g.name, p2: count })
-      : $t("instances.delete-group-confirm", { p1: g.name }),
-    positiveText: $t("instances.positive-text"),
-  });
-  if (!ok) return;
-  try {
-    await instances.deleteGroup(g.id);
+    await instances.createGroup(groupName.value.trim(), groupColor.value);
+    groupName.value = "";
+    groupColor.value = null;
+    showNewGroup.value = false;
     message.success($t("instances.on-ok"));
   } catch (e) {
     message.error(String(e));
+  } finally {
+    savingGroup.value = false;
   }
 }
 
 async function moveTo(groupId: string | null) {
-  const inst = movingInstance.value;
-  if (!inst) return;
+  if (!moving.value) return;
   try {
-    await instances.moveToGroup(inst.id, groupId);
-    const name = groupId ? (instances.groupById(groupId)?.name ?? "") : $t("create-instance.ungrouped");
-    message.success($t("instances.moved-to-group", { p1: inst.name, p2: name }));
-    movingInstance.value = null;
+    await instances.moveToGroup(moving.value.id, groupId);
+    moving.value = null;
   } catch (e) {
     message.error(String(e));
   }
 }
+
+onMounted(() => {
+  if (pageAction) pageAction.value = { text: $t("title-bar.new-instance"), run: () => router.push("/create") };
+});
 </script>
 
 <template>
-  <div class="instances-view">
+  <div class="iv">
     <div v-if="instances.loading" class="loading">{{ $t("file-manager.loading") }}</div>
 
     <template v-else-if="totalCount">
-      <div class="toolbar">
-        <div class="chips">
-          <button
-            class="chip"
-            :class="{ active: filter === 'all' }"
-            @click="filter = 'all'"
-          >{{ $t("install-dialog.all") }}<span class="chip-count">{{ totalCount }}</span>
-          </button>
-          <button
-            v-for="g in instances.groups"
-            :key="g.id"
-            class="chip"
-            :class="{ active: filter === g.id }"
-            @click="filter = g.id"
-          >
-            <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>
-            {{ g.name }}
-            <span class="chip-count">{{ instances.inGroup(g.id).length }}</span>
-          </button>
-          <button
-            class="chip"
-            :class="{ active: filter === 'ungrouped' }"
-            @click="filter = 'ungrouped'"
-          >{{ $t("create-instance.ungrouped") }}<span class="chip-count">{{ instances.ungrouped.length }}</span>
-          </button>
-          <!-- 后端未实现，见 script 里 INSTANCE_PACK_ENABLED 的说明 -->
-          <button
-            v-if="INSTANCE_PACK_ENABLED"
-            class="chip import-chip"
-            :disabled="importingPack"
-            @click="importPack"
-          >
-            <IconPlus />{{ $t("instances.import-share") }}</button>
-        </div>
+      <div class="chips">
+        <button class="chip" :class="{ active: filter === 'all' }" @click="setFilter('all')">
+          {{ $t("install-dialog.all") }}<span class="cc">{{ totalCount }}</span>
+        </button>
+        <button v-for="g in instances.groups" :key="g.id" class="chip" :class="{ active: filter === g.id }" @click="setFilter(g.id)">
+          <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>{{ g.name }}
+          <span class="cc">{{ instances.inGroup(g.id).length }}</span>
+        </button>
+        <button class="chip" :class="{ active: filter === 'ungrouped' }" @click="setFilter('ungrouped')">
+          {{ $t("create-instance.ungrouped") }}<span class="cc">{{ instances.ungrouped.length }}</span>
+        </button>
       </div>
 
-      <!-- 分组视图 -->
-      <div v-if="filter === 'all'" class="groups">
-        <section v-for="s in sections" :key="s.key" class="group-block">
-          <header class="group-head">
-            <button class="group-toggle" @click="toggleCollapse(s.key)">
-              <IconChevronDown v-if="!collapsed[s.key]" />
-              <IconChevronRight v-else />
-              <i class="dot" :style="{ background: s.color || 'var(--text-3)' }"></i>
-              <span class="group-name">{{ s.name }}</span>
-              <span class="group-count">{{ s.items.length }}</span>
-            </button>
-            <div v-if="s.group" class="group-ops">
-              <button class="op" :title="$t('instances.rename-group')" :aria-label="$t('instances.rename-group')" @click="openRenameGroup(s.group)">{{ $t("common.rename") }}</button>
-              <button class="op danger" :title="$t('instances.positive-text')" :aria-label="$t('instances.positive-text')" @click="confirmDeleteGroup(s.group)">
-                <IconTrash />
-              </button>
-            </div>
-          </header>
-          <div v-if="!collapsed[s.key]" class="grid">
-            <InstanceCard
-              v-for="inst in s.items"
-              :key="inst.id"
-              :instance="inst"
-              @move="movingInstance = $event"
-            />
-            <p v-if="!s.items.length" class="group-empty">{{ $t("instances.no-instances") }}</p>
+      <template v-if="filter === 'all'">
+        <section v-for="s in sections" :key="s.key" class="grp">
+          <h2 class="grp-head">
+            <i class="dot" :style="{ background: s.color || 'var(--text-3)' }"></i>{{ s.name }}
+            <span class="grp-n">{{ s.items.length }}</span>
+          </h2>
+          <div class="grid">
+            <InstanceCard v-for="i in s.items" :key="i.id" :instance="i" @move="moving = $event" />
           </div>
         </section>
-      </div>
-
-      <!-- 单分组 / 未分组视图 -->
+      </template>
       <div v-else class="grid">
-        <InstanceCard
-          v-for="inst in filtered"
-          :key="inst.id"
-          :instance="inst"
-          @move="movingInstance = $event"
-        />
-        <p v-if="!filtered.length" class="group-empty">{{ $t("instances.group-empty") }}</p>
+        <InstanceCard v-for="i in filtered" :key="i.id" :instance="i" @move="moving = $event" />
       </div>
     </template>
 
     <div v-else class="empty glass">
-      <div class="empty-icon"><IconGrid /></div>
       <p>{{ $t("instances.empty-hint") }}</p>
-      <button class="btn primary" @click="router.push('/create')">{{ $t("home.create-first") }}</button>
+      <van-button type="primary" @click="router.push('/create')"><IconPlus /> {{ $t("home.create-first") }}</van-button>
     </div>
 
-    <!-- 新建 / 重命名分组：底部弹层（拇指区，表单在竖屏上比居中小窗更顺手） -->
-    <app-popup
-      :show="groupDialog !== null"
-      position="bottom"
-      round
-      @update:show="(v: boolean) => { if (!v) groupDialog = null; }"
-    >
-      <div v-if="groupDialog" class="sheet">
-        <div class="sheet-title">
-          {{ groupDialog.mode === "create" ? $t("title-bar.new-group") : $t("instances.rename-group") }}
+    <app-popup :show="showNewGroup" position="bottom" round @update:show="(v: boolean) => (showNewGroup = v)">
+      <div class="sheet">
+        <div class="sheet-title">{{ $t("title-bar.new-group") }}</div>
+        <app-input v-model:value="groupName" :placeholder="$t('instances.name-hint')" maxlength="40" />
+        <div class="palette">
+          <button v-for="c in PALETTE" :key="c" class="sw" :class="{ on: groupColor === c }" :style="{ background: c }" @click="groupColor = c"></button>
         </div>
-        <div class="dialog-body">
-          <div class="field">
-            <span>{{ $t("instances.name") }}</span>
-            <van-field
-              v-model="groupDialog.name"
-              :placeholder="$t('instances.name-hint')"
-              maxlength="40"
-              @keydown.enter="saveGroupDialog"
-            />
-          </div>
-          <div class="field">
-            <span>{{ $t("instances.color") }}</span>
-            <div class="palette">
-              <button
-                v-for="c in PALETTE"
-                :key="c"
-                class="swatch"
-                :class="{ on: groupDialog.color === c }"
-                :style="{ background: c }"
-                :title="c" :aria-label="c"
-                @click="groupDialog.color = c"
-              ></button>
-            </div>
-          </div>
-        </div>
-        <div class="dialog-foot">
-          <van-button block @click="groupDialog = null">{{ $t("common.cancel") }}</van-button>
-          <van-button block type="primary" :loading="groupSaving" @click="saveGroupDialog">
-            {{ $t("common.save") }}
-          </van-button>
-        </div>
+        <van-button block type="primary" :loading="savingGroup" @click="saveGroup">{{ $t("common.save") }}</van-button>
       </div>
     </app-popup>
 
-    <!-- 移动实例到分组：底部弹层 + 列表选择 -->
-    <app-popup
-      :show="movingInstance !== null"
-      position="bottom"
-      round
-      @update:show="(v: boolean) => { if (!v) movingInstance = null; }"
-    >
-      <div v-if="movingInstance" class="sheet">
+    <app-popup :show="moving !== null" position="bottom" round @update:show="(v: boolean) => { if (!v) moving = null; }">
+      <div v-if="moving" class="sheet">
         <div class="sheet-title">{{ $t("instance-card.move-to-group") }}</div>
-        <div class="move-list">
-          <p class="move-hint">{{ movingInstance.name }}</p>
-          <button
-            class="move-item"
-            :class="{ current: !movingInstance.group }"
-            @click="moveTo(null)"
-          >
-            <i class="dot" style="background: var(--text-3)"></i>
-            <span>{{ $t("create-instance.ungrouped") }}</span>
-          </button>
-          <button
-            v-for="g in instances.groups"
-            :key="g.id"
-            class="move-item"
-            :class="{ current: movingInstance.group === g.id }"
-            @click="moveTo(g.id)"
-          >
-            <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>
-            <span>{{ g.name }}</span>
-          </button>
-          <button class="move-item add" @click="openCreateGroup">
-            <IconPlus />{{ $t("title-bar.new-group") }}</button>
-        </div>
+        <button class="mv" :class="{ cur: !moving.group }" @click="moveTo(null)">{{ $t("create-instance.ungrouped") }}</button>
+        <button v-for="g in instances.groups" :key="g.id" class="mv" :class="{ cur: moving.group === g.id }" @click="moveTo(g.id)">
+          <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>{{ g.name }}
+        </button>
       </div>
     </app-popup>
   </div>
 </template>
 
 <style scoped>
-.toolbar {
+.iv {
+  padding: 4px 16px 16px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 14px;
-  margin-bottom: 18px;
-  flex-wrap: wrap;
+}
+.loading {
+  text-align: center;
+  color: var(--text-3);
+  padding: 40px 0;
 }
 .chips {
   display: flex;
-  align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
 }
 .chip {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 36px;
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: 18px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--panel);
   color: var(--text-2);
+  font-family: inherit;
   font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-1);
+  white-space: nowrap;
 }
 .chip.active {
   border-color: var(--accent);
   color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--accent-08);
 }
-.chip-count {
+.cc {
   font-size: 11px;
-  opacity: 0.7;
-}
-.dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: inline-block;
-}
-.toolbar-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  border-radius: 10px;
-  padding: 8px 14px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.15s;
-}
-.btn.sm {
-  padding: 7px 12px;
-  font-size: 13px;
-}
-.btn.primary {
-  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
-  color: #1a1208;
-}
-.btn.primary:hover {
-  filter: brightness(1.08);
-}
-.btn.ghost {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-1);
-  border: 1px solid var(--border);
-}
-.btn.ghost:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-.groups {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.group-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: none;
-  padding: 4px 0;
-  color: var(--text-1);
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-}
-.group-toggle:hover {
-  color: var(--accent);
-}
-.group-count {
-  font-size: 12px;
-  font-weight: 600;
   color: var(--text-3);
 }
-.group-ops {
+.grp-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
 }
-.group-block:hover .group-ops {
-  opacity: 1;
-}
-.op {
-  background: transparent;
-  border: 1px solid var(--border);
+.grp-n {
+  font-size: 11px;
   color: var(--text-3);
-  border-radius: 8px;
-  padding: 3px 9px;
-  font-size: 12px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  font-family: inherit;
-}
-.op:hover {
-  color: var(--text-1);
-  background: rgba(255, 255, 255, 0.08);
-}
-.op.danger:hover {
-  color: #e5534b;
-  border-color: rgba(229, 83, 75, 0.5);
+  font-weight: 400;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
+  gap: 10px;
+  grid-auto-rows: max-content;
 }
-.group-empty {
-  grid-column: 1 / -1;
-  padding: 18px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-  border: 1px dashed var(--border);
-  border-radius: 12px;
-}
-.loading {
-  padding: 60px;
-  text-align: center;
-  color: var(--text-3);
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .empty {
-  padding: 50px;
+  padding: 40px 16px;
   text-align: center;
+  color: var(--text-3);
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 12px;
-  color: var(--text-3);
+  align-items: center;
 }
-.empty-icon {
-  font-size: 34px;
-  opacity: 0.6;
-}
-/* ── 底部弹层（Vant Popup）通用壳：标题 + 内容 + 通栏按钮 ────────────── */
 .sheet {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
-  max-height: 86vh;
-  overflow-y: auto;
+  gap: 12px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
 .sheet-title {
   font-size: 16px;
   font-weight: 600;
-  color: var(--text-1);
-}
-/* 弹层里的按钮是拇指主操作：等宽通栏、触控高度 */
-.sheet .dialog-foot {
-  gap: 10px;
-}
-.sheet .dialog-foot :deep(.van-button) {
-  flex: 1;
-  min-height: 44px;
-}
-.dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-2);
 }
 .palette {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
-.swatch {
-  width: 24px;
-  height: 24px;
+.sw {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 2px solid transparent;
-  cursor: pointer;
   padding: 0;
 }
-.swatch.on {
+.sw.on {
   border-color: var(--text-1);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
 }
-.dialog-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-.confirm-text {
-  font-size: 14px;
-  color: var(--text-2);
-  line-height: 1.6;
-}
-.move-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 0;
-}
-/* 分组多的时候列表自己滚（弹层 maxHeight 已兜底） */
-.move-item {
+.mv {
   min-height: 44px;
-}
-.move-hint {
-  margin: 0 0 6px;
-  font-size: 13px;
-  color: var(--text-3);
-}
-.move-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 0 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--panel);
   color: var(--text-1);
-  font-size: 14px;
-  cursor: pointer;
   font-family: inherit;
-  text-align: left;
+  font-size: 14px;
 }
-.move-item:hover {
-  background: rgba(255, 255, 255, 0.09);
-}
-.move-item.current {
+.mv.cur {
   border-color: var(--accent);
   color: var(--accent);
-}
-.move-item.add {
-  justify-content: center;
-  color: var(--text-2);
-  border-style: dashed;
-}
-
-/* 页面本体不滚动；只有分组/实例列表区滚动（实测该区 187px 内容 vs 99px 可视） */
-.instances-view {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.groups {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* 空状态比可视高度高约 22px（Ace 5 内容区只有 240px），下沿会被裁；
-   压缩内边距让它完整显示。有实例时列表仍由 .groups 内部滚动，不受影响。 */
-@media (max-width: 1100px), (pointer: coarse) {
-  /* 空状态的间距按视口高度自适应（矮屏收紧、高屏保持原样），
-     不写死像素值。 */
-  .empty {
-    padding: clamp(8px, calc(2.6vh / var(--ui-scale, 1)), 20px) 16px;
-    gap: clamp(6px, calc(2vh / var(--ui-scale, 1)), 14px);
-  }
 }
 </style>
