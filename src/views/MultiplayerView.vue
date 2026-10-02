@@ -5,7 +5,7 @@ import { fmtBytes } from "../utils/format";
 import { CORE_COLORS, CORE_LABELS } from "../utils/cores";
 import { isAprilFools } from "../utils/versions";
 import { useRouter } from "vue-router";
-import { NInput, NProgress, useMessage } from "naive-ui";
+import { NProgress, useMessage } from "naive-ui";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
@@ -13,6 +13,7 @@ import { useAccountsStore } from "../stores/accounts";
 import { useServersStore } from "../stores/servers";
 import type { ServerCore, TerracottaDownloadProgress, TerracottaInfo } from "../types";
 import AppSheet from "../ui/AppSheet.vue";
+import AppInput from "../ui/AppInput.vue";
 import {
   IconBox,
   IconCheck,
@@ -711,12 +712,11 @@ onUnmounted(() => stopTcPoll());
         <div v-if="tcStateName === 'waiting'" class="glass tc-room-controls">
           <div class="tc-name-input">
             <label class="tc-field-label">{{ $t("multiplayer.player-name") }}</label>
-            <n-input
+            <app-input
               v-model:value="tcPlayerName"
               :placeholder="$t('multiplayer.player-name-hint')"
               maxlength="16"
-              clearable
-            />
+              clearable />
           </div>
           <div class="tc-control-grid">
             <div class="tc-col">
@@ -730,11 +730,10 @@ onUnmounted(() => stopTcPoll());
               <div class="tc-sub-title"><IconDoorOpen />{{ $t("multiplayer.join-room") }}</div>
               <p class="tc-sub-desc">{{ $t("multiplayer.join-room-hint") }}</p>
               <div class="tc-join-input">
-                <n-input
+                <app-input
                   v-model:value="tcRoomCode"
                   :placeholder="$t('multiplayer.room-code-example')"
-                  @keyup.enter="joinRoom"
-                />
+                  @keyup.enter="joinRoom" />
                 <button class="btn primary" :disabled="tcBusy" @click="joinRoom">
                   <IconPlay />{{ $t("multiplayer.join") }}</button>
               </div>
@@ -760,7 +759,7 @@ onUnmounted(() => stopTcPoll());
       <div v-if="dialog" class="dialog-body">
         <div class="field">
           <label>{{ $t("multiplayer.server-name") }}</label>
-          <n-input v-model:value="dialog.name" :placeholder="$t('multiplayer.server-name-hint')" maxlength="40" />
+          <app-input v-model:value="dialog.name" :placeholder="$t('multiplayer.server-name-hint')" maxlength="40" />
         </div>
 
         <div class="field">

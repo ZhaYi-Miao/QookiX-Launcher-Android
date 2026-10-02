@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, reactive, ref, watch } from "vue";
-import { NButton, NInput, NPopover, useDialog, useMessage } from "naive-ui";
+import { NButton, NPopover, useDialog, useMessage } from "naive-ui";
 import { useAccountsStore } from "../stores/accounts";
 import { loadOfflineSkin } from "../composables/useOfflineSkin";
 import { api } from "../api";
@@ -9,6 +9,7 @@ import MsLoginDialog from "./MsLoginDialog.vue";
 import { IconCheck, IconChevronDown, IconTrash, IconUser, IconPlus } from "./icons";
 import type { Account } from "../types";
 import AppSheet from "../ui/AppSheet.vue";
+import AppInput from "../ui/AppInput.vue";
 
 const props = defineProps<{ collapsed?: boolean }>();
 
@@ -308,13 +309,12 @@ function typeLabel(a: Account) {
     :title="$t('account-chip.add-offline')"
   >
     <div class="acctm-offline-box">
-      <n-input
+      <app-input
         v-model:value="offlineName"
         :placeholder="$t('account-chip.game-username')"
         :maxlength="16"
         clearable
-        @keyup.enter="addOffline"
-      />
+        @keyup.enter="addOffline" />
       <p class="acctm-offline-hint">{{ $t("account-chip.offline-uuid-hint") }}</p>
     </div>
     <template #footer>

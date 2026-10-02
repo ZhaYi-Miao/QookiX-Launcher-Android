@@ -441,6 +441,16 @@ a:active {
   zoom: var(--ui-scale, 1);
 }
 
+/* ── naive 单选按钮组：允许换行 + 放开写死的高度 ────────────────────────
+   `n-radio-group--button-group` 把 height 定成「单个按钮高」（假定永远单行）。
+   一旦我们让控件换行（竖屏下的设置项就这么干），第二行会压住下面的文字。
+   这里统一兜底：height:auto + 允许换行，组的高度由内容决定。 */
+.n-radio-group--button-group {
+  height: auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
 /* ── UI 库滑杆 / 取色器：把触摸手势从浏览器手里拿回来 ────────────────────
    原生 `<input type="range">` 自带触摸手势处理（浏览器知道「在滑杆上横滑＝拖值」）。
    换成 naive-ui 的 `n-slider` 后，安卓 WebView 会把横滑判定成页面滚动手势，

@@ -2,7 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { NButton, NDrawer, NDrawerContent, NInput, NSelect, useMessage, type SelectOption } from "naive-ui";
+import { NButton, NDrawer, NDrawerContent, useMessage, type SelectOption } from "naive-ui";
 import { api } from "../api";
 import InstallDialog from "../components/InstallDialog.vue";
 import ProjectCard from "../components/ProjectCard.vue";
@@ -23,6 +23,8 @@ import { cacheGet, cacheSet } from "../utils/cache";
 import { instanceLabel } from "../utils/format";
 import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import type { Instance, ProjectDependency, ProjectHit } from "../types";
+import AppInput from "../ui/AppInput.vue";
+import AppSelect from "../ui/AppSelect.vue";
 
 const message = useMessage();
 const route = useRoute();
@@ -522,14 +524,14 @@ onMounted(async () => {
     <div class="browse-main">
     <div class="toolbar glass">
       <div class="toolbar-row">
-        <n-input
+        <app-input
           v-model:value="query"
           class="search-box"
           :placeholder="$t('browse.search-placeholder')"
         >
           <template #prefix><IconSearch /></template>
-        </n-input>
-        <n-select
+        </app-input>
+        <app-select
           v-if="showInstanceSelect"
           v-model:value="selectedInstanceId"
           :options="instanceOptions"
@@ -538,22 +540,19 @@ onMounted(async () => {
           :style="{ width: instanceSelectWidth + 'px' }"
           filterable
           :filter="filterInstance"
-          :placeholder="$t('browse.search-instances')"
-        />
+          :placeholder="$t('browse.search-instances')" />
       </div>
       <div class="toolbar-row">
-        <n-select
+        <app-select
           v-model:value="sort"
           :options="sortOptions"
           size="small"
-          class="tb-select"
-        />
-        <n-select
+          class="tb-select" />
+        <app-select
           v-model:value="pageSize"
           :options="pageSizeOptions"
           size="small"
-          class="tb-select page-size"
-        />
+          class="tb-select page-size" />
         <div ref="viewBox" class="view-switch">
           <div class="indicator" :style="viewIndicatorStyle"></div>
           <button :class="{ active: view === 'grid' }" :title="$t('browse.grid')" :aria-label="$t('browse.grid')" @click="view = 'grid'"><IconGrid /></button>
@@ -570,12 +569,11 @@ onMounted(async () => {
         >
           <IconGlobe /> {{ translatingPage ? $t('install-dialog.translating') : showZh ? $t('install-dialog.show-source') : $t('browse.translate-page') }}
         </button>
-        <n-select
+        <app-select
           v-model:value="provider"
           :options="providerOptions"
           size="small"
-          class="tb-select provider"
-        />
+          class="tb-select provider" />
       </div>
     </div>
 
@@ -627,7 +625,7 @@ onMounted(async () => {
       <n-drawer-content :title="$t('browse.filter')" closable>
         <div class="filter-group">
           <label>{{ $t("browse.game-version") }}</label>
-          <n-select v-model:value="gameVersion" :options="displayVersionOptions" size="small" />
+          <app-select v-model:value="gameVersion" :options="displayVersionOptions" size="small" />
         </div>
         <div v-if="showLoaderFilter" class="filter-group">
           <label>{{ $t("browse.loader") }}</label>

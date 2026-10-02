@@ -9,7 +9,7 @@
 import { t as $t } from "../../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, NInput, useMessage } from "naive-ui";
+import { NButton, useMessage } from "naive-ui";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { pickFile as open } from "../../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -29,6 +29,7 @@ import {
 } from "../icons";
 import type { ContentItem, ProjectVersion, UpdateInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
+import AppInput from "../../ui/AppInput.vue";
 
 const props = defineProps<{
   instanceId: string;
@@ -374,14 +375,14 @@ defineExpose({
          搜索框只在条目够多时才出现，别白占高度。 -->
     <div class="ct-toolbar glass">
       <template v-if="contentItems.length > 3">
-        <n-input
+        <app-input
           v-model:value="filterText"
           size="small"
           class="filter-input"
           :placeholder="$t('instance-content.search-content', { p1: contentItems.length })"
         >
           <template #prefix><IconSearch /></template>
-        </n-input>
+        </app-input>
         <button v-if="filterText" class="filter-clear" :title="$t('instance-content.positive-text')" :aria-label="$t('instance-content.positive-text')" @click="filterText = ''">
           <IconClose />
         </button>

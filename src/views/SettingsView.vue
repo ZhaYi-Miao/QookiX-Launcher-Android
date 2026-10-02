@@ -2,19 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { fmtMem, fmtSize, fmtTime } from "../utils/format";
-import {
-  NColorPicker,
-  NInput,
-  NRadio,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NSlider,
-  NSwitch,
-  NTooltip,
-  useDialog,
-  useMessage,
-} from "naive-ui";
+import { NColorPicker, NRadio, NRadioButton, NRadioGroup, NTooltip, useDialog, useMessage } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { pickFile as open } from "../composables/filePicker";
@@ -89,6 +77,10 @@ import devWeimoshengUrl from "../assets/dev-weimosheng.jpg";
 import devZhayiUrl from "../assets/dev-zhayi.jpg";
 import logoUrl from "../assets/logo.png";
 import AboutShowcase from "../components/AboutShowcase.vue";
+import AppInput from "../ui/AppInput.vue";
+import AppSwitch from "../ui/AppSwitch.vue";
+import AppSlider from "../ui/AppSlider.vue";
+import AppSelect from "../ui/AppSelect.vue";
 
 /* ---- 版本徽章彩蛋：长按 v1.1.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
@@ -932,12 +924,11 @@ onUnmounted(() => {
               <div>
                 <label>{{ $t("settings.max-memory") }}</label>
                 <!-- 表单控件一律用 UI 库（naive-ui）组件，别再手搓原生 input -->
-                <n-slider
+                <app-slider
                   v-model:value="settings.settings.max_memory_mb"
                   :min="1024"
                   :max="16384"
-                  :step="256"
-                />
+                  :step="256" />
                 <div class="mem-val">{{ settings.settings.max_memory_mb }} MB</div>
               </div>
             </div>
@@ -959,20 +950,18 @@ onUnmounted(() => {
 
           <div class="card glass">
             <h3>{{ $t("settings.extra-jvm-args-default") }}</h3>
-            <n-input
+            <app-input
               v-model:value="settings.settings.jvm_args"
               type="textarea"
               :rows="3"
-              :placeholder="$t('settings.jvm-args-example')"
-            />
+              :placeholder="$t('settings.jvm-args-example')" />
           </div>
 
           <div class="card glass">
             <h3>{{ $t("settings.extra-game-args-default") }}</h3>
-            <n-input
+            <app-input
               v-model:value="settings.settings.game_args"
-              :placeholder="$t('instance-settings.game-args-hint')"
-            />
+              :placeholder="$t('instance-settings.game-args-hint')" />
           </div>
         </div>
       </div>
@@ -1032,13 +1021,12 @@ onUnmounted(() => {
                 <p class="choice-hint">{{ $t("settings.ui-scale-desc") }}</p>
               </div>
               <div class="scale-ctl">
-                <n-slider
+                <app-slider
                   :value="settings.settings?.ui_scale ?? 100"
                   :min="60"
                   :max="150"
                   :step="5"
-                  @update:value="onUiScale"
-                />
+                  @update:value="onUiScale" />
                 <div class="mem-val">{{ settings.settings?.ui_scale ?? 100 }}%</div>
               </div>
             </div>
@@ -1099,13 +1087,12 @@ onUnmounted(() => {
               <p class="choice-hint">{{ $t("settings.notch-inset-desc") }}</p>
             </div>
             <div class="scale-ctl">
-              <n-slider
+              <app-slider
                 :value="settings.settings?.nav_offset ?? 44"
                 :min="24"
                 :max="120"
                 :step="2"
-                @update:value="onNavOffset"
-              />
+                @update:value="onNavOffset" />
               <div class="mem-val">{{ settings.settings?.nav_offset ?? 44 }}px</div>
             </div>
           </div>
@@ -1114,30 +1101,27 @@ onUnmounted(() => {
               <span class="choice-label">{{ $t("settings.hero-card") }}</span>
               <p class="choice-hint">{{ $t("settings.hero-card-desc") }}</p>
             </div>
-            <n-switch
+            <app-switch
               :value="settings.settings.show_home_hero"
-              @update:value="(v: boolean) => settings.patch({ show_home_hero: v })"
-            />
+              @update:value="(v: boolean) => settings.patch({ show_home_hero: v })" />
           </div>
           <div class="choice-row">
             <div class="choice-info">
               <span class="choice-label">{{ $t("settings.sidebar-collapse-btn") }}</span>
               <p class="choice-hint">{{ $t("settings.sidebar-collapse-desc") }}</p>
             </div>
-            <n-switch
+            <app-switch
               :value="settings.settings.show_sidebar_collapse_btn"
-              @update:value="(v: boolean) => settings.patch({ show_sidebar_collapse_btn: v })"
-            />
+              @update:value="(v: boolean) => settings.patch({ show_sidebar_collapse_btn: v })" />
           </div>
           <div class="choice-row">
             <div class="choice-info">
               <span class="choice-label">{{ $t("settings.sidebar-news") }}</span>
               <p class="choice-hint">{{ $t("settings.sidebar-news-desc") }}</p>
             </div>
-            <n-switch
+            <app-switch
               :value="settings.settings.show_news ?? true"
-              @update:value="(v: boolean) => settings.patch({ show_news: v })"
-            />
+              @update:value="(v: boolean) => settings.patch({ show_news: v })" />
           </div>
           <div class="choice-row">
             <div class="choice-info">
@@ -1176,22 +1160,20 @@ onUnmounted(() => {
           <div v-if="settings.settings.background_image" class="tune-block">
             <div class="tune-row">
               <label>{{ $t("settings.background-blur") }}</label>
-              <n-slider
+              <app-slider
                 v-model:value="settings.settings.background_blur"
                 :min="0"
                 :max="50"
-                :step="1"
-              />
+                :step="1" />
               <span class="tune-val">{{ settings.settings.background_blur }} px</span>
             </div>
             <div class="tune-row">
               <label>{{ $t("settings.background-dim") }}</label>
-              <n-slider
+              <app-slider
                 v-model:value="settings.settings.background_dim"
                 :min="0"
                 :max="100"
-                :step="5"
-              />
+                :step="5" />
               <span class="tune-val">{{ settings.settings.background_dim }}%</span>
             </div>
           </div>
@@ -1200,12 +1182,11 @@ onUnmounted(() => {
           <h3>{{ $t("settings.glass-cards") }}</h3>
           <div class="tune-row">
             <label>{{ $t("settings.glass-intensity") }}</label>
-            <n-slider
+            <app-slider
               v-model:value="settings.settings.glass_blur"
               :min="0"
               :max="30"
-              :step="1"
-            />
+              :step="1" />
             <span class="tune-val">{{ settings.settings.glass_blur }} px</span>
           </div>
           <p class="hint">{{ $t("settings.glass-intensity-desc") }}</p>
@@ -1224,20 +1205,18 @@ onUnmounted(() => {
                实现完把 DOWNLOAD_SLIDERS_ENABLED 打开即可。 -->
           <div v-if="DOWNLOAD_SLIDERS_ENABLED" class="card glass">
             <h3>{{ $t("settings.parallel-download") }}</h3>
-            <label class="row-label">{{ $t("settings.concurrent-files", { p1: settings.settings.download_threads }) }}<n-slider
+            <label class="row-label">{{ $t("settings.concurrent-files", { p1: settings.settings.download_threads }) }}<app-slider
                 v-model:value="settings.settings.download_threads"
                 :min="1"
                 :max="32"
-                :step="1"
-              />
+                :step="1" />
             </label>
             <p class="hint">{{ $t("settings.parallel-download-desc") }}</p>
-            <label class="row-label" style="margin-top: 16px;">{{ $t("settings.chunk-threads", { p1: settings.settings.download_chunk_threads }) }}<n-slider
+            <label class="row-label" style="margin-top: 16px;">{{ $t("settings.chunk-threads", { p1: settings.settings.download_chunk_threads }) }}<app-slider
                 v-model:value="settings.settings.download_chunk_threads"
                 :min="1"
                 :max="16"
-                :step="1"
-              />
+                :step="1" />
             </label>
             <p class="hint">{{ $t("settings.chunk-threads-desc") }}</p>
           </div>
@@ -1284,11 +1263,10 @@ onUnmounted(() => {
                   />
                   <span>{{ $t("settings.custom-mirror") }}</span>
                 </label>
-                <n-input
+                <app-input
                   v-model:value="settings.settings.mirror_custom"
                   placeholder="https://your-mirror.example.com"
-                  @update:value="onCustomMirrorInput"
-                />
+                  @update:value="onCustomMirrorInput" />
                 <span
                   class="mirror-btn"
                   :class="{ disabled: testingMirror === 'custom' || !settings.settings.mirror_custom }"
@@ -1312,33 +1290,28 @@ onUnmounted(() => {
         <div class="grid">
           <div class="card glass">
             <h3>CurseForge API Key</h3>
-            <n-input
+            <app-input
               v-model:value="settings.settings.curseforge_api_key"
-              :placeholder="$t('settings.cf-key-apply-hint')"
-            />
+              :placeholder="$t('settings.cf-key-apply-hint')" />
             <p class="hint">{{ $t("settings.cf-key-note") }}</p>
           </div>
           <div class="card glass">
             <h3>{{ $t("settings.content-translation") }}</h3>
-            <n-select
+            <app-select
               v-model:value="settings.settings.translate_provider"
-              :options="translateOptions"
-            />
+              :options="translateOptions" />
             <template v-if="settings.settings.translate_provider === 'custom'">
-              <n-input
+              <app-input
                 v-model:value="settings.settings.translate_api_base"
-                :placeholder="$t('settings.api-base-hint')"
-              />
-              <n-input
+                :placeholder="$t('settings.api-base-hint')" />
+              <app-input
                 v-model:value="settings.settings.translate_api_key"
                 type="password"
                 show-password-on="click"
-                placeholder="API Key"
-              />
-              <n-input
+                placeholder="API Key" />
+              <app-input
                 v-model:value="settings.settings.translate_api_model"
-                :placeholder="$t('settings.model-hint')"
-              />
+                :placeholder="$t('settings.model-hint')" />
               <button
                 class="mirror-btn proxy-test-btn"
                 :class="{ disabled: testingTranslate }"
@@ -1372,10 +1345,9 @@ onUnmounted(() => {
               <div>
                 <p class="choice-hint">{{ $t("settings.autoload-body") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="settings.settings.body_translate_auto"
-                @update:value="(v: boolean) => settings.patch({ body_translate_auto: v })"
-              />
+                @update:value="(v: boolean) => settings.patch({ body_translate_auto: v })" />
             </div>
           </div>
           <div class="card glass">
@@ -1400,12 +1372,11 @@ onUnmounted(() => {
                 {{ testingProxy ? $t('settings.testing') : $t('settings.test-connection') }}
               </button>
             </div>
-            <n-input
+            <app-input
               v-if="settings.settings.proxy_mode === 'custom'"
               v-model:value="settings.settings.proxy"
               :placeholder="$t('settings.proxy-hint')"
-              @update:value="onCustomProxyInput"
-            />
+              @update:value="onCustomProxyInput" />
             <p class="hint">
               {{
                 settings.settings.proxy_mode === "system"
@@ -1616,24 +1587,22 @@ onUnmounted(() => {
               <div class="choice-info">
                 <span class="choice-label">{{ $t("instance-settings.renderer") }}</span>
               </div>
-              <n-select
+              <app-select
                 :value="(pojav.renderer as string) ?? 'opengles2'"
                 :options="rendererOptions"
                 size="small"
                 style="width: 190px"
-                @update:value="(v: string) => savePojav('renderer', v)"
-              />
+                @update:value="(v: string) => savePojav('renderer', v)" />
             </div>
             <div class="mem-row">
               <div>
                 <label>{{ $t("settings.render-scale") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.resolutionRatio ?? 100)"
                   :min="50"
                   :max="150"
                   :step="5"
-                  @update:value="(v: number) => onPojavRange('resolutionRatio', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('resolutionRatio', v)" />
                 <div class="mem-val">{{ $t("settings.percent-hint", { p1: pojav.resolutionRatio }) }}</div>
               </div>
             </div>
@@ -1642,27 +1611,25 @@ onUnmounted(() => {
                 <span class="choice-label">{{ $t("settings.ignore-notch") }}</span>
                 <p class="choice-hint">{{ $t("settings.ignore-notch-desc") }}</p>
               </div>
-              <n-switch :value="!!pojav.ignoreNotch" @update:value="(v: boolean) => savePojav('ignoreNotch', v)" />
+              <app-switch :value="!!pojav.ignoreNotch" @update:value="(v: boolean) => savePojav('ignoreNotch', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ $t("settings.alt-surface") }}</span>
                 <p class="choice-hint">{{ $t("settings.alt-surface-desc") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="pojav.alternate_surface !== false"
-                @update:value="(v: boolean) => savePojav('alternate_surface', v)"
-              />
+                @update:value="(v: boolean) => savePojav('alternate_surface', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ $t("settings.sustained-performance") }}</span>
                 <p class="choice-hint">{{ $t("settings.sustained-performance-desc") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="!!pojav.sustained_performance"
-                @update:value="(v: boolean) => savePojav('sustained_performance', v)"
-              />
+                @update:value="(v: boolean) => savePojav('sustained_performance', v)" />
             </div>
           </div>
 
@@ -1674,11 +1641,10 @@ onUnmounted(() => {
               <div class="choice-info">
                 <span class="choice-label">{{ b.name }}</span>
               </div>
-              <n-switch
+              <app-switch
                 :value="b.passThru"
                 :loading="controlButtonBusy === b.index"
-                @update:value="(v: boolean) => setPassthru(b.index, v)"
-              />
+                @update:value="(v: boolean) => setPassthru(b.index, v)" />
             </div>
           </div>
 
@@ -1687,39 +1653,36 @@ onUnmounted(() => {
             <div class="mem-row">
               <div>
                 <label>{{ $t("settings.button-size") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.buttonscale ?? 100)"
                   :min="50"
                   :max="200"
                   :step="10"
-                  @update:value="(v: number) => onPojavRange('buttonscale', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('buttonscale', v)" />
                 <div class="mem-val">{{ pojav.buttonscale }}%</div>
               </div>
             </div>
             <div class="mem-row">
               <div>
                 <label>{{ $t("settings.mouse-speed") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.mousespeed ?? 100)"
                   :min="50"
                   :max="200"
                   :step="10"
-                  @update:value="(v: number) => onPojavRange('mousespeed', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('mousespeed', v)" />
                 <div class="mem-val">{{ pojav.mousespeed }}%</div>
               </div>
             </div>
             <div class="mem-row">
               <div>
                 <label>{{ $t("settings.long-press-time") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.timeLongPressTrigger ?? 300)"
                   :min="150"
                   :max="800"
                   :step="50"
-                  @update:value="(v: number) => onPojavRange('timeLongPressTrigger', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('timeLongPressTrigger', v)" />
                 <div class="mem-val">{{ $t("settings.ms-hint", { p1: pojav.timeLongPressTrigger }) }}</div>
               </div>
             </div>
@@ -1727,13 +1690,12 @@ onUnmounted(() => {
             <div v-if="GAMEPAD_DEADZONE_ENABLED" class="mem-row">
               <div>
                 <label>{{ $t("settings.gamepad-deadzone") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.gamepad_deadzone_scale ?? 100)"
                   :min="0"
                   :max="200"
                   :step="10"
-                  @update:value="(v: number) => onPojavRange('gamepad_deadzone_scale', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('gamepad_deadzone_scale', v)" />
                 <div class="mem-val">{{ pojav.gamepad_deadzone_scale }}%</div>
               </div>
             </div>
@@ -1742,37 +1704,34 @@ onUnmounted(() => {
                 <span class="choice-label">{{ $t("settings.auto-virtual-mouse") }}</span>
                 <p class="choice-hint">{{ $t("settings.auto-virtual-mouse-desc") }}</p>
               </div>
-              <n-switch :value="!!pojav.mouse_start" @update:value="(v: boolean) => savePojav('mouse_start', v)" />
+              <app-switch :value="!!pojav.mouse_start" @update:value="(v: boolean) => savePojav('mouse_start', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ $t("settings.swap-hands") }}</span>
                 <p class="choice-hint">{{ $t("settings.swap-hands-desc") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="!!pojav.disableDoubleTap"
-                @update:value="(v: boolean) => savePojav('disableDoubleTap', v)"
-              />
+                @update:value="(v: boolean) => savePojav('disableDoubleTap', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ $t("settings.disable-gestures") }}</span>
                 <p class="choice-hint">{{ $t("settings.disable-gestures-desc") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="!!pojav.disableGestures"
-                @update:value="(v: boolean) => savePojav('disableGestures', v)"
-              />
+                @update:value="(v: boolean) => savePojav('disableGestures', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ $t("settings.uppercase-buttons") }}</span>
                 <p class="choice-hint">{{ $t("settings.uppercase-buttons-desc") }}</p>
               </div>
-              <n-switch
+              <app-switch
                 :value="!!pojav.buttonAllCaps"
-                @update:value="(v: boolean) => savePojav('buttonAllCaps', v)"
-              />
+                @update:value="(v: boolean) => savePojav('buttonAllCaps', v)" />
             </div>
           </div>
 
@@ -1783,28 +1742,27 @@ onUnmounted(() => {
                 <span class="choice-label">{{ $t("settings.enable-gyro") }}</span>
                 <p class="choice-hint">{{ $t("settings.enable-gyro-desc") }}</p>
               </div>
-              <n-switch :value="!!pojav.enableGyro" @update:value="(v: boolean) => savePojav('enableGyro', v)" />
+              <app-switch :value="!!pojav.enableGyro" @update:value="(v: boolean) => savePojav('enableGyro', v)" />
             </div>
             <div class="mem-row">
               <div>
                 <label>{{ $t("settings.sensitivity") }}</label>
-                <n-slider
+                <app-slider
                   :value="Number(pojav.gyroSensitivity ?? 100)"
                   :min="50"
                   :max="300"
                   :step="10"
-                  @update:value="(v: number) => onPojavRange('gyroSensitivity', v)"
-                />
+                  @update:value="(v: number) => onPojavRange('gyroSensitivity', v)" />
                 <div class="mem-val">{{ pojav.gyroSensitivity }}%</div>
               </div>
             </div>
             <div class="choice-row">
               <div class="choice-info"><span class="choice-label">{{ $t("settings.invert-x") }}</span></div>
-              <n-switch :value="!!pojav.gyroInvertX" @update:value="(v: boolean) => savePojav('gyroInvertX', v)" />
+              <app-switch :value="!!pojav.gyroInvertX" @update:value="(v: boolean) => savePojav('gyroInvertX', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info"><span class="choice-label">{{ $t("settings.invert-y") }}</span></div>
-              <n-switch :value="!!pojav.gyroInvertY" @update:value="(v: boolean) => savePojav('gyroInvertY', v)" />
+              <app-switch :value="!!pojav.gyroInvertY" @update:value="(v: boolean) => savePojav('gyroInvertY', v)" />
             </div>
           </div>
         </div>
@@ -2485,6 +2443,27 @@ textarea.text-input {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+}
+/* 竖屏（默认方向）下分段控件 / 单选组 / 选择器这类「宽控件」一行放不下：
+   5 个选项的挖孔组会把左侧说明挤成一列竖排字（实测「挖 孔 / 刘 海」每个字一行）。
+   这里让这类行折成两行：说明一行、控件一行铺满 —— 也是安卓设置项的常见排法。
+   `:has()` 万一不被支持，只是少掉这一段规则，不会连带废掉同组其它选择器。 */
+.choice-row:has(.seg),
+.choice-row:has(.n-radio-group),
+.choice-row:has(.app-select) {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+.choice-row:has(.seg) .choice-info,
+.choice-row:has(.n-radio-group) .choice-info,
+.choice-row:has(.app-select) .choice-info {
+  flex: 1 1 100%;
+}
+.choice-row:has(.seg) .seg,
+.choice-row:has(.n-radio-group) .n-radio-group,
+.choice-row:has(.app-select) .app-select {
+  flex: 1 1 100%;
   min-width: 0;
 }
 .choice-label {

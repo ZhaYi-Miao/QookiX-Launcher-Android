@@ -113,6 +113,9 @@
   --van-picker-confirm-action-color: var(--accent);
   --van-picker-toolbar-height: 46px;
   --van-picker-option-font-size: 16px;
+  /* Vant 默认的上下遮罩是**写死的灰白渐变**（深色主题下会变成一块刺眼的浅灰，
+     实测内容页的游戏版本选择器就是这样）。直接透明，我们自己有底色与分隔。 */
+  --van-picker-mask-color: transparent;
 
   /* ── 输入框 ── */
   --van-field-input-text-color: var(--text-1);

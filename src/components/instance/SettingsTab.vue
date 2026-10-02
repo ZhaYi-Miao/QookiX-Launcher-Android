@@ -7,15 +7,7 @@
  */
 import { t as $t } from "../../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import {
-  NButton,
-  NInput,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NSlider,
-  useMessage,
-} from "naive-ui";
+import { NButton, NRadioButton, NRadioGroup, useMessage } from "naive-ui";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
 import { api } from "../../api";
@@ -25,6 +17,9 @@ import { fmtMem } from "../../utils/format";
 import { autoRendererFor, rendererNames, rendererOptions } from "../../utils/renderer";
 import AppIcon from "../AppIcon.vue";
 import IconPickerDialog from "../IconPickerDialog.vue";
+import AppInput from "../../ui/AppInput.vue";
+import AppSlider from "../../ui/AppSlider.vue";
+import AppSelect from "../../ui/AppSelect.vue";
 
 const props = defineProps<{ instanceId: string }>();
 
@@ -305,12 +300,11 @@ onBeforeUnmount(() => {
       </n-radio-group>
 
       <template v-if="edit.memory_mode === 'custom'">
-        <n-slider
+        <app-slider
           v-model:value="edit.max_memory_mb"
           :min="1024"
           :max="sliderMax"
-          :step="256"
-        />
+          :step="256" />
         <div class="range-labels"><span>1 GB</span><span>{{ fmtMem(sliderMax) }}</span></div>
         <div class="mem-current">{{ edit.max_memory_mb }} MB</div>
       </template>
@@ -352,13 +346,12 @@ onBeforeUnmount(() => {
       </n-radio-group>
 
       <template v-if="edit.renderer_mode === 'custom'">
-        <n-select
+        <app-select
           :value="edit.renderer"
           :options="rendererOptions"
           size="small"
           style="margin-top: 10px"
-          @update:value="onRendererKey"
-        />
+          @update:value="onRendererKey" />
       </template>
 
       <p class="hint">{{ $t("instance-settings.effective") }}<b>{{ rendererNames[effectiveRenderer.key] ?? effectiveRenderer.key }}</b>
@@ -370,11 +363,10 @@ onBeforeUnmount(() => {
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.alias") }}</h4>
       <div class="alias-row">
-        <n-input
+        <app-input
           v-model:value="aliasDraft"
           :placeholder="$t('instance-settings.alias-hint')"
-          @keydown.enter="saveAlias"
-        />
+          @keydown.enter="saveAlias" />
         <n-button
           size="small"
           :disabled="savingAlias || aliasDraft === (instance?.alias ?? '')"
@@ -388,22 +380,21 @@ onBeforeUnmount(() => {
 
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.extra-jvm-args") }}</h4>
-      <n-input
+      <app-input
         v-model:value="edit.jvm_args"
         type="textarea"
         :rows="3"
-        :placeholder="$t('instance-settings.jvm-args-hint')"
-      />
+        :placeholder="$t('instance-settings.jvm-args-hint')" />
     </div>
 
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.extra-game-args") }}</h4>
-      <n-input v-model:value="edit.game_args" :placeholder="$t('instance-settings.game-args-hint')" />
+      <app-input v-model:value="edit.game_args" :placeholder="$t('instance-settings.game-args-hint')" />
     </div>
 
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.account") }}</h4>
-      <n-select
+      <app-select
         v-model:value="edit.account_id"
         :options="[
           { label: $t('instance-settings.follow-global-account', { p1: accounts.current?.username ?? $t('instance-settings.none-selected') }), value: '' },
@@ -411,16 +402,15 @@ onBeforeUnmount(() => {
             label: `${a.username}（${a.type === 'microsoft' ? $t('account-chip.premium') : $t('account-chip.offline')}）`,
             value: a.uuid,
           })),
-        ]"
-      />
+        ]" />
     </div>
 
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.resolution") }}</h4>
       <div class="res-row">
-        <n-input v-model:value="edit.resolution_w" :placeholder="$t('instance-settings.width-hint')" />
+        <app-input v-model:value="edit.resolution_w" :placeholder="$t('instance-settings.width-hint')" />
         <span>×</span>
-        <n-input v-model:value="edit.resolution_h" :placeholder="$t('instance-settings.height-hint')" />
+        <app-input v-model:value="edit.resolution_h" :placeholder="$t('instance-settings.height-hint')" />
       </div>
     </div>
 

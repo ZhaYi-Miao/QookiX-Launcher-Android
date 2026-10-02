@@ -3,7 +3,7 @@ import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import { fmtSize } from "../utils/format";
 import { useRoute, useRouter } from "vue-router";
-import { NInput, NInputNumber, NCheckbox, NSwitch, NSelect, useMessage } from "naive-ui";
+import { NInputNumber, NCheckbox, useMessage } from "naive-ui";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
@@ -11,6 +11,9 @@ import { useServersStore } from "../stores/servers";
 import ServerFileManager from "../components/ServerFileManager.vue";
 import { CORE_COLORS, CORE_LABELS } from "../utils/cores";
 import AppSheet from "../ui/AppSheet.vue";
+import AppInput from "../ui/AppInput.vue";
+import AppSwitch from "../ui/AppSwitch.vue";
+import AppSelect from "../ui/AppSelect.vue";
 import {
   IconBox,
   IconChevronLeft,
@@ -638,7 +641,7 @@ onBeforeUnmount(() => {
         <p class="section-hint">{{ $t("server-detail.autosave-hint") }}</p>
         <div class="field">
           <label>{{ $t("multiplayer.server-name") }}</label>
-          <n-input v-model:value="form.name" maxlength="40" @update:value="scheduleAutoSave" />
+          <app-input v-model:value="form.name" maxlength="40" @update:value="scheduleAutoSave" />
         </div>
         <div class="field-row">
           <div class="field">
@@ -660,13 +663,13 @@ onBeforeUnmount(() => {
       <div class="section">
         <h3 class="section-title">{{ $t("server-detail.jvm-args") }}</h3>
         <p class="section-hint">{{ $t("server-detail.jvm-args-hint") }}</p>
-        <n-input v-model:value="form.jvmArgs" :placeholder="$t('instance-settings.jvm-args-hint')" @update:value="scheduleAutoSave" />
+        <app-input v-model:value="form.jvmArgs" :placeholder="$t('instance-settings.jvm-args-hint')" @update:value="scheduleAutoSave" />
       </div>
 
       <div class="section">
         <h3 class="section-title">{{ $t("server-detail.stop-command") }}</h3>
         <p class="section-hint">{{ $t("server-detail.stop-command-hint") }}</p>
-        <n-input v-model:value="form.stopCommand" placeholder="stop" @update:value="scheduleAutoSave" />
+        <app-input v-model:value="form.stopCommand" placeholder="stop" @update:value="scheduleAutoSave" />
       </div>
 
       <div class="panel-foot">
@@ -704,18 +707,16 @@ onBeforeUnmount(() => {
                     <span class="prop-desc">{{ f.desc }}</span>
                   </div>
                   <div class="prop-control">
-                    <n-switch
+                    <app-switch
                       v-if="f.type === 'bool'"
                       :value="propsData[f.key] === 'true'"
-                      @update:value="(v: boolean) => propsData[f.key] = v ? 'true' : 'false'"
-                    />
-                    <n-select
+                      @update:value="(v: boolean) => propsData[f.key] = v ? 'true' : 'false'" />
+                    <app-select
                       v-else-if="f.type === 'enum'"
                       :value="propsData[f.key]"
                       :options="f.options!.map(o => ({ label: o, value: o }))"
                       size="small"
-                      @update:value="(v: string) => propsData[f.key] = v"
-                    />
+                      @update:value="(v: string) => propsData[f.key] = v" />
                     <n-input-number
                       v-else-if="f.type === 'int'"
                       :value="Number(propsData[f.key])"
@@ -724,12 +725,11 @@ onBeforeUnmount(() => {
                       size="small"
                       @update:value="(v: number | null) => propsData[f.key] = String(v ?? 0)"
                     />
-                    <n-input
+                    <app-input
                       v-else
                       :value="propsData[f.key]"
                       size="small"
-                      @update:value="(v: string) => propsData[f.key] = v"
-                    />
+                      @update:value="(v: string) => propsData[f.key] = v" />
                   </div>
                 </div>
               </div>
@@ -745,13 +745,12 @@ onBeforeUnmount(() => {
         <div v-else class="props-source">
           <div v-if="loadingProps" class="empty-inline">{{ $t("server-detail.loading-config") }}</div>
           <template v-else>
-            <n-input
+            <app-input
               v-model:value="propsSource"
               type="textarea"
               class="editor-textarea"
               :autosize="false"
-              spellcheck="false"
-            />
+              spellcheck="false" />
             <div class="panel-foot">
               <button class="btn primary" :disabled="savingProps" @click="savePropsSource">
                 {{ savingProps ? $t('file-manager.saving') : $t('server-detail.save-config') }}
@@ -861,14 +860,13 @@ onBeforeUnmount(() => {
         <p class="editor-doc">{{ editor.doc }}</p>
         <div v-if="editor.loading" class="editor-loading">{{ $t("server-detail.reading-file") }}</div>
         <div v-else-if="editor.error" class="editor-error">{{ editor.error }}</div>
-        <n-input
+        <app-input
           v-else
           v-model:value="editor.content"
           type="textarea"
           class="editor-textarea"
           :autosize="false"
-          spellcheck="false"
-        />
+          spellcheck="false" />
         <div class="editor-foot">
           <button class="btn ghost" @click="editor = null">{{ $t("common.cancel") }}</button>
           <button

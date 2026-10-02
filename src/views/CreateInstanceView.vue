@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { fmtBytes } from "../utils/format";
 import { isAprilFools } from "../utils/versions";
 import { useRouter } from "vue-router";
-import { NSelect, NInput, NModal, useMessage } from "naive-ui";
+import { useMessage } from "naive-ui";
 // 必须走 filePicker：插件的 open() 在安卓上返回 SAF 的 content:// URI，
 // 后端拿它当真实路径喂给 File::open 必然 ENOENT（桌面返回真实路径，所以只有手机炸）。
 import { pickFile as open } from "../composables/filePicker";
@@ -16,6 +16,8 @@ import IconPickerDialog from "../components/IconPickerDialog.vue";
 import { IconChevronLeft, IconFolder, IconPlus } from "../components/icons";
 import { useIsMobile } from "../composables/useMediaQuery";
 import type { Loader } from "../types";
+import AppInput from "../ui/AppInput.vue";
+import AppSelect from "../ui/AppSelect.vue";
 
 const router = useRouter();
 const instances = useInstancesStore();
@@ -457,17 +459,16 @@ onUnmounted(() => {
       <div class="fresh-left">
         <div class="field">
           <label>{{ $t("create-instance.instance-name") }}</label>
-          <n-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
+          <app-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
         </div>
 
         <div v-if="instances.groups.length" class="field">
           <label>{{ $t("create-instance.group") }}</label>
-          <n-select
+          <app-select
             v-model:value="newGroup"
             :options="groupOptions"
             :placeholder="$t('create-instance.ungrouped')"
-            clearable
-          />
+            clearable />
         </div>
 
         <div class="field">
@@ -483,15 +484,14 @@ onUnmounted(() => {
               {{ l.label }}
             </button>
           </div>
-          <n-select
+          <app-select
             v-if="loader !== 'vanilla'"
             v-model:value="loaderVersion"
             :options="loaderOptions"
             :loading="loadingLoader"
             :disabled="!mcVersion"
             :placeholder="mcVersion ? $t('create-instance.loader-version') : $t('create-instance.pick-version-first')"
-            class="loader-select"
-          />
+            class="loader-select" />
         </div>
 
         <!-- 配置摘要：宽屏贴左列底部，也是创建前的最后确认 -->

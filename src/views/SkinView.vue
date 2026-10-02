@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, onMounted, ref, watch } from "vue";
-import { NTabs, NTabPane, NInput, NButton, NSwitch, useMessage, useDialog } from "naive-ui";
+import { NTabs, NTabPane, NButton, useMessage, useDialog } from "naive-ui";
 import { pickFile as open } from "../composables/filePicker";
 import { api } from "../api";
 import { fmtSize as formatSize } from "../utils/format";
@@ -11,6 +11,8 @@ import { useAccountsStore } from "../stores/accounts";
 import SkinThumb from "../components/SkinThumb.vue";
 import { BUILTIN_SKINS } from "../assets/builtin-skins";
 import AppSheet from "../ui/AppSheet.vue";
+import AppInput from "../ui/AppInput.vue";
+import AppSwitch from "../ui/AppSwitch.vue";
 import {
   IconRefresh,
   IconTrash,
@@ -614,7 +616,7 @@ onMounted(async () => {
         </div>
         <div class="rotate-row">
           <span class="anim-label">{{ $t("skins.auto-rotate") }}</span>
-          <n-switch :value="renderer.autoRotate.value" @update:value="(v: boolean) => renderer.setAutoRotate(v)" />
+          <app-switch :value="renderer.autoRotate.value" @update:value="(v: boolean) => renderer.setAutoRotate(v)" />
         </div>
         <div class="preview-actions">
           <button class="mini-btn" @click="resetView">
@@ -730,11 +732,10 @@ onMounted(async () => {
       :title="$t('skins.fetch-by-premium-name')"
     >
       <div class="modal-body">
-        <n-input
+        <app-input
           v-model:value="playerInput"
           :placeholder="$t('skins.premium-name-hint')"
-          @keyup.enter="fetchPlayerAndSave"
-        />
+          @keyup.enter="fetchPlayerAndSave" />
         <div class="modal-actions">
           <n-button @click="playerModalShow = false">{{ $t("common.cancel") }}</n-button>
           <n-button type="primary" :loading="fetchingPlayer" @click="fetchPlayerAndSave">
@@ -796,11 +797,10 @@ onMounted(async () => {
       :title="$t('skins.named-skin')"
     >
       <div class="modal-body">
-        <n-input
+        <app-input
           v-model:value="renameInput"
           :placeholder="$t('skins.skin-name-hint')"
-          @keyup.enter="confirmRename"
-        />
+          @keyup.enter="confirmRename" />
         <div class="modal-actions">
           <n-button @click="renameModalShow = false">{{ $t("common.cancel") }}</n-button>
           <n-button type="primary" @click="confirmRename">{{ $t("common.save") }}</n-button>

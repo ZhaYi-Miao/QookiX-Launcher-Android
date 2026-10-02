@@ -2,7 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NSelect, NButton, NInput, useMessage } from "naive-ui";
+import { NButton, useMessage } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -14,6 +14,8 @@ import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import { IconCopy, IconExternal, IconGlobe } from "./icons";
 import type { ProjectDependency, ProjectHit, ProjectVersion } from "../types";
 import AppSheet from "../ui/AppSheet.vue";
+import AppInput from "../ui/AppInput.vue";
+import AppSelect from "../ui/AppSelect.vue";
 
 const props = defineProps<{
   show: boolean;
@@ -454,9 +456,9 @@ async function install() {
               </div>
             </template>
             <template v-else>
-              <n-select v-model:value="issueType" :options="issueTypes" size="small" />
-              <n-input v-model:value="userSuggestion" size="small" :placeholder="$t('install-dialog.feedback-suggestion')" />
-              <n-input v-model:value="userComment" size="small" :placeholder="$t('install-dialog.feedback-note')" />
+              <app-select v-model:value="issueType" :options="issueTypes" size="small" />
+              <app-input v-model:value="userSuggestion" size="small" :placeholder="$t('install-dialog.feedback-suggestion')" />
+              <app-input v-model:value="userComment" size="small" :placeholder="$t('install-dialog.feedback-note')" />
               <div class="id-feedback-actions">
                 <n-button size="small" type="primary" :loading="submittingFeedback" @click="submitQuality">{{ $t("install-dialog.submit") }}</n-button>
                 <n-button size="small" @click="feedbackMode = 'choose'">{{ $t("install-dialog.back") }}</n-button>
@@ -469,7 +471,7 @@ async function install() {
       <div class="id-form">
         <label v-if="!isModpack" class="id-field">
           <span>{{ $t("install-dialog.install-to") }}</span>
-          <n-select v-model:value="selectedInstance" :options="instanceOptions()" :placeholder="$t('install-dialog.select-instance')" />
+          <app-select v-model:value="selectedInstance" :options="instanceOptions()" :placeholder="$t('install-dialog.select-instance')" />
         </label>
 
         <div v-if="isModpack" class="id-field">

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { NInput, useMessage } from "naive-ui";
+import { useMessage } from "naive-ui";
 import { api } from "../api";
 import { fmtDate, fmtSize } from "../utils/format";
 import type { ContextMenuItem, FsEntry } from "../types";
 import CodeEditor from "./CodeEditor.vue";
 import ContextMenu from "./ContextMenu.vue";
+import AppInput from "../ui/AppInput.vue";
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -500,14 +501,14 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="fm-tools">
-        <n-input
+        <app-input
           v-model:value="filter"
           size="small"
           :placeholder="$t('file-manager.filter-here')"
           class="fm-search"
         >
           <template #prefix><IconSearch /></template>
-        </n-input>
+        </app-input>
       </div>
 
       <div class="fm-list" @contextmenu.prevent="onBlankContext">

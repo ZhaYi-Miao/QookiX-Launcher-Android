@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { NInput, useMessage } from "naive-ui";
+import { useMessage } from "naive-ui";
 import { api } from "../api";
 import { fmtDate, fmtSize } from "../utils/format";
 import type { ContextMenuItem, FsEntry } from "../types";
 import CodeEditor from "./CodeEditor.vue";
 import ContextMenu from "./ContextMenu.vue";
+import AppInput from "../ui/AppInput.vue";
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -225,13 +226,13 @@ function requestClose(t: OpenTab) {
 // ---------------------------------------------------------------- 新建 / 重命名 / 删除
 
 const creating = ref<{ isDir: boolean; name: string } | null>(null);
-const createInput = ref<InstanceType<typeof NInput> | null>(null);
+const createInput = ref<InstanceType<typeof AppInput> | null>(null);
 const renaming = ref<{ rel: string; name: string } | null>(null);
-const renameInput = ref<InstanceType<typeof NInput> | null>(null);
+const renameInput = ref<InstanceType<typeof AppInput> | null>(null);
 
 // 位于 v-for 内部，必须用函数 ref，否则 Vue 会把它收集成数组
 function setRenameInput(el: unknown) {
-  renameInput.value = (el as InstanceType<typeof NInput> | null) ?? null;
+  renameInput.value = (el as InstanceType<typeof AppInput> | null) ?? null;
 }
 
 function startCreate(isDir: boolean) {
@@ -666,14 +667,14 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="fm-tools">
-        <n-input
+        <app-input
           v-model:value="filter"
           size="small"
           :placeholder="$t('file-manager.filter-here')"
           class="fm-search"
         >
           <template #prefix><IconSearch /></template>
-        </n-input>
+        </app-input>
         <button class="tool" :title="$t('file-manager.new-file')" :aria-label="$t('file-manager.new-file')" @click="startCreate(false)">
           <IconFile /><IconPlus class="plus" />
         </button>
@@ -685,14 +686,13 @@ onBeforeUnmount(() => {
         <span class="fm-badge" :class="creating.isDir ? 'dir' : 'code'">
           <IconFolder v-if="creating.isDir" /><IconFile v-else />
         </span>
-        <n-input
+        <app-input
           ref="createInput"
           v-model:value="creating.name"
           size="small"
           :placeholder="creating.isDir ? $t('file-manager.folder-name') : $t('file-manager.file-name-hint')"
           @keydown.enter="commitCreate"
-          @keydown.esc="creating = null"
-        />
+          @keydown.esc="creating = null" />
         <button class="ok" :title="$t('file-manager.ok')" :aria-label="$t('file-manager.ok')" @click="commitCreate">{{ $t("file-manager.ok") }}</button>
         <button class="cancel" :title="$t('common.cancel')" :aria-label="$t('common.cancel')" @click="creating = null">{{ $t("common.cancel") }}</button>
       </div>
@@ -721,14 +721,13 @@ onBeforeUnmount(() => {
             </span>
 
             <div v-if="renaming && renaming.rel === e.rel" class="fm-rename">
-              <n-input
+              <app-input
                 :ref="setRenameInput"
                 v-model:value="renaming.name"
                 size="small"
                 @click.stop
                 @keydown.enter="commitRename"
-                @keydown.esc="renaming = null"
-              />
+                @keydown.esc="renaming = null" />
               <button class="ok" @click.stop="commitRename">{{ $t("file-manager.ok") }}</button>
               <button class="cancel" @click.stop="renaming = null">{{ $t("common.cancel") }}</button>
             </div>
