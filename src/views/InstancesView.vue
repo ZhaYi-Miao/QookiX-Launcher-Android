@@ -75,7 +75,7 @@ async function moveTo(groupId: string | null) {
 }
 
 onMounted(() => {
-  if (pageAction) pageAction.value = { text: $t("title-bar.new-instance"), run: () => router.push("/create") };
+  if (pageAction) pageAction.value = { text: $t("router.plus"), run: () => router.push("/create") };
 });
 </script>
 

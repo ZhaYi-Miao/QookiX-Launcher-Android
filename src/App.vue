@@ -13,6 +13,10 @@ import { usePinsStore } from "./stores/pins";
 import { MessageBridge } from "./composables/notify";
 import { buildDarkOverrides, buildLightOverrides, DEFAULT_ACCENT, darken, lighten, rgba, ACCENT_ALPHAS } from "./theme";
 import { Tabbar as VanTabbar, TabbarItem as VanTabbarItem } from "vant";
+import AccountChip from "./components/AccountChip.vue";
+import LaunchProgress from "./components/LaunchProgress.vue";
+import CrashDialog from "./components/CrashDialog.vue";
+import FirstRunSetup from "./components/FirstRunSetup.vue";
 import { IconHome, IconGrid, IconCompass, IconDownload, IconUser, IconSettings, IconNewspaper, IconUsers } from "./components/icons";
 
 const route = useRoute();
@@ -112,6 +116,7 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
         <div class="shell app-bg">
           <header class="top">
             <h1 class="title">{{ pageTitle }}</h1>
+            <AccountChip />
             <button v-if="pageAction" class="top-act" @click="pageAction.run()">{{ pageAction.text }}</button>
           </header>
 
@@ -134,6 +139,9 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
             </van-tabbar-item>
           </van-tabbar>
 
+          <LaunchProgress />
+          <CrashDialog />
+          <FirstRunSetup />
           <div id="van-layer"></div>
         </div>
       </n-message-provider>

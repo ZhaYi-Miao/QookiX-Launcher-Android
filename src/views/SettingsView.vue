@@ -27,22 +27,22 @@ const groups = [
       <van-cell v-for="g in groups" :key="g.key" :title="g.label" is-link center @click="tab = g.key" />
     </van-cell-group>
     <van-cell-group v-if="tab === 'general'" inset class="grp">
-      <van-cell :title="$t('settings.show-news')" center>
+      <van-cell :title="$t('settings.sidebar-news')" center>
         <template #right-icon>
           <app-switch :value="settings.settings!.show_news" @update:value="settings.patch({ show_news: $event })" />
         </template>
       </van-cell>
-      <van-cell :title="$t('settings.auto-update')" center>
+      <van-cell :title="$t('instance-content.check-updates')" center>
         <template #right-icon>
           <app-switch :value="settings.settings!.auto_update" @update:value="settings.patch({ auto_update: $event })" />
         </template>
       </van-cell>
     </van-cell-group>
     <van-cell-group v-if="tab === 'appearance'" inset class="grp">
-      <van-cell :title="$t('settings.theme')" center>
+      <van-cell :title="$t('common.theme')" center>
         <template #right-icon>
           <div class="seg">
-            <button :class="{ on: settings.settings!.theme !== 'light' }" @click="settings.patch({ theme: 'dark' })">{{ $t('settings.dark') }}</button>
+            <button :class="{ on: settings.settings!.theme !== 'light' }" @click="settings.patch({ theme: 'dark' })">{{ $t('icon-picker-dialog.dark') }}</button>
             <button :class="{ on: settings.settings!.theme === 'light' }" @click="settings.patch({ theme: 'light' })">{{ $t('settings.light') }}</button>
           </div>
         </template>
