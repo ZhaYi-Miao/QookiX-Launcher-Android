@@ -15,6 +15,7 @@ import { useTasksStore } from "../stores/tasks";
 import { useSettingsStore } from "../stores/settings";
 import AccountChip from "./AccountChip.vue";
 import { useIsMobile } from "../composables/useMediaQuery";
+import { t } from "../i18n";
 
 const route = useRoute();
 const isMobile = useIsMobile();
@@ -37,15 +38,15 @@ defineProps<{ side?: "bottom" | "left" }>();
 // 新闻是可关闭的次要入口，启用时并入（总宽度靠 flex 压缩，不会溢出）。
 const nav = computed(() => {
   const list = [
-    { name: "home", label: "首页", icon: IconHome, to: "/" },
-    { name: "instances", label: "实例", icon: IconGrid, to: "/instances" },
-    { name: "browse", label: "内容", icon: IconCompass, to: "/browse" },
-    { name: "multiplayer", label: "多人", icon: IconUsers, to: "/multiplayer" },
-    { name: "skins", label: "皮肤", icon: IconSkin, to: "/skins" },
-    { name: "settings", label: "设置", icon: IconSettings, to: "/settings" },
+    { name: "home", label: t("nav.home"), icon: IconHome, to: "/" },
+    { name: "instances", label: t("nav.instances"), icon: IconGrid, to: "/instances" },
+    { name: "browse", label: t("nav.browse"), icon: IconCompass, to: "/browse" },
+    { name: "multiplayer", label: t("nav.multiplayer"), icon: IconUsers, to: "/multiplayer" },
+    { name: "skins", label: t("nav.skins"), icon: IconSkin, to: "/skins" },
+    { name: "settings", label: t("nav.settings"), icon: IconSettings, to: "/settings" },
   ];
   if (settingsStore.settings?.show_news ?? true) {
-    list.splice(3, 0, { name: "news", label: "新闻", icon: IconNewspaper, to: "/news" });
+    list.splice(3, 0, { name: "news", label: t("nav.news"), icon: IconNewspaper, to: "/news" });
   }
   return list;
 });
@@ -83,11 +84,11 @@ function isActive(n: { to: string }) {
       to="/downloads"
       class="mobile-nav-item"
       :class="{ active: route.path.startsWith('/downloads') }"
-      title="下载"
-      aria-label="下载"
+      :title="t('nav.downloads')"
+      :aria-label="t('nav.downloads')"
     >
       <IconDownload class="mobile-nav-icon" />
-      <span class="mobile-nav-label">下载</span>
+      <span class="mobile-nav-label">{{ t("nav.downloads") }}</span>
       <span
         v-if="downloadCount > 0"
         class="mobile-nav-badge"

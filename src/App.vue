@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "./i18n";
 import { onMounted, onBeforeUnmount, computed, watch, ref, provide } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { darkTheme, lightTheme, NConfigProvider, NDialogProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider } from "naive-ui";
@@ -11,6 +12,7 @@ import LoadingBarBridge from "./components/LoadingBarBridge.vue";
 import LaunchProgress from "./components/LaunchProgress.vue";
 import CrashDialog from "./components/CrashDialog.vue";
 import RendererHintDialog from "./components/RendererHintDialog.vue";
+import FirstRunSetup from "./components/FirstRunSetup.vue";
 import { useSettingsStore } from "./stores/settings";
 import { MessageBridge } from "./composables/notify";
 
@@ -230,7 +232,7 @@ onMounted(async () => {
       const n = list.filter((p) => p.update_available).length;
       if (n > 0) {
         const { notifyWarning } = await import("./composables/notify");
-        notifyWarning(`有 ${n} 个插件可以更新，到「设置 → 插件」处理`);
+        notifyWarning($t("app.notify-warning", { p1: n }));
       }
     } catch {
       /* 静默失败 */
@@ -244,7 +246,7 @@ onMounted(async () => {
     unlistenShareErr = await listen<{ instanceId: string; error: string }>(
       "share-import://game-install-failed",
       (ev) => {
-        notifyError(`游戏本体自动安装失败：${ev.payload.error}`);
+        notifyError($t("app.notify-error", { p1: ev.payload.error }));
       }
     );
   } catch {
@@ -286,6 +288,7 @@ onBeforeUnmount(() => {
                 <LaunchProgress />
                 <CrashDialog />
                 <RendererHintDialog />
+                <FirstRunSetup />
               </div>
             </n-notification-provider>
           </n-message-provider>

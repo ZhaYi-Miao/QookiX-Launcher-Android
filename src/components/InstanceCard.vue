@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, ref } from "vue";
 import { openMenuId, bindMenuOutside } from "../composables/instanceMenu";
 import { useRouter } from "vue-router";
@@ -41,31 +42,31 @@ async function handleConfirm() {
 /** 上次游玩的相对时间（unix 秒）：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 日期 */
 function relTime(ts: number): string {
   const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 172800) return "昨天";
-  if (diff < 259200) return "前天";
-  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`;
+  if (diff < 60) return $t("instance-card.just-now");
+  if (diff < 3600) return $t("instance-card.minutes-ago", { p1: Math.floor(diff / 60) });
+  if (diff < 86400) return $t("instance-card.hours-ago", { p1: Math.floor(diff / 3600) });
+  if (diff < 172800) return $t("instance-card.yesterday");
+  if (diff < 259200) return $t("instance-card.day-before-yesterday");
+  if (diff < 86400 * 30) return $t("instance-card.days-ago", { p1: Math.floor(diff / 86400) });
   return new Date(ts * 1000).toLocaleDateString();
 }
 
 /** 累计游玩时长（秒）的简短人类可读格式 */
 function fmtDuration(secs: number): string {
-  if (secs < 60) return "不到 1 分钟";
+  if (secs < 60) return $t("instance-card.under-a-minute");
   const totalMin = Math.floor(secs / 60);
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
-  if (h >= 24) return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
-  if (h > 0) return m > 0 ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
-  return `${m} 分钟`;
+  if (h >= 24) return $t("instance-card.days-hours", { p1: Math.floor(h / 24), p2: h % 24 });
+  if (h > 0) return m > 0 ? $t("instance-card.hours-minutes", { p1: h, p2: m }) : $t("instance-card.hours", { p1: h });
+  return $t("instance-card.minutes", { p1: m });
 }
 
 async function launch() {
   try {
     // launch 可能返回 null（渲染器确认弹窗拦下了，等用户决定）—— 那时别提示「已启动」
     const res = await instances.launch(props.instance.id);
-    if (res) message.success("游戏已启动");
+    if (res) message.success($t("instance-card.game-running"));
   } catch (e) {
     message.error(String(e));
   }
@@ -130,13 +131,13 @@ function openFiles() {
 
 function confirmDelete() {
   confirmState.value = {
-    title: "删除实例",
-    content: `确定要删除「${props.instance.name}」吗？游戏目录与全部内容将被移除，此操作不可恢复。`,
-    positiveText: "删除",
+    title: $t("instance-card.delete-instance"),
+    content: $t("instance-card.delete-confirm", { p1: props.instance.name }),
+    positiveText: $t("common.delete"),
     onOk: async () => {
       try {
         await instances.remove(props.instance.id);
-        message.success("实例已删除");
+        message.success($t("instance-card.on-ok"));
       } catch (e) {
         message.error(String(e));
       }
@@ -160,23 +161,21 @@ function confirmDelete() {
     </div>
     <div class="card-foot">
       <div class="foot-info">
-        <span v-if="instance.last_played" :title="`上次游玩 ${new Date(instance.last_played * 1000).toLocaleString()}`">
-          上次 {{ relTime(instance.last_played) }}
+        <span v-if="instance.last_played" :title="$t('instance-card.last-played', { p1: new Date(instance.last_played * 1000).toLocaleString() })">{{ $t("instance-card.last", { p1: relTime(instance.last_played) }) }}
         </span>
         <span v-if="instance.last_played && instance.total_play_time > 0">·</span>
-        <span v-if="instance.total_play_time > 0" title="累计游玩时长">
-          已玩 {{ fmtDuration(instance.total_play_time) }}
+        <span v-if="instance.total_play_time > 0" :title="$t('instance-card.total-playtime')">{{ $t("instance-card.played", { p1: fmtDuration(instance.total_play_time) }) }}
         </span>
       </div>
       <div class="actions" @click.stop>
         <button
           class="icon-btn play"
-          title="启动游戏" aria-label="启动游戏"
+          :title="$t('instance-card.launch')" :aria-label="$t('instance-card.launch')"
           @click="launch"
         >
           <IconPlay />
         </button>
-        <button class="icon-btn" title="查看实例文件" aria-label="查看实例文件" @click="openFiles">
+        <button class="icon-btn" :title="$t('instance-card.open-files')" :aria-label="$t('instance-card.open-files')" @click="openFiles">
           <IconFolder />
         </button>
         <div class="more-wrap">
@@ -184,7 +183,7 @@ function confirmDelete() {
             ref="moreBtn"
             class="icon-btn"
             :class="{ active: menuOpen }"
-            title="更多" aria-label="更多"
+            :title="$t('instance-card.more')" :aria-label="$t('instance-card.more')"
             @click="toggleMenu"
           >
             <IconMoreVertical />
@@ -197,7 +196,7 @@ function confirmDelete() {
                 @click="runMenu(() => togglePin('home'))"
               >
                 <IconMapPin />
-                <span>{{ pins.isPinned(homePinId) ? "取消固定到首页" : "固定到首页" }}</span>
+                <span>{{ pins.isPinned(homePinId) ? $t('instance-card.unpin-home') : $t('instance-saves.pin-home') }}</span>
               </button>
               <button
                 class="more-item"
@@ -205,16 +204,16 @@ function confirmDelete() {
                 @click="runMenu(() => togglePin('sidebar'))"
               >
                 <IconLayout />
-                <span>{{ pins.isPinned(sidebarPinId) ? "取消固定到侧边栏" : "固定到侧边栏" }}</span>
+                <span>{{ pins.isPinned(sidebarPinId) ? $t('instance-card.unpin-sidebar') : $t('instance-card.pin-sidebar') }}</span>
               </button>
               <button class="more-item" @click="runMenu(() => emit('move', instance))">
                 <IconLayers />
-                <span>移动到分组</span>
+                <span>{{ $t("instance-card.move-to-group") }}</span>
               </button>
               <div class="more-divider"></div>
               <button class="more-item danger" @click="runMenu(confirmDelete)">
                 <IconTrash />
-                <span>删除实例</span>
+                <span>{{ $t("instance-card.delete-instance") }}</span>
               </button>
             </div>
           </Transition>
@@ -233,7 +232,7 @@ function confirmDelete() {
     <div v-if="confirmState" style="display: flex; flex-direction: column; gap: 16px;">
       <div style="font-size: 14px; color: var(--text-2); line-height: 1.6;">{{ confirmState.content }}</div>
       <div style="display: flex; justify-content: flex-end; gap: 10px;">
-        <n-button @click="confirmState = null">取消</n-button>
+        <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
         <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
       </div>
     </div>

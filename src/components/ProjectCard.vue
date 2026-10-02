@@ -1,13 +1,22 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { ref } from "vue";
 import { IconBox, IconCheck, IconClock, IconCopy, IconDownload, IconHeart } from "./icons";
 import { translateCategory } from "../utils/categories";
 import { fmtRelative as fmtDate, fmtCount as fmt } from "../utils/format";
 import type { ProjectHit } from "../types";
 
-const props = withDefaults(defineProps<{ project: ProjectHit; view?: "grid" | "list" | "compact" }>(), {
-  view: "grid",
-});
+const props = withDefaults(
+  defineProps<{
+    project: ProjectHit;
+    view?: "grid" | "list" | "compact";
+    /** 这一条正在翻译：描述位置显示骨架 */
+    translating?: boolean;
+    /** 有值就显示译文（null = 显示原文） */
+    translatedDesc?: string | null;
+  }>(),
+  { view: "grid", translating: false, translatedDesc: null }
+);
 const emit = defineEmits<{ install: [p: ProjectHit] }>();
 const iconError = ref(false);
 
@@ -38,7 +47,8 @@ async function copyName() {
             {{ project.author }}
             <span v-if="fmtDate(project.updated)" class="p-updated"><IconClock /> {{ fmtDate(project.updated) }}</span>
           </div>
-          <div class="p-desc">{{ project.description }}</div>
+          <div v-if="translating" class="p-desc shimmer"><span class="shimmer-bar"></span></div>
+          <div v-else class="p-desc">{{ translatedDesc ?? project.description }}</div>
           <div class="p-cats">
             <span v-for="c in project.categories.slice(0, 3)" :key="c" class="cat">{{ translateCategory(c) }}</span>
           </div>
@@ -53,15 +63,14 @@ async function copyName() {
         <div class="p-actions">
           <button
             class="copy-btn"
-            :title="copied ? '已复制' : '复制名称'" :aria-label="copied ? '已复制' : '复制名称'"
+            :title="copied ? $t('crash-analyzer.copied') : $t('install-dialog.copy-name')" :aria-label="copied ? $t('crash-analyzer.copied') : $t('install-dialog.copy-name')"
             @click.stop="copyName"
           >
             <IconCheck v-if="copied" />
             <IconCopy v-else />
           </button>
           <button class="install-btn" @click.stop="emit('install', project)">
-            <IconDownload /> 安装
-          </button>
+            <IconDownload />{{ $t("common.install") }}</button>
         </div>
       </div>
     </template>
@@ -76,7 +85,7 @@ async function copyName() {
           <div class="p-title text-ellipsis" :title="project.title">{{ project.title }}</div>
           <div class="p-author">{{ project.author }}</div>
         </div>
-        <div v-if="view === 'list'" class="p-desc">{{ project.description }}</div>
+        <div v-if="view === 'list'" class="p-desc">{{ translatedDesc ?? project.description }}</div>
         <div class="p-cats">
           <span v-for="c in project.categories.slice(0, 3)" :key="c" class="cat">{{ translateCategory(c) }}</span>
         </div>
@@ -91,15 +100,14 @@ async function copyName() {
         <div class="p-side-actions">
           <button
             class="copy-btn"
-            :title="copied ? '已复制' : '复制名称'" :aria-label="copied ? '已复制' : '复制名称'"
+            :title="copied ? $t('crash-analyzer.copied') : $t('install-dialog.copy-name')" :aria-label="copied ? $t('crash-analyzer.copied') : $t('install-dialog.copy-name')"
             @click.stop="copyName"
           >
             <IconCheck v-if="copied" />
             <IconCopy v-else />
           </button>
           <button class="install-btn" @click.stop="emit('install', project)">
-            <IconDownload /> 安装
-          </button>
+            <IconDownload />{{ $t("common.install") }}</button>
         </div>
       </div>
     </template>
@@ -116,6 +124,28 @@ async function copyName() {
   transition: transform 0.1s ease;
   position: relative;
   overflow: hidden;
+}
+/* 翻译中：描述位置用骨架占位，避免卡片高度跳动 */
+.p-desc.shimmer {
+  position: relative;
+  height: 18px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.shimmer-bar {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  animation: p-shimmer 1.1s infinite;
+}
+@keyframes p-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
 }
 .p-card:active {
   transform: scale(0.97);

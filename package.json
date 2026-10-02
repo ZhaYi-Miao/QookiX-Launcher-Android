@@ -13,12 +13,16 @@
     "preview": "vite preview",
     "tauri": "node scripts/run-tauri.mjs",
     "icons": "tauri icon",
-    "version": "node scripts/update-version.mjs"
+    "version": "node scripts/update-version.mjs",
+    "i18n:extract": "node scripts/extract-i18n.mjs",
+    "i18n:audit": "node scripts/audit-i18n.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
     "naive-ui": "^2.45.2",
     "pinia": "^2.2.6",
     "skinview3d": "^3.4.2",
@@ -28,6 +32,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "pinyin-pro": "^3.29.4",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",
     "vue-tsc": "^2.1.10"

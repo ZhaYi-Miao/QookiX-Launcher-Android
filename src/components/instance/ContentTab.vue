@@ -6,6 +6,7 @@
  * 父组件通过 ref 调用 checkUpdates / importLocal / reload，
  * 并可读取 updatesCount / checkingUpdates 驱动 tab 栏按钮。
  */
+import { t as $t } from "../../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NInput, NModal, useMessage } from "naive-ui";
@@ -39,7 +40,7 @@ const message = useMessage();
 const instances = useInstancesStore();
 
 function sourceLabel(s: string) {
-  return s === "modrinth" ? "Modrinth" : s === "curseforge" ? "CurseForge" : s === "modpack" ? "整合包" : "手动";
+  return s === "modrinth" ? "Modrinth" : s === "curseforge" ? "CurseForge" : s === "modpack" ? $t("instance-content.modpack") : $t("instance-content.manual");
 }
 
 function iconUrl(icon: string | null): string | null {
@@ -94,8 +95,8 @@ async function checkUpdates() {
     const map: Record<string, UpdateInfo> = {};
     for (const u of list) map[u.filename] = u;
     updates.value = map;
-    if (!list.length) message.success("所有内容都是最新版本");
-    else message.info(`发现 ${list.length} 个可更新内容`);
+    if (!list.length) message.success($t("instance-content.all-up-to-date"));
+    else message.info($t("instance-content.updates-found", { p1: list.length }));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -106,7 +107,7 @@ async function checkUpdates() {
 async function applyUpdate(u: UpdateInfo) {
   try {
     await api.applyUpdate(props.instanceId, props.kind, u.filename, u.provider, u.projectId, u.latestVersionId);
-    message.success("已加入下载队列：" + (u.projectTitle ?? u.filename));
+    message.success($t("instance-content.queued") + (u.projectTitle ?? u.filename));
     const next = { ...updates.value };
     delete next[u.filename];
     updates.value = next;
@@ -131,13 +132,13 @@ async function handleConfirm() {
 
 function removeContent(item: ContentItem) {
   confirmState.value = {
-    title: "移除内容",
-    content: `确定要移除「${item.record.filename}」吗？`,
-    positiveText: "移除",
+    title: $t("instance-content.remove"),
+    content: $t("instance-content.remove-confirm", { p1: item.record.filename }),
+    positiveText: $t("account-chip.positive-text"),
     onOk: async () => {
       try {
         await api.uninstallContent(props.instanceId, props.kind, item.record.filename);
-        message.success("已移除");
+        message.success($t("instance-content.on-ok"));
         await loadContent();
       } catch (e) {
         message.error(String(e));
@@ -148,12 +149,12 @@ function removeContent(item: ContentItem) {
 
 async function importLocal() {
   const kind = props.kind;
-  const filter = kind === "mod" ? [{ name: "JAR 文件", extensions: ["jar"] }] : [{ name: "ZIP 文件", extensions: ["zip"] }];
+  const filter = kind === "mod" ? [{ name: $t("instance-content.jar-file"), extensions: ["jar"] }] : [{ name: $t("instance-content.zip-file"), extensions: ["zip"] }];
   const file = await open({ multiple: false, filters: filter });
   if (!file) return;
   try {
     await api.importLocalFile(props.instanceId, kind, file as string);
-    message.success("已导入");
+    message.success($t("instance-content.imported"));
     await loadContent();
   } catch (e) {
     message.error(String(e));
@@ -164,7 +165,7 @@ async function toggleContent(item: ContentItem) {
   try {
     await api.toggleContentEnabled(props.instanceId, props.kind, item.record.filename, !item.record.enabled);
     item.record.enabled = !item.record.enabled;
-    message.success(item.record.enabled ? "已启用" : "已禁用");
+    message.success(item.record.enabled ? $t("common.enabled") : $t("instance-content.disabled"));
   } catch (e) {
     message.error(String(e));
   }
@@ -219,12 +220,12 @@ function buildModSearchQuery(item: ContentItem) {
 async function openSwitchVersion(item: ContentItem) {
   const src = item.record.source;
   if (src !== "modrinth" && src !== "curseforge") {
-    message.info("手动导入的内容无法切换版本");
+    message.info($t("instance-content.manual-no-switch"));
     return;
   }
   const pid = item.record.project_id;
   if (!pid) {
-    message.info("缺少项目信息，无法切换版本");
+    message.info($t("instance-content.no-project-info"));
     return;
   }
   const inst = instances.get(props.instanceId);
@@ -254,17 +255,17 @@ async function openSwitchVersion(item: ContentItem) {
 async function doSwitchVersion() {
   const s = switchState.value;
   if (!s.item || !s.selected) {
-    message.warning("请选择一个版本");
+    message.warning($t("install-dialog.pick-version"));
     return;
   }
   if (s.selected === s.item.record.version_id) {
-    message.info("已选择当前安装的版本");
+    message.info($t("instance-content.current-version-selected"));
     switchState.value.show = false;
     return;
   }
   try {
     await api.applyUpdate(props.instanceId, props.kind, s.item.record.filename, s.provider, s.projectId, s.selected);
-    message.success("已将切换版本任务添加到下载队列");
+    message.success($t("instance-content.switch-queued"));
     switchState.value.show = false;
     await loadContent();
   } catch (e) {
@@ -299,9 +300,9 @@ onMounted(async () => {
       (ev) => {
         const p = ev.payload;
         if (p.ok) {
-          message.success((updates.value[p.filename]?.projectTitle ?? p.filename) + " 已更新");
+          message.success((updates.value[p.filename]?.projectTitle ?? p.filename) + $t("instance-content.updated"));
         } else {
-          message.error("更新失败 " + p.filename + (p.error ? "：" + p.error : ""));
+          message.error($t("instance-content.update-failed") + p.filename + (p.error ? "：" + p.error : ""));
         }
         loadContent();
       }
@@ -376,33 +377,32 @@ defineExpose({
           v-model:value="filterText"
           size="small"
           class="filter-input"
-          :placeholder="`在 ${contentItems.length} 个内容中搜索…`"
+          :placeholder="$t('instance-content.search-content', { p1: contentItems.length })"
         >
           <template #prefix><IconSearch /></template>
         </n-input>
-        <button v-if="filterText" class="filter-clear" title="清除" aria-label="清除" @click="filterText = ''">
+        <button v-if="filterText" class="filter-clear" :title="$t('instance-content.positive-text')" :aria-label="$t('instance-content.positive-text')" @click="filterText = ''">
           <IconClose />
         </button>
       </template>
       <div class="ct-toolbar-actions">
         <button class="btn ghost" :disabled="checkingUpdates" @click="checkUpdates">
-          <IconRefresh /> 检查更新
-          <span v-if="updatesCount" class="upd-n">{{ updatesCount }}</span>
+          <IconRefresh />{{ $t("instance-content.check-updates") }}<span v-if="updatesCount" class="upd-n">{{ updatesCount }}</span>
         </button>
-        <button class="btn ghost" @click="importLocal"><IconPlus /> 导入本地</button>
+        <button class="btn ghost" @click="importLocal"><IconPlus />{{ $t("instance-content.import-local") }}</button>
       </div>
     </div>
     <div v-if="!loadingContent && !filteredItems.length" class="empty glass">
       <template v-if="contentItems.length">
-        <p>没有匹配「{{ filterText }}」的内容</p>
-        <button class="btn ghost" @click="filterText = ''">清除搜索</button>
+        <p>{{ $t("instance-content.no-match", { p1: filterText }) }}</p>
+        <button class="btn ghost" @click="filterText = ''">{{ $t("instance-content.clear-search") }}</button>
       </template>
       <template v-else>
-        <p>这里还是空的</p>
+        <p>{{ $t("instance-content.empty") }}</p>
         <div class="empty-actions">
           <!-- 「导入本地」已经在上方工具栏里了，这里不再放第二份（同一个动作两处入口
                正是这次要清掉的重复） -->
-          <button class="btn ghost" @click="router.push('/browse')">从内容中心安装</button>
+          <button class="btn ghost" @click="router.push('/browse')">{{ $t("instance-content.install-from-browse") }}</button>
         </div>
       </template>
     </div>
@@ -429,15 +429,15 @@ defineExpose({
           <div class="c-meta">
             <span v-if="item.record.source !== 'manual'" class="src" :class="item.record.source">{{ sourceLabel(item.record.source) }}</span>
             <span v-if="item.record.version" class="ver">{{ item.record.version }}</span>
-            <span v-if="item.record.authors && item.record.authors.length" class="author">作者：{{ item.record.authors.join("、") }}</span>
-            <span v-if="!item.exists" class="missing">文件缺失</span>
+            <span v-if="item.record.authors && item.record.authors.length" class="author">{{ $t("instance-content.author", { p1: item.record.authors.join("、") }) }}</span>
+            <span v-if="!item.exists" class="missing">{{ $t("instance-content.file-missing") }}</span>
           </div>
         </div>
         <div class="c-actions">
           <button
             v-if="updates[item.record.filename]"
             class="icon-btn ok"
-            :title="`更新到 ${updates[item.record.filename].latestVersion}`" :aria-label="`更新到 ${updates[item.record.filename].latestVersion}`"
+            :title="$t('instance-content.update-to', { p1: updates[item.record.filename].latestVersion })" :aria-label="$t('instance-content.update-to', { p1: updates[item.record.filename].latestVersion })"
             @click="applyUpdate(updates[item.record.filename])"
           >
             <IconDownload />
@@ -445,14 +445,14 @@ defineExpose({
           <button
             v-if="(item.record.source === 'modrinth' || item.record.source === 'curseforge') && item.record.project_id"
             class="icon-btn"
-            title="切换版本" aria-label="切换版本"
+            :title="$t('instance-content.switch-version')" :aria-label="$t('instance-content.switch-version')"
             @click="openSwitchVersion(item)"
           >
             <IconRepeat />
           </button>
           <button
             class="icon-btn"
-            title="在内容中心搜索" aria-label="在内容中心搜索"
+            :title="$t('instance-content.search-in-browse')" :aria-label="$t('instance-content.search-in-browse')"
             @click="router.push({ name: 'browse', query: buildModSearchQuery(item) })"
           >
             <IconSearch />
@@ -460,7 +460,7 @@ defineExpose({
           <button
             v-if="item.record.enabled"
             class="icon-btn warn"
-            title="禁用" aria-label="禁用"
+            :title="$t('instance-content.disable')" :aria-label="$t('instance-content.disable')"
             @click="toggleContent(item)"
           >
             <IconClose />
@@ -468,12 +468,12 @@ defineExpose({
           <button
             v-else
             class="icon-btn ok"
-            title="启用" aria-label="启用"
+            :title="$t('instance-content.enable')" :aria-label="$t('instance-content.enable')"
             @click="toggleContent(item)"
           >
             <IconCheck />
           </button>
-          <button class="icon-btn danger" title="移除" aria-label="移除" @click="removeContent(item)">
+          <button class="icon-btn danger" :title="$t('account-chip.positive-text')" :aria-label="$t('account-chip.positive-text')" @click="removeContent(item)">
             <IconTrash />
           </button>
         </div>
@@ -495,7 +495,7 @@ defineExpose({
       <div v-if="confirmState" ref="confirmCardRef" style="display: flex; flex-direction: column; gap: 16px;">
         <div style="font-size: 14px; color: var(--text-2); line-height: 1.6;">{{ confirmState.content }}</div>
         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-          <n-button @click="confirmState = null">取消</n-button>
+          <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
           <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
         </div>
       </div>
@@ -506,15 +506,15 @@ defineExpose({
       :auto-focus="false"
       v-model:show="switchState.show"
       preset="card"
-      :title="`切换版本：${switchState.item?.record.name ?? switchState.item?.record.filename ?? ''}`"
+      :title="$t('instance-content.switch-version-to', { p1: switchState.item?.record.name ?? switchState.item?.record.filename ?? '' })"
       style="width: 520px; max-width: 94vw"
       :mask-closable="true"
       :close-on-esc="true"
       @mask-click="switchState.show = false"
     >
       <div ref="switchCardRef" class="sv-body">
-        <div v-if="switchState.loading" class="center">加载中…</div>
-        <div v-else-if="!switchState.versions.length" class="center">没有可用的版本</div>
+        <div v-if="switchState.loading" class="center">{{ $t("file-manager.loading") }}</div>
+        <div v-else-if="!switchState.versions.length" class="center">{{ $t("instance-content.no-versions") }}</div>
         <div v-else class="sv-list">
           <button
             v-for="v in switchState.versions"
@@ -528,15 +528,13 @@ defineExpose({
           </button>
         </div>
         <div class="sv-actions">
-          <n-button size="small" @click="switchState.show = false">取消</n-button>
+          <n-button size="small" @click="switchState.show = false">{{ $t("common.cancel") }}</n-button>
           <n-button
             size="small"
             type="primary"
             :disabled="!switchState.selected || switchState.loading"
             @click="doSwitchVersion"
-          >
-            切换
-          </n-button>
+          >{{ $t("instance-content.switch") }}</n-button>
         </div>
       </div>
     </n-modal>

@@ -19,6 +19,7 @@ mod jvm_launcher;
 mod render_bridge;
 mod input_bridge;
 mod browse;
+mod translate;
 mod pins;
 mod groups;
 mod mirror;
@@ -100,6 +101,10 @@ pub fn run() {
             commands::set_plugin_enabled,
             commands::get_plugin_manifest_url,
             commands::set_plugin_manifest_url,
+            // 首启准备：自动补齐渲染器/驱动/组件
+            commands::get_plugin_setup_status,
+            commands::install_recommended_plugins,
+            commands::dismiss_plugin_setup,
             
             // Modpack commands
             commands::import_modpack,
@@ -119,6 +124,15 @@ pub fn run() {
             commands::list_content,
             commands::mc_wiki_url,
             commands::fetch_news,
+
+            // 内容中心翻译
+            commands::translate_mod_descriptions,
+            commands::translate_project_body,
+            commands::report_translation_stale,
+            commands::report_translation_quality,
+            commands::clear_translation_cache,
+            commands::test_translate_api,
+
             commands::estimate_download,
             commands::estimate_import,
 
@@ -226,6 +240,13 @@ pub fn run() {
             // 控制布局的按键透传
             controls::get_control_buttons,
             controls::set_control_button_passthru,
+
+            // 控制布局管理（列出 / 切换当前 / 复制 / 重命名 / 删除）
+            controls::list_control_layouts,
+            controls::set_current_control_layout,
+            controls::duplicate_control_layout,
+            controls::rename_control_layout,
+            controls::delete_control_layout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qookix application");

@@ -4,6 +4,7 @@
  * 与桌面端一致的地方：启动静默检查、可忽略某版本、下完不自动装。
  * 不同的地方：安卓装包必须走系统确认框，所以最后一步是「安装」按钮。
  */
+import { t as $t } from "./i18n";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -90,7 +91,7 @@ export async function downloadUpdate(): Promise<string | null> {
 export async function installUpdate(): Promise<void> {
   const path = updatePackage.value ?? updateInfo.value?.downloadedPath;
   if (!path) {
-    updateError.value = "还没有下载安装包";
+    updateError.value = $t("updater.no-apk");
     return;
   }
   try {

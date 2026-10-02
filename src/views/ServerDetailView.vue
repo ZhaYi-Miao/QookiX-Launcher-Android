@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import { fmtSize } from "../utils/format";
 import { useRoute, useRouter } from "vue-router";
@@ -36,12 +37,12 @@ const running = computed(() => servers.isRunning(serverId));
 const tab = ref<string>("logs");
 const folders = ref<Record<string, boolean>>({});
 const ALL_TABS = [
-  { key: "logs", label: "日志" },
-  { key: "settings", label: "设置" },
-  { key: "config", label: "配置文件" },
-  { key: "mods", label: "模组", folder: "mods" },
-  { key: "plugins", label: "插件", folder: "plugins" },
-  { key: "files", label: "文件" },
+  { key: "logs", label: $t("common.logs") },
+  { key: "settings", label: $t("router.settings") },
+  { key: "config", label: $t("server-detail.config") },
+  { key: "mods", label: $t("browse.mods"), folder: "mods" },
+  { key: "plugins", label: $t("server-detail.plugins"), folder: "plugins" },
+  { key: "files", label: $t("instance-detail.files") },
 ];
 const tabs = computed(() =>
   ALL_TABS.filter((t) => !t.folder || folders.value[t.folder] || t.key === tab.value),
@@ -134,46 +135,46 @@ type PropField = {
 };
 
 const PROPS_SCHEMA: PropField[] = [
-  { key: "server-port", label: "服务器端口", desc: "玩家连接的端口号", type: "int", min: 1, max: 65535, group: "基本" },
-  { key: "max-players", label: "最大玩家数", desc: "同时在线玩家上限", type: "int", min: 0, group: "基本" },
-  { key: "motd", label: "服务器描述", desc: "在服务器列表中显示的文本", type: "string", group: "基本" },
-  { key: "player-idle-timeout", label: "空闲踢出", desc: "玩家无操作多少分钟后踢出，0 为禁用", type: "int", min: 0, group: "基本" },
-  { key: "gamemode", label: "游戏模式", desc: "新玩家进入时的默认模式", type: "enum", options: ["survival", "creative", "adventure", "spectator"], group: "玩法" },
-  { key: "difficulty", label: "难度", desc: "怪物强度与饥饿伤害", type: "enum", options: ["peaceful", "easy", "normal", "hard"], group: "玩法" },
-  { key: "pvp", label: "允许 PVP", desc: "玩家之间能否互相攻击", type: "bool", group: "玩法" },
-  { key: "hardcore", label: "极限模式", desc: "死亡后封禁账号，仅可旁观", type: "bool", group: "玩法" },
-  { key: "force-gamemode", label: "强制游戏模式", desc: "玩家加入时强制切换到默认模式", type: "bool", group: "玩法" },
-  { key: "allow-flight", label: "允许飞行", desc: "允许玩家在生存模式下飞行", type: "bool", group: "玩法" },
-  { key: "enable-command-block", label: "命令方块", desc: "启用命令方块功能", type: "bool", group: "玩法" },
-  { key: "level-name", label: "世界名称", desc: "主世界存档文件夹名", type: "string", group: "世界" },
-  { key: "level-seed", label: "世界种子", desc: "留空则随机生成", type: "string", group: "世界" },
-  { key: "level-type", label: "世界类型", desc: "地形生成方式", type: "enum", options: ["minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified"], group: "世界" },
-  { key: "generate-structures", label: "生成结构", desc: "村庄、神殿、废弃矿井等结构", type: "bool", group: "世界" },
-  { key: "allow-nether", label: "允许下界", desc: "生成下界维度", type: "bool", group: "世界" },
-  { key: "spawn-animals", label: "生成动物", desc: "生成牛、羊、猪等动物", type: "bool", group: "世界" },
-  { key: "spawn-monsters", label: "生成怪物", desc: "生成僵尸、骷髅等怪物", type: "bool", group: "世界" },
-  { key: "spawn-npcs", label: "生成 NPC", desc: "生成村民等 NPC", type: "bool", group: "世界" },
-  { key: "max-world-size", label: "最大世界大小", desc: "世界边界半径（方块数）", type: "int", min: 0, group: "世界" },
-  { key: "online-mode", label: "正版验证", desc: "验证玩家账号，关闭可允许离线模式加入", type: "bool", group: "安全" },
-  { key: "white-list", label: "白名单", desc: "仅白名单内玩家可加入", type: "bool", group: "安全" },
-  { key: "enforce-secure-profile", label: "强制安全配置", desc: "1.19+ 聊天签名验证", type: "bool", group: "安全" },
-  { key: "prevent-proxy-connections", label: "防止代理连接", desc: "拒绝通过代理连接的玩家", type: "bool", group: "安全" },
-  { key: "view-distance", label: "视距", desc: "发送给玩家的区块半径", type: "int", min: 3, max: 32, group: "性能" },
-  { key: "simulation-distance", label: "模拟距离", desc: "实体与方块更新的区块半径", type: "int", min: 3, max: 32, group: "性能" },
-  { key: "network-compression-threshold", label: "网络压缩阈值", desc: "数据包大于此值才压缩，-1 禁用", type: "int", group: "性能" },
-  { key: "max-tick-time", label: "最大 Tick 时间", desc: "单 tick 超时毫秒数，-1 禁用看门狗", type: "int", group: "性能" },
-  { key: "use-native-transport", label: "原生传输", desc: "Linux 上使用 io_uring 加速网络", type: "bool", group: "性能" },
-  { key: "sync-chunk-writes", label: "同步区块写入", desc: "区块数据同步写入磁盘", type: "bool", group: "性能" },
-  { key: "entity-broadcast-range-percentage", label: "实体广播范围", desc: "实体动作同步范围百分比", type: "int", min: 0, max: 100, group: "性能" },
-  { key: "enable-jmx-monitoring", label: "JMX 监控", desc: "启用 JMX 性能监控", type: "bool", group: "性能" },
-  { key: "enable-rcon", label: "RCON 远程控制", desc: "允许通过 RCON 协议远程执行命令", type: "bool", group: "远程" },
-  { key: "rcon.port", label: "RCON 端口", desc: "RCON 服务端口", type: "int", min: 1, max: 65535, group: "远程" },
-  { key: "rcon.password", label: "RCON 密码", desc: "RCON 认证密码", type: "string", group: "远程" },
-  { key: "enable-query", label: "Query 协议", desc: "允许外部查询服务器状态", type: "bool", group: "远程" },
-  { key: "query.port", label: "Query 端口", desc: "Query 服务端口", type: "int", min: 1, max: 65535, group: "远程" },
-  { key: "resource-pack", label: "资源包 URL", desc: "玩家加入时下载的资源包地址", type: "string", group: "资源包" },
-  { key: "resource-pack-sha1", label: "资源包校验", desc: "资源包 SHA1 哈希值", type: "string", group: "资源包" },
-  { key: "require-resource-pack", label: "强制资源包", desc: "拒绝加载资源包则踢出玩家", type: "bool", group: "资源包" },
+  { key: "server-port", label: $t("server-detail.server-port"), desc: $t("server-detail.int"), type: "int", min: 1, max: 65535, group: $t("server-detail.group") },
+  { key: "max-players", label: $t("server-detail.max-players"), desc: $t("server-detail.tong-shi-zai-xian-wan-jia"), type: "int", min: 0, group: $t("server-detail.group") },
+  { key: "motd", label: $t("server-detail.motd"), desc: $t("server-detail.string"), type: "string", group: $t("server-detail.group") },
+  { key: "player-idle-timeout", label: $t("server-detail.player-idle-timeout"), desc: $t("server-detail.wan-jia-wu-cao-zuo-duo"), type: "int", min: 0, group: $t("server-detail.group") },
+  { key: "gamemode", label: $t("server-detail.gamemode"), desc: $t("server-detail.enum"), type: "enum", options: ["survival", "creative", "adventure", "spectator"], group: $t("utils.categories.group") },
+  { key: "difficulty", label: $t("utils.categories.difficulty"), desc: $t("server-detail.difficulty"), type: "enum", options: ["peaceful", "easy", "normal", "hard"], group: $t("utils.categories.group") },
+  { key: "pvp", label: $t("server-detail.pvp"), desc: $t("server-detail.bool"), type: "bool", group: $t("utils.categories.group") },
+  { key: "hardcore", label: $t("utils.categories.hardcore-mode"), desc: $t("server-detail.hardcore"), type: "bool", group: $t("utils.categories.group") },
+  { key: "force-gamemode", label: $t("server-detail.force-gamemode"), desc: $t("server-detail.wan-jia-jia-ru-shi-qiang"), type: "bool", group: $t("utils.categories.group") },
+  { key: "allow-flight", label: $t("server-detail.allow-flight"), desc: $t("server-detail.yun-xu-wan-jia-zai-sheng"), type: "bool", group: $t("utils.categories.group") },
+  { key: "enable-command-block", label: $t("server-detail.enable-command-block"), desc: $t("server-detail.qi-yong-ming-ling-fang-kuai"), type: "bool", group: $t("utils.categories.group") },
+  { key: "level-name", label: $t("server-detail.level-name"), desc: $t("server-detail.zhu-shi-jie-cun-dang-wen"), type: "string", group: $t("instance-detail.group") },
+  { key: "level-seed", label: $t("server-detail.level-seed"), desc: $t("server-detail.liu-kong-ze-sui-ji-sheng"), type: "string", group: $t("instance-detail.group") },
+  { key: "level-type", label: $t("server-detail.level-type"), desc: $t("server-detail.di-xing-sheng-cheng-fang-shi"), type: "enum", options: ["minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified"], group: $t("instance-detail.group") },
+  { key: "generate-structures", label: $t("server-detail.generate-structures"), desc: $t("server-detail.cun-zhuang-shen-dian-fei-qi"), type: "bool", group: $t("instance-detail.group") },
+  { key: "allow-nether", label: $t("server-detail.allow-nether"), desc: $t("server-detail.sheng-cheng-xia-jie-wei-du"), type: "bool", group: $t("instance-detail.group") },
+  { key: "spawn-animals", label: $t("server-detail.spawn-animals"), desc: $t("server-detail.sheng-cheng-niu-yang-zhu-deng"), type: "bool", group: $t("instance-detail.group") },
+  { key: "spawn-monsters", label: $t("server-detail.spawn-monsters"), desc: $t("server-detail.sheng-cheng-jiang-shi-ku-lou"), type: "bool", group: $t("instance-detail.group") },
+  { key: "spawn-npcs", label: $t("server-detail.spawn-npcs"), desc: $t("server-detail.sheng-cheng-cun-min-deng"), type: "bool", group: $t("instance-detail.group") },
+  { key: "max-world-size", label: $t("server-detail.max-world-size"), desc: $t("server-detail.shi-jie-bian-jie-ban-jing"), type: "int", min: 0, group: $t("instance-detail.group") },
+  { key: "online-mode", label: $t("server-detail.online-mode"), desc: $t("server-detail.yan-zheng-wan-jia-zhang-hao"), type: "bool", group: $t("server-detail.white-list") },
+  { key: "white-list", label: $t("server-detail.bai-ming-dan"), desc: $t("server-detail.jin-bai-ming-dan-nei-wan"), type: "bool", group: $t("server-detail.white-list") },
+  { key: "enforce-secure-profile", label: $t("server-detail.enforce-secure-profile"), desc: $t("server-detail.liao-tian-qian-ming-yan-zheng"), type: "bool", group: $t("server-detail.white-list") },
+  { key: "prevent-proxy-connections", label: $t("server-detail.prevent-proxy-connections"), desc: $t("server-detail.ju-jue-tong-guo-dai-li"), type: "bool", group: $t("server-detail.white-list") },
+  { key: "view-distance", label: $t("server-detail.view-distance"), desc: $t("server-detail.fa-song-gei-wan-jia-de"), type: "int", min: 3, max: 32, group: $t("utils.categories.int") },
+  { key: "simulation-distance", label: $t("server-detail.simulation-distance"), desc: $t("server-detail.shi-ti-yu-fang-kuai-geng"), type: "int", min: 3, max: 32, group: $t("utils.categories.int") },
+  { key: "network-compression-threshold", label: $t("server-detail.network-compression-threshold"), desc: $t("server-detail.shu-ju-bao-da-yu-ci"), type: "int", group: $t("utils.categories.int") },
+  { key: "max-tick-time", label: $t("server-detail.max-tick-time"), desc: $t("server-detail.dan-t-i-c-k-chao"), type: "int", group: $t("utils.categories.int") },
+  { key: "use-native-transport", label: $t("server-detail.use-native-transport"), desc: $t("server-detail.i-n-u-x-shang-shi"), type: "bool", group: $t("utils.categories.int") },
+  { key: "sync-chunk-writes", label: $t("server-detail.sync-chunk-writes"), desc: $t("server-detail.qu-kuai-shu-ju-tong-bu"), type: "bool", group: $t("utils.categories.int") },
+  { key: "entity-broadcast-range-percentage", label: $t("server-detail.entity-broadcast-range-percentage"), desc: $t("server-detail.shi-ti-dong-zuo-tong-bu"), type: "int", min: 0, max: 100, group: $t("utils.categories.int") },
+  { key: "enable-jmx-monitoring", label: $t("server-detail.enable-jmx-monitoring"), desc: $t("server-detail.qi-yong-xing-neng-jian-kong"), type: "bool", group: $t("utils.categories.int") },
+  { key: "enable-rcon", label: $t("server-detail.enable-rcon"), desc: $t("server-detail.yun-xu-tong-guo-xie-yi"), type: "bool", group: $t("server-detail.rcon-port") },
+  { key: "rcon.port", label: $t("server-detail.duan-kou"), desc: $t("server-detail.fu-wu-duan-kou"), type: "int", min: 1, max: 65535, group: $t("server-detail.rcon-port") },
+  { key: "rcon.password", label: $t("server-detail.rcon-password"), desc: $t("server-detail.ren-zheng-mi-ma"), type: "string", group: $t("server-detail.rcon-port") },
+  { key: "enable-query", label: $t("server-detail.enable-query"), desc: $t("server-detail.yun-xu-wai-bu-cha-xun"), type: "bool", group: $t("server-detail.rcon-port") },
+  { key: "query.port", label: $t("server-detail.query-port"), desc: $t("server-detail.u-e-r-y-fu-wu"), type: "int", min: 1, max: 65535, group: $t("server-detail.rcon-port") },
+  { key: "resource-pack", label: $t("server-detail.resource-pack"), desc: $t("server-detail.wan-jia-jia-ru-shi-xia"), type: "string", group: $t("browse.group") },
+  { key: "resource-pack-sha1", label: $t("server-detail.zi-yuan-bao-jiao-yan"), desc: $t("server-detail.zi-yuan-bao-ha-xi-zhi"), type: "string", group: $t("browse.group") },
+  { key: "require-resource-pack", label: $t("server-detail.require-resource-pack"), desc: $t("server-detail.ju-jue-jia-zai-zi-yuan"), type: "bool", group: $t("browse.group") },
 ];
 
 const PROPS_DEFAULTS: Record<string, string> = {
@@ -258,7 +259,7 @@ async function savePropsForm() {
     const text = buildProperties();
     await api.writeHostedServerFile(serverId, "server.properties", text);
     propsSource.value = text;
-    message.success("配置已保存");
+    message.success($t("server-detail.config-saved"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -275,7 +276,7 @@ async function savePropsSource() {
     for (const f of PROPS_SCHEMA) merged[f.key] = data[f.key] ?? PROPS_DEFAULTS[f.key] ?? "";
     propsData.value = merged;
     propsExtra.value = extra;
-    message.success("配置已保存");
+    message.success($t("server-detail.config-saved"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -285,23 +286,23 @@ async function savePropsSource() {
 
 // ---- 其他配置文件 ----
 const CONFIG_DOCS: Record<string, string> = {
-  "eula.txt": "Mojang 最终用户许可协议，必须设为 eula=true 服务器才能启动",
-  "ops.json": "管理员（OP）列表，记录拥有管理权限的玩家及其权限等级",
-  "whitelist.json": "白名单列表，开启白名单后仅其中的玩家可加入服务器",
-  "banned-players.json": "被封禁的玩家列表，记录封禁原因与到期时间",
-  "banned-ips.json": "被封禁的 IP 地址列表",
-  "spigot.yml": "Spigot 服务端配置：性能调优、调试、命令、网络设置",
-  "paper.yml": "Paper 旧版配置（新版已迁移到 paper-global.yml 与 paper-world-defaults.yml）",
-  "paper-global.yml": "Paper 全局配置：异步区块、性能修复、压缩、网络等服务器级选项",
-  "paper-world-defaults.yml": "Paper 世界默认配置：每个世界的默认优化与修复选项",
-  "purpur.yml": "Purpur 配置：更细粒度的玩法调整与性能选项",
-  "bukkit.yml": "Bukkit 配置：世界生成、数据库、调试设置",
-  "commands.yml": "命令配置：命令别名与权限映射",
-  "pufferfish.yml": "Pufferfish 配置：性能与优化选项",
-  "permissions.yml": "权限配置",
-  "help.yml": "帮助命令配置",
-  "fabric-server.properties": "Fabric 服务端配置",
-  "logs.yml": "日志输出配置",
+  "eula.txt": $t("server-detail.eula-txt"),
+  "ops.json": $t("server-detail.ops-json"),
+  "whitelist.json": $t("server-detail.whitelist-json"),
+  "banned-players.json": $t("server-detail.banned-players-json"),
+  "banned-ips.json": $t("server-detail.banned-ips-json"),
+  "spigot.yml": $t("server-detail.spigot-yml"),
+  "paper.yml": $t("server-detail.paper-yml"),
+  "paper-global.yml": $t("server-detail.paper-global-yml"),
+  "paper-world-defaults.yml": $t("server-detail.paper-world-defaults-yml"),
+  "purpur.yml": $t("server-detail.purpur-yml"),
+  "bukkit.yml": $t("server-detail.bukkit-yml"),
+  "commands.yml": $t("server-detail.commands-yml"),
+  "pufferfish.yml": $t("server-detail.pufferfish-yml"),
+  "permissions.yml": $t("server-detail.permissions-yml"),
+  "help.yml": $t("server-detail.help-yml"),
+  "fabric-server.properties": $t("server-detail.fabric-server-properties"),
+  "logs.yml": $t("server-detail.logs-yml"),
 };
 
 type ConfigFile = { name: string; rel: string; size: number; modified: number };
@@ -311,8 +312,8 @@ const loadingConfigs = ref(false);
 function configDoc(rel: string): string {
   const name = rel.split("/").pop() ?? rel;
   if (CONFIG_DOCS[name]) return CONFIG_DOCS[name];
-  if (rel.startsWith("config/")) return "模组 / 插件配置文件，由对应模组生成，可调整其行为参数";
-  return "自定义配置文件";
+  if (rel.startsWith("config/")) return $t("server-detail.config-desc");
+  return $t("server-detail.custom-config");
 }
 
 async function loadConfigFiles() {
@@ -373,7 +374,7 @@ async function saveEditor() {
   ed.saving = true;
   try {
     await api.writeHostedServerFile(serverId, ed.rel, ed.content);
-    message.success("配置已保存");
+    message.success($t("server-detail.config-saved"));
     editor.value = null;
     loadConfigFiles();
   } catch (e) {
@@ -437,10 +438,10 @@ function clearLogs() {
 const logText = computed(() => logs.value.map((l) => l.line).join("\n"));
 
 async function copyLogs() {
-  if (!logText.value) return message.info("暂无日志内容");
+  if (!logText.value) return message.info($t("log-viewer.no-logs"));
   try {
     await navigator.clipboard.writeText(logText.value);
-    message.success("已复制全部日志");
+    message.success($t("log-viewer.all-copied"));
   } catch {
     const ta = document.createElement("textarea");
     ta.value = logText.value;
@@ -448,24 +449,24 @@ async function copyLogs() {
     ta.select();
     const ok = document.execCommand("copy");
     document.body.removeChild(ta);
-    if (ok) message.success("已复制全部日志");
-    else message.error("复制失败");
+    if (ok) message.success($t("log-viewer.all-copied"));
+    else message.error($t("crash-analyzer.copy-failed"));
   }
 }
 
 async function exportLogs() {
-  if (!logText.value) return message.info("暂无日志内容");
+  if (!logText.value) return message.info($t("log-viewer.no-logs"));
   const ts = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const defaultName = `server-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.log`;
   const path = await save({
     defaultPath: defaultName,
-    filters: [{ name: "日志文件", extensions: ["log", "txt"] }],
+    filters: [{ name: $t("log-viewer.log-file"), extensions: ["log", "txt"] }],
   });
   if (!path) return;
   try {
     await api.saveTextFile(path as string, logText.value);
-    message.success("日志已导出");
+    message.success($t("log-viewer.exported"));
   } catch (e) {
     message.error(String(e));
   }
@@ -476,7 +477,7 @@ const starting = ref(false);
 async function start() {
   if (!server.value) return;
   if (!server.value.eula) {
-    message.warning("请先在「设置」中同意 Minecraft EULA");
+    message.warning($t("server-detail.eula-required"));
     tab.value = "settings";
     return;
   }
@@ -485,15 +486,15 @@ async function start() {
   try {
     try {
       await servers.start(serverId);
-      message.success("服务器已启动");
+      message.success($t("multiplayer.server-started"));
       tab.value = "logs";
     } catch (e) {
       const msg = String(e);
       if (msg.includes("server.jar 不存在")) {
-        message.info("首次启动，正在准备服务器核心…");
+        message.info($t("server-detail.preparing-core"));
         await servers.installCore(serverId);
         await servers.start(serverId);
-        message.success("服务器已启动");
+        message.success($t("multiplayer.server-started"));
         tab.value = "logs";
       } else {
         throw e;
@@ -509,7 +510,7 @@ async function start() {
 async function stop() {
   try {
     await servers.stop(serverId);
-    message.success("已停止服务器");
+    message.success($t("multiplayer.server-stopped"));
   } catch (e) {
     message.error(String(e));
   }
@@ -524,7 +525,7 @@ const confirmDelete = ref(false);
 async function doDelete() {
   try {
     await servers.remove(serverId);
-    message.success("服务器已删除");
+    message.success($t("server-detail.server-deleted"));
     router.push("/multiplayer");
   } catch (e) {
     message.error(String(e));
@@ -567,7 +568,7 @@ onMounted(async () => {
       if (ev.payload.serverId !== serverId) return;
       servers.setRunning(serverId, ev.payload.state === "running");
       if (ev.payload.state === "exited") {
-        pushLog("err", `[进程已退出，代码 ${ev.payload.code ?? "?"}]`);
+        pushLog("err", $t("server-detail.push-log", { p1: ev.payload.code ?? "?" }));
       }
     },
   );
@@ -579,7 +580,7 @@ onMounted(async () => {
       const detail = ev.payload.tail.length
         ? "\n" + ev.payload.tail.join("\n")
         : "";
-      message.error(`服务器进程异常退出（代码 ${ev.payload.code}）${detail}`, { duration: 8000 });
+      message.error($t("server-detail.listen", { p1: ev.payload.code, p2: detail }), { duration: 8000 });
     },
   );
   unlisteners.push(u3);
@@ -594,8 +595,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="server-detail" v-if="server">
     <button class="back" @click="router.push('/multiplayer')">
-      <IconChevronLeft /> 返回服务器列表
-    </button>
+      <IconChevronLeft />{{ $t("server-detail.back-to-servers") }}</button>
 
     <div class="head glass">
       <div class="head-info">
@@ -607,18 +607,15 @@ onBeforeUnmount(() => {
         </span>
         <h2>{{ server.name }}</h2>
         <p class="head-sub">
-          <span class="mono">{{ server.mc_version }}</span> · 端口 {{ server.port }} ·
-          {{ server.max_memory_mb }} MB
-        </p>
+          <span class="mono">{{ server.mc_version }}</span>{{ $t("server-detail.server-meta", { p1: server.port, p2: server.max_memory_mb }) }}</p>
       </div>
       <div class="head-ops">
         <button v-if="!running" class="btn primary" :disabled="starting" @click="start">
-          <IconPlay /> {{ starting ? "启动中…" : "启动" }}
+          <IconPlay /> {{ starting ? $t('instance-saves.launching') : $t('instance-saves.launch') }}
         </button>
         <button v-else class="btn warn" @click="stop">
-          <IconStop /> 停止
-        </button>
-        <button class="btn ghost" @click="openFolder()"><IconFolder /> 目录</button>
+          <IconStop />{{ $t("multiplayer.stop") }}</button>
+        <button class="btn ghost" @click="openFolder()"><IconFolder />{{ $t("server-detail.directory") }}</button>
       </div>
     </div>
 
@@ -636,46 +633,44 @@ onBeforeUnmount(() => {
     <!-- 设置 -->
     <div v-if="tab === 'settings'" class="panel glass">
       <div class="section">
-        <h3 class="section-title">基本</h3>
-        <p class="section-hint">修改任意设置会自动保存</p>
+        <h3 class="section-title">{{ $t("server-detail.group") }}</h3>
+        <p class="section-hint">{{ $t("server-detail.autosave-hint") }}</p>
         <div class="field">
-          <label>服务器名称</label>
+          <label>{{ $t("multiplayer.server-name") }}</label>
           <n-input v-model:value="form.name" maxlength="40" @update:value="scheduleAutoSave" />
         </div>
         <div class="field-row">
           <div class="field">
-            <label>最大内存 (MB)</label>
+            <label>{{ $t("server-detail.max-memory") }}</label>
             <n-input-number v-model:value="form.maxMem" :min="256" :step="256" @update:value="scheduleAutoSave" />
           </div>
           <div class="field">
-            <label>最小内存 (MB)</label>
+            <label>{{ $t("server-detail.min-memory") }}</label>
             <n-input-number v-model:value="form.minMem" :min="128" :step="256" @update:value="scheduleAutoSave" />
           </div>
         </div>
         <div class="field eula">
-          <n-checkbox v-model:checked="form.eula" @update:checked="scheduleAutoSave">
-            我已阅读并同意
-            <a href="https://account.mojang.com/documents/Minecraft_EULA" target="_blank" rel="noopener">Minecraft EULA</a>
+          <n-checkbox v-model:checked="form.eula" @update:checked="scheduleAutoSave">{{ $t("server-detail.eula-agree") }}<a href="https://account.mojang.com/documents/Minecraft_EULA" target="_blank" rel="noopener">Minecraft EULA</a>
           </n-checkbox>
         </div>
       </div>
 
 
       <div class="section">
-        <h3 class="section-title">JVM 参数</h3>
-        <p class="section-hint">额外的 JVM 启动参数，如 -XX:+UseG1GC</p>
-        <n-input v-model:value="form.jvmArgs" placeholder="例如：-XX:+UseG1GC -Dfile.encoding=UTF-8" @update:value="scheduleAutoSave" />
+        <h3 class="section-title">{{ $t("server-detail.jvm-args") }}</h3>
+        <p class="section-hint">{{ $t("server-detail.jvm-args-hint") }}</p>
+        <n-input v-model:value="form.jvmArgs" :placeholder="$t('instance-settings.jvm-args-hint')" @update:value="scheduleAutoSave" />
       </div>
 
       <div class="section">
-        <h3 class="section-title">停止命令</h3>
-        <p class="section-hint">停止服务器时发送的命令，留空默认为 stop</p>
+        <h3 class="section-title">{{ $t("server-detail.stop-command") }}</h3>
+        <p class="section-hint">{{ $t("server-detail.stop-command-hint") }}</p>
         <n-input v-model:value="form.stopCommand" placeholder="stop" @update:value="scheduleAutoSave" />
       </div>
 
       <div class="panel-foot">
-        <button class="btn danger" @click="confirmDelete = true"><IconTrash /> 删除服务器</button>
-        <span v-if="autoSaving" class="save-hint">保存中…</span>
+        <button class="btn danger" @click="confirmDelete = true"><IconTrash />{{ $t("multiplayer.delete-server") }}</button>
+        <span v-if="autoSaving" class="save-hint">{{ $t("file-manager.saving") }}</span>
       </div>
     </div>
 
@@ -686,14 +681,14 @@ onBeforeUnmount(() => {
         <div class="section-head">
           <h3 class="section-title">server.properties</h3>
           <div class="props-mode-tabs">
-            <button :class="{ active: propsMode === 'form' }" @click="propsMode = 'form'">表单</button>
-            <button :class="{ active: propsMode === 'source' }" @click="propsMode = 'source'">源文件</button>
+            <button :class="{ active: propsMode === 'form' }" @click="propsMode = 'form'">{{ $t("server-detail.form") }}</button>
+            <button :class="{ active: propsMode === 'source' }" @click="propsMode = 'source'">{{ $t("server-detail.source-file") }}</button>
           </div>
         </div>
-        <p class="section-hint">Minecraft 服务器核心配置，表单模式提供结构化编辑与说明</p>
+        <p class="section-hint">{{ $t("server-detail.server-properties-desc") }}</p>
 
         <div v-if="propsMode === 'form'" class="props-form">
-          <div v-if="loadingProps" class="empty-inline">正在加载配置…</div>
+          <div v-if="loadingProps" class="empty-inline">{{ $t("server-detail.loading-config") }}</div>
           <template v-else>
             <div v-for="g in PROPS_GROUPS" :key="g" class="props-group">
               <h4 class="props-group-title">{{ g }}</h4>
@@ -741,13 +736,13 @@ onBeforeUnmount(() => {
           </template>
           <div class="panel-foot">
             <button class="btn primary" :disabled="savingProps || loadingProps" @click="savePropsForm">
-              {{ savingProps ? "保存中…" : "保存配置" }}
+              {{ savingProps ? $t('file-manager.saving') : $t('server-detail.save-config') }}
             </button>
           </div>
         </div>
 
         <div v-else class="props-source">
-          <div v-if="loadingProps" class="empty-inline">正在加载配置…</div>
+          <div v-if="loadingProps" class="empty-inline">{{ $t("server-detail.loading-config") }}</div>
           <template v-else>
             <n-input
               v-model:value="propsSource"
@@ -758,7 +753,7 @@ onBeforeUnmount(() => {
             />
             <div class="panel-foot">
               <button class="btn primary" :disabled="savingProps" @click="savePropsSource">
-                {{ savingProps ? "保存中…" : "保存配置" }}
+                {{ savingProps ? $t('file-manager.saving') : $t('server-detail.save-config') }}
               </button>
             </div>
           </template>
@@ -768,14 +763,12 @@ onBeforeUnmount(() => {
       <!-- 其他配置文件 -->
       <div class="section">
         <div class="section-head">
-          <h3 class="section-title">其他配置文件</h3>
-          <button class="btn sm ghost" @click="loadConfigFiles"><IconRefresh /> 刷新</button>
+          <h3 class="section-title">{{ $t("server-detail.other-configs") }}</h3>
+          <button class="btn sm ghost" @click="loadConfigFiles"><IconRefresh />{{ $t("common.refresh") }}</button>
         </div>
-        <p class="section-hint">ops.json、whitelist.json、spigot.yml 等，点击即可编辑</p>
-        <div v-if="loadingConfigs" class="empty-inline">正在扫描配置文件…</div>
-        <div v-else-if="!configFiles.length" class="empty-inline">
-          暂未发现其他配置文件
-        </div>
+        <p class="section-hint">{{ $t("server-detail.other-configs-desc") }}</p>
+        <div v-if="loadingConfigs" class="empty-inline">{{ $t("server-detail.scanning-configs") }}</div>
+        <div v-else-if="!configFiles.length" class="empty-inline">{{ $t("server-detail.no-other-configs") }}</div>
         <div v-else class="config-list">
           <button
             v-for="f in configFiles"
@@ -796,13 +789,11 @@ onBeforeUnmount(() => {
     <!-- 模组 -->
     <div v-else-if="tab === 'mods'" class="panel glass">
       <div class="panel-head">
-        <h3><IconBox /> 模组</h3>
-        <button class="btn sm ghost" @click="openFolder('mods')">打开 mods 目录</button>
+        <h3><IconBox />{{ $t("browse.mods") }}</h3>
+        <button class="btn sm ghost" @click="openFolder('mods')">{{ $t("server-detail.open-mods") }}</button>
       </div>
-      <div v-if="loadingFiles" class="empty-inline">加载中…</div>
-      <div v-else-if="!fileList.length" class="empty-inline">
-        mods 目录为空，将模组 jar 放入 <code>mods/</code> 目录后即可加载
-      </div>
+      <div v-if="loadingFiles" class="empty-inline">{{ $t("file-manager.loading") }}</div>
+      <div v-else-if="!fileList.length" class="empty-inline">{{ $t("server-detail.mods-empty") }}<code>mods/</code>{{ $t("server-detail.mods-dir") }}</div>
       <div v-else class="file-list">
         <div v-for="f in fileList" :key="f.name" class="file-row">
           <span class="file-name">{{ f.name }}</span>
@@ -814,13 +805,11 @@ onBeforeUnmount(() => {
     <!-- 插件 -->
     <div v-else-if="tab === 'plugins'" class="panel glass">
       <div class="panel-head">
-        <h3><IconBox /> 插件</h3>
-        <button class="btn sm ghost" @click="openFolder('plugins')">打开 plugins 目录</button>
+        <h3><IconBox />{{ $t("server-detail.plugins") }}</h3>
+        <button class="btn sm ghost" @click="openFolder('plugins')">{{ $t("server-detail.open-plugins") }}</button>
       </div>
-      <div v-if="loadingFiles" class="empty-inline">加载中…</div>
-      <div v-else-if="!fileList.length" class="empty-inline">
-        plugins 目录为空，将插件 jar 放入 <code>plugins/</code> 目录后即可加载
-      </div>
+      <div v-if="loadingFiles" class="empty-inline">{{ $t("file-manager.loading") }}</div>
+      <div v-else-if="!fileList.length" class="empty-inline">{{ $t("server-detail.plugins-empty") }}<code>plugins/</code>{{ $t("server-detail.mods-dir") }}</div>
       <div v-else class="file-list">
         <div v-for="f in fileList" :key="f.name" class="file-row">
           <span class="file-name">{{ f.name }}</span>
@@ -832,17 +821,17 @@ onBeforeUnmount(() => {
     <!-- 日志 -->
     <div v-else-if="tab === 'logs'" class="panel glass log-panel">
       <div class="panel-head">
-        <h3><IconFile /> 服务器日志</h3>
+        <h3><IconFile />{{ $t("server-detail.server-logs") }}</h3>
         <div class="log-ops">
           <span class="run-dot" :class="{ on: running }"></span>
-          <span class="run-text">{{ running ? "运行中" : "未运行" }}</span>
-          <button class="btn sm ghost" title="复制全部日志" aria-label="复制全部日志" @click="copyLogs"><IconCopy /> 复制</button>
-          <button class="btn sm ghost" title="导出日志文件" aria-label="导出日志文件" @click="exportLogs"><IconDownload /> 导出</button>
-          <button class="btn sm ghost" @click="clearLogs">清空</button>
+          <span class="run-text">{{ running ? $t('multiplayer.running') : $t('server-detail.not-running') }}</span>
+          <button class="btn sm ghost" :title="$t('log-viewer.copy-all')" :aria-label="$t('log-viewer.copy-all')" @click="copyLogs"><IconCopy />{{ $t("common.copy") }}</button>
+          <button class="btn sm ghost" :title="$t('log-viewer.export-file')" :aria-label="$t('log-viewer.export-file')" @click="exportLogs"><IconDownload />{{ $t("log-viewer.export") }}</button>
+          <button class="btn sm ghost" @click="clearLogs">{{ $t("log-viewer.clear") }}</button>
         </div>
       </div>
       <div ref="logBox" class="log-box">
-        <div v-if="!logs.length" class="log-empty">启动服务器后日志会显示在这里</div>
+        <div v-if="!logs.length" class="log-empty">{{ $t("server-detail.logs-hint") }}</div>
         <div
           v-for="(l, i) in logs"
           :key="i"
@@ -855,9 +844,9 @@ onBeforeUnmount(() => {
     <!-- 文件 -->
     <div v-else-if="tab === 'files'" class="panel glass">
       <div class="panel-head">
-        <h3><IconFolder /> 服务器文件</h3>
+        <h3><IconFolder />{{ $t("server-detail.server-files") }}</h3>
       </div>
-      <p class="section-hint">左边浏览服务器目录，右边用内置编辑器修改文本文件</p>
+      <p class="section-hint">{{ $t("server-detail.files-hint") }}</p>
       <ServerFileManager :server-id="serverId" />
     </div>
 
@@ -872,7 +861,7 @@ onBeforeUnmount(() => {
     >
       <div v-if="editor" class="editor-body">
         <p class="editor-doc">{{ editor.doc }}</p>
-        <div v-if="editor.loading" class="editor-loading">正在读取文件…</div>
+        <div v-if="editor.loading" class="editor-loading">{{ $t("server-detail.reading-file") }}</div>
         <div v-else-if="editor.error" class="editor-error">{{ editor.error }}</div>
         <n-input
           v-else
@@ -883,13 +872,13 @@ onBeforeUnmount(() => {
           spellcheck="false"
         />
         <div class="editor-foot">
-          <button class="btn ghost" @click="editor = null">取消</button>
+          <button class="btn ghost" @click="editor = null">{{ $t("common.cancel") }}</button>
           <button
             class="btn primary"
             :disabled="editor.loading || editor.saving"
             @click="saveEditor"
           >
-            {{ editor.saving ? "保存中…" : "保存" }}
+            {{ editor.saving ? $t('file-manager.saving') : $t('common.save') }}
           </button>
         </div>
       </div>
@@ -900,18 +889,18 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div v-if="confirmDelete" class="mask" @click="confirmDelete = false">
         <div class="confirm-card glass" @click.stop>
-          <h3>删除服务器</h3>
-          <p>确定要删除服务器「<b>{{ server.name }}</b>」吗？所有服务器文件将被永久删除。</p>
+          <h3>{{ $t("multiplayer.delete-server") }}</h3>
+          <p>{{ $t("multiplayer.delete-server-confirm-a") }}<b>{{ server.name }}</b>{{ $t("server-detail.delete-confirm-b") }}</p>
           <div class="confirm-foot">
-            <button class="btn ghost" @click="confirmDelete = false">取消</button>
-            <button class="btn danger" @click="doDelete">删除</button>
+            <button class="btn ghost" @click="confirmDelete = false">{{ $t("common.cancel") }}</button>
+            <button class="btn danger" @click="doDelete">{{ $t("common.delete") }}</button>
           </div>
         </div>
       </div>
     </Teleport>
   </div>
 
-  <div v-else class="loading">加载中…</div>
+  <div v-else class="loading">{{ $t("file-manager.loading") }}</div>
 </template>
 
 <style scoped>

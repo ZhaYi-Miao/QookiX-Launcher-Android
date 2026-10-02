@@ -1,10 +1,15 @@
-//! 控制布局里「按键透传」的读取与修改。
+//! 手机端的「按键」= 屏幕上的触控控制层（虚拟按键 / 摇杆 / 组合键抽屉）。
 //!
-//! 透传 = `ControlData.passThruEnabled`：按住这个键时，手指滑动会转发给游戏画面，
-//! 也就是「按住跳跃也能拖视角」。默认布局里只有跳跃是开着的，其余的让用户自己选。
+//! 布局文件放在 `<files>/controlmap/<名字>.json`，**全局共享、不区分实例**；
+//! 细调（大小、颜色、键位映射、组合键）在游戏内右侧抽屉的「自定义控制布局」里做，
+//! 这里只负责启动器侧能做的事：
 //!
-//! 改的是**当前布局文件**（pojav 偏好 `defaultCtrl` 指向的那份，默认
-//! `<files>/controlmap/default.json`），游戏下次启动读取时生效。
+//! 1. 「按键透传」的读取与修改 —— 透传 = `ControlData.passThruEnabled`：按住这个键时，
+//!    手指滑动会转发给游戏画面，也就是「按住跳跃也能拖视角」。默认布局里只有跳跃开着。
+//! 2. 布局管理 —— 列出 / 切换当前布局 / 复制 / 重命名 / 删除。
+//!
+//! 当前生效的布局由 pojav 偏好 `defaultCtrl` 指向（默认 `<files>/controlmap/default.json`），
+//! 改动游戏下次启动读取时生效。
 
 use std::path::{Path, PathBuf};
 
@@ -106,4 +111,212 @@ fn collect_buttons(value: &serde_json::Value) -> Vec<ControlButtonInfo> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ==================== 布局管理 ====================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlLayoutInfo {
+    /// 文件名（不含 .json），也是「设为当前」时传的值
+    pub name: String,
+    pub buttons: usize,
+    pub joysticks: usize,
+    pub drawers: usize,
+    /// 是否是当前生效的那份
+    pub current: bool,
+    pub size: u64,
+    /// 最后修改时间（unix 秒，0 = 取不到）
+    pub modified: u64,
+}
+
+/// 所有控制布局所在的目录。
+fn controlmap_dir() -> Result<PathBuf, String> {
+    let data_dir = crate::settings::data_dir_sync().ok_or_else(|| "拿不到数据目录".to_string())?;
+    let dir = Path::new(&data_dir).join("controlmap");
+    if !dir.is_dir() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建控制布局目录失败：{e}"))?;
+    }
+    Ok(dir)
+}
+
+/// 当前生效布局的文件名；偏好里没有就回落 `default`。
+fn current_layout_name() -> String {
+    if let Ok(json) = crate::android_bridge::read_pojav_prefs() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+            if let Some(path) = value.get("defaultCtrl").and_then(|v| v.as_str()) {
+                if let Some(name) = Path::new(path).file_stem().and_then(|s| s.to_str()) {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+    "default".to_string()
+}
+
+/// 布局名要当文件名用，所以挡掉路径分隔符与 Windows 保留字符；
+/// 中文、空格、`_ - .` 都允许（玩家自己起名时常见）。
+fn validate_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("名字不能为空".to_string());
+    }
+    if name.chars().count() > 32 {
+        return Err("名字最长 32 个字符".to_string());
+    }
+    if name.starts_with('.') || name.contains("..") {
+        return Err("名字不能以点开头，也不能包含 ..".to_string());
+    }
+    if name.chars().any(|c| "/\\:*?\"<>|".contains(c)) {
+        return Err("名字不能包含 / \\ : * ? \" < > |".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn layout_file(name: &str) -> Result<PathBuf, String> {
+    Ok(controlmap_dir()?.join(format!("{name}.json")))
+}
+
+/// 数一下布局里有多少按键 / 摇杆 / 组合键（读不了就当 0，不因此让整个列表失败）。
+fn count_layout(path: &Path) -> (usize, usize, usize) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (0, 0, 0);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return (0, 0, 0);
+    };
+    let len = |key: &str| {
+        value
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
+    };
+    (
+        len("mControlDataList"),
+        len("mJoystickDataList"),
+        len("mDrawerDataList"),
+    )
+}
+
+/// 列出所有控制布局（当前生效的排最前）。所有改动类命令都返回这份新列表，
+/// 前端拿到直接替换，少一次往返。
+#[tauri::command]
+pub async fn list_control_layouts() -> Result<Vec<ControlLayoutInfo>, String> {
+    let dir = controlmap_dir()?;
+    let current = current_layout_name();
+    let mut out: Vec<ControlLayoutInfo> = Vec::new();
+
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取布局目录失败：{e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // 原生侧的导入中转文件（ImportControlActivity 用的），不算玩家的布局
+        if name.starts_with("TMP_IMPORT") {
+            continue;
+        }
+        let (buttons, joysticks, drawers) = count_layout(&path);
+        let meta = entry.metadata().ok();
+        out.push(ControlLayoutInfo {
+            name: name.to_string(),
+            buttons,
+            joysticks,
+            drawers,
+            current: name == current,
+            size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            modified: meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        });
+    }
+
+    out.sort_by(|a, b| b.current.cmp(&a.current).then_with(|| a.name.cmp(&b.name)));
+    Ok(out)
+}
+
+/// 切换当前使用的布局（写 pojav 偏好 `defaultCtrl`）。
+#[tauri::command]
+pub async fn set_current_control_layout(name: String) -> Result<Vec<ControlLayoutInfo>, String> {
+    let name = validate_name(&name)?;
+    let path = layout_file(&name)?;
+    if !path.is_file() {
+        return Err(format!("布局「{name}」不存在"));
+    }
+    let patch = serde_json::json!({ "defaultCtrl": path.to_string_lossy() });
+    crate::android_bridge::write_pojav_prefs(&patch.to_string())?;
+    list_control_layouts().await
+}
+
+/// 复制一份布局（手机打字麻烦，名字由前端传，通常就是「原名 + 副本」）。
+#[tauri::command]
+pub async fn duplicate_control_layout(
+    name: String,
+    new_name: String,
+) -> Result<Vec<ControlLayoutInfo>, String> {
+    let from = layout_file(&validate_name(&name)?)?;
+    let new_name = validate_name(&new_name)?;
+    let to = layout_file(&new_name)?;
+    if !from.is_file() {
+        return Err(format!("布局「{name}」不存在"));
+    }
+    if to.exists() {
+        return Err(format!("布局「{new_name}」已存在"));
+    }
+    std::fs::copy(&from, &to).map_err(|e| format!("复制失败：{e}"))?;
+    list_control_layouts().await
+}
+
+/// 重命名布局；如果改的正是当前使用的那份，偏好里的路径也要跟着改，
+/// 否则游戏下次启动会回落默认布局。
+#[tauri::command]
+pub async fn rename_control_layout(
+    name: String,
+    new_name: String,
+) -> Result<Vec<ControlLayoutInfo>, String> {
+    let name = validate_name(&name)?;
+    let from = layout_file(&name)?;
+    let new_name = validate_name(&new_name)?;
+    let to = layout_file(&new_name)?;
+    if !from.is_file() {
+        return Err(format!("布局「{name}」不存在"));
+    }
+    if to.exists() {
+        return Err(format!("布局「{new_name}」已存在"));
+    }
+    let was_current = current_layout_name() == name;
+    std::fs::rename(&from, &to).map_err(|e| format!("重命名失败：{e}"))?;
+    if was_current {
+        let patch = serde_json::json!({ "defaultCtrl": to.to_string_lossy() });
+        crate::android_bridge::write_pojav_prefs(&patch.to_string())?;
+    }
+    list_control_layouts().await
+}
+
+/// 删除布局。删掉正在使用的那份时切回随包默认布局，避免进游戏时找不到文件。
+/// `default` 本身是随包兜底的那份，不允许删（要改就在它基础上复制一份再改）。
+#[tauri::command]
+pub async fn delete_control_layout(name: String) -> Result<Vec<ControlLayoutInfo>, String> {
+    let name = validate_name(&name)?;
+    if name == "default" {
+        return Err("default 是随包兜底的布局，不能删除；想改它请先复制一份".to_string());
+    }
+    let path = layout_file(&name)?;
+    if !path.is_file() {
+        return Err(format!("布局「{name}」不存在"));
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("删除失败：{e}"))?;
+    if current_layout_name() == name {
+        let fallback = layout_file("default")?;
+        let patch = serde_json::json!({ "defaultCtrl": fallback.to_string_lossy() });
+        crate::android_bridge::write_pojav_prefs(&patch.to_string())?;
+    }
+    list_control_layouts().await
 }

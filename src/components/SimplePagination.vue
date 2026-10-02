@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed } from "vue";
 
 const props = defineProps<{
@@ -50,7 +51,7 @@ function go(p: number) {
     <button
       class="sp-btn sp-nav"
       :disabled="page <= 1"
-      title="上一页" aria-label="上一页"
+      :title="$t('simple-pagination.prev')" :aria-label="$t('simple-pagination.prev')"
       @click="go(page - 1)"
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -71,7 +72,7 @@ function go(p: number) {
     <button
       class="sp-btn sp-nav"
       :disabled="page >= pageCount"
-      title="下一页" aria-label="下一页"
+      :title="$t('simple-pagination.next')" :aria-label="$t('simple-pagination.next')"
       @click="go(page + 1)"
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">

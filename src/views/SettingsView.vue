@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { fmtMem, fmtSize, fmtTime } from "../utils/format";
 import {
@@ -33,24 +34,16 @@ import { api } from "../api";
 const DOWNLOAD_SLIDERS_ENABLED = false;
 
 /**
- * 「手柄死区」滑杆 —— 默认隐藏。
+ * 「手柄死区」滑杆。
  *
- * 实体手柄在 QookiX 里**完全不可用**：移植时有意剥掉了手柄重映射那一半
- * （见 `MinecraftGLSurface` 的类注释：原版字段 `mGamepadHandler` / `mInputManager`、
- * `createGamepad`、`onDirectGamepadEnabled`，以及两处 `Gamepad.isGamepadEvent` 分支，
- * 都依赖 `fr.spse.gamepad_remapper` 这个只在 JitPack 发布的 AAR）。
- * 剩下的三条路径也都不通：generic motion 分支要找鼠标指针否则直接 return false、
- * `EfficientAndroidLWJGLKeycode` 里只有 DPAD（全文没有任何 `KEYCODE_BUTTON_*`）。
+ * 实体手柄已经能用：首个手柄事件会创建 `Gamepad`，把柄上的操作翻译成键鼠
+ * （按键走映射表、左摇杆 WASD、右摇杆转视角，菜单里换一套映射）。
+ * 原始事件的解析是自己写的 `GamepadInputDispatcher`，不再依赖 JitPack 上的 AAR。
  *
- * 这个滑杆写进 `gamepad_deadzone_scale`，读它的只有 `GamepadJoystick` 的实例方法，
- * 而**全项目没有任何地方 new 过它** —— 也就是说拖了它不会改变任何行为。
- * 假开关比缺功能更伤：用户会以为自己调过了，然后去排查「为什么手柄还是不动」。
- *
- * 真要做手柄支持：补回上面那些分支 + 一串 `KEYCODE_BUTTON_*` 映射
- * （或者退一步只映射轴），并补一个重映射设置界面；做完把这个常量打开。
- * 注意开发机没接手柄 —— 这类改动需要真手柄才能验证。
+ * 这个滑杆写进 `gamepad_deadzone_scale`，由 `GamepadInputDispatcher` 读：
+ * 死区 = 0.15 × 该倍率，范围 0.5~2.0。
  */
-const GAMEPAD_DEADZONE_ENABLED = false;
+const GAMEPAD_DEADZONE_ENABLED = true;
 import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import {
   IconDownload,
@@ -165,9 +158,9 @@ function onThemeColorInput(val: string) {
 // 下载代理 seg 滑动高亮（系统代理 / 直连 / 自定义）
 const proxyModeSegRef = ref<HTMLElement | null>(null);
 const proxyModes = [
-  { id: "system", label: "系统代理" },
-  { id: "direct", label: "直连" },
-  { id: "custom", label: "自定义" },
+  { id: "system", label: $t("settings.system") },
+  { id: "direct", label: $t("settings.direct") },
+  { id: "custom", label: $t("instance-settings.mcreator") },
 ];
 const { indicatorStyle: proxyModeSegStyle, refresh: refreshProxyModeSeg } = useSlidingIndicator(
   proxyModeSegRef,
@@ -190,9 +183,9 @@ async function refreshSystemProxy() {
 // 屏幕方向 seg 滑动高亮（跟随系统 / 竖屏 / 横屏）
 const orientationSegRef = ref<HTMLElement | null>(null);
 const orientationModes = [
-  { id: "landscape", label: "横屏" },
-  { id: "portrait", label: "竖屏" },
-  { id: "system", label: "跟随系统" },
+  { id: "landscape", label: $t("settings.landscape") },
+  { id: "portrait", label: $t("settings.portrait") },
+  { id: "system", label: $t("settings.gen-sui-xi-tong") },
 ];
 const { indicatorStyle: orientationSegStyle, refresh: refreshOrientationSeg } = useSlidingIndicator(
   orientationSegRef,
@@ -230,8 +223,8 @@ async function selectProxyMode(id: string) {
 // 桌面端一直是侧边栏。纯 CSS 切换，改完立即生效、无需重启。
 const navPositionSegRef = ref<HTMLElement | null>(null);
 const navPositionModes = [
-  { id: "bottom", label: "底部" },
-  { id: "left", label: "左侧" },
+  { id: "bottom", label: $t("settings.bottom") },
+  { id: "left", label: $t("settings.left") },
 ];
 const { indicatorStyle: navPositionSegStyle, refresh: refreshNavPositionSeg } = useSlidingIndicator(
   navPositionSegRef,
@@ -252,12 +245,12 @@ async function selectNavPosition(id: string) {
 
 /** 挖孔类型预设：打孔统一让开 44px，刘海用 nav_offset 自定义宽度，「自动」跟随系统。 */
 const navCutoutModes = [
-  { id: "auto", label: "自动" },
-  { id: "none", label: "无" },
-  { id: "center", label: "中置挖孔" },
-  { id: "topleft", label: "左上角" },
-  { id: "topright", label: "右上角" },
-  { id: "notch", label: "刘海" },
+  { id: "auto", label: $t("common.auto") },
+  { id: "none", label: $t("icon-picker-dialog.none") },
+  { id: "center", label: $t("settings.center") },
+  { id: "topleft", label: $t("settings.topleft") },
+  { id: "topright", label: $t("settings.topright") },
+  { id: "notch", label: $t("settings.notch") },
 ] as const;
 
 /**
@@ -268,9 +261,9 @@ const navCutoutModes = [
  * 档位写在 `<html data-touch>` 上，具体规则在 `styles.css`。
  */
 const touchTargetModes = [
-  { id: "compact", label: "紧凑（默认）" },
-  { id: "standard", label: "标准 40px" },
-  { id: "large", label: "大 48px" },
+  { id: "compact", label: $t("settings.compact") },
+  { id: "standard", label: $t("settings.standard") },
+  { id: "large", label: $t("settings.large") },
 ] as const;
 
 function selectTouchTarget(id: (typeof touchTargetModes)[number]["id"]) {
@@ -313,18 +306,59 @@ async function testProxy() {
     const { proxy_mode, proxy } = settings.settings;
     // 自定义模式必须填地址，否则后端会退化为直连而误报成功
     if (proxy_mode === "custom" && !(proxy ?? "").trim()) {
-      message.warning("请先填写代理地址");
+      message.warning($t("settings.proxy-required"));
       return;
     }
     const res = await api.testProxy(
       proxy_mode,
       proxy_mode === "custom" ? proxy : null
     );
-    message.success(`连接成功 ${res.ms} ms`);
+    message.success($t("settings.connected", { p1: res.ms }));
   } catch (e) {
-    message.error(`连接失败: ${e}`);
+    message.error($t("settings.connection-failed", { p1: e }));
   } finally {
     testingProxy.value = false;
+  }
+}
+
+// ---- 内容翻译 ----
+const translateOptions = [
+  { label: $t("settings.builtin-translate"), value: "default" },
+  { label: $t("settings.custom"), value: "custom" },
+  { label: $t("settings.baidu-web"), value: "baidu_web" },
+];
+const testingTranslate = ref(false);
+
+// 测试自定义翻译接口（Key 留空表示用已保存的那把）
+async function testTranslate() {
+  if (testingTranslate.value || !settings.settings) return;
+  const s = settings.settings;
+  if (!s.translate_api_base.trim() || !s.translate_api_model.trim()) {
+    message.warning($t("settings.api-fields-required"));
+    return;
+  }
+  testingTranslate.value = true;
+  try {
+    await api.testTranslateApi(s.translate_api_base, s.translate_api_key ?? "", s.translate_api_model);
+    message.success($t("settings.api-ok"));
+  } catch (e) {
+    message.error($t("settings.test-failed", { p1: e }));
+  } finally {
+    testingTranslate.value = false;
+  }
+}
+
+const clearingTranslation = ref<"default" | "custom" | null>(null);
+async function clearTranslations(service: "default" | "custom") {
+  if (clearingTranslation.value) return;
+  clearingTranslation.value = service;
+  try {
+    const freed = await api.clearTranslationCache(service);
+    message.success(freed > 0 ? $t("settings.cache-cleared", { p1: Math.round(freed / 1024) }) : $t("settings.cache-empty"));
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    clearingTranslation.value = null;
   }
 }
 
@@ -391,14 +425,14 @@ watch(tab, () => {
 });
 
 const tabs = [
-  { key: "general", label: "常规", icon: IconSliders },
-  { key: "plugins", label: "插件", icon: IconPackage },
-  { key: "appearance", label: "外观", icon: IconImage },
-  { key: "download", label: "下载", icon: IconDownload },
-  { key: "content", label: "内容服务", icon: IconGlobe },
-  { key: "game", label: "游戏内", icon: IconPlay },
-  { key: "storage", label: "存储", icon: IconRefresh },
-  { key: "about", label: "关于", icon: IconFile },
+  { key: "general", label: $t("settings.general"), icon: IconSliders },
+  { key: "plugins", label: $t("server-detail.plugins"), icon: IconPackage },
+  { key: "appearance", label: $t("settings.appearance"), icon: IconImage },
+  { key: "download", label: $t("downloads.download"), icon: IconDownload },
+  { key: "content", label: $t("settings.content-services"), icon: IconGlobe },
+  { key: "game", label: $t("settings.game"), icon: IconPlay },
+  { key: "storage", label: $t("utils.categories.storage"), icon: IconRefresh },
+  { key: "about", label: $t("settings.about"), icon: IconFile },
 ];
 
 /** 界面缩放滑块：立刻改本地值（App.vue 的 watch 会即时应用）并持久化。 */
@@ -446,9 +480,9 @@ const pojav = ref<Record<string, number | boolean | string>>({ ...POJAV_DEFAULTS
  *  GL4ES = libgl4es_114.so；Zink = libOSMesa.so + libvulkan_freedreno.so（Turnip）；
  *  MobileGlues（MG）= libmobileglues.so —— ZL/FCL 同款渲染器（OpenGL → GLES 3.2）。 */
 const rendererOptions = [
-  { label: "GL4ES（兼容，默认）", value: "opengles2" },
-  { label: "MobileGlues（实验·老版本很卡）", value: "mobileglues" },
-  { label: "Zink + Turnip（实验）", value: "vulkan_zink" },
+  { label: $t("settings.jian-rong-mo-ren"), value: "opengles2" },
+  { label: $t("settings.mobileglues"), value: "mobileglues" },
+  { label: $t("utils.renderer.vulkan-zink"), value: "vulkan_zink" },
 ];
 
 /** 渲染器键 → 给人看的名字（插件列表里用，别直接显示 mobileglues 这种键）。 */
@@ -503,16 +537,16 @@ async function savePojav(key: string, value: number | boolean | string) {
       { name: "Caciocavallo", version: "", license: "GPL-2.0 + Classpath", url: "https://github.com/PojavLauncherTeam/caciocavallo", licenseUrl: "https://github.com/PojavLauncherTeam/caciocavallo" },
       { name: "OpenJDK", version: "17", license: "GPL-2.0 + Classpath", url: "https://openjdk.org", licenseUrl: "https://openjdk.org/legal/gplv2+ce.html" },
       { name: "Mesa（OSMesa / zink）", version: "", license: "MIT", url: "https://mesa3d.org", licenseUrl: "https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/license.rst" },
-      { name: "Turnip（Mesa Vulkan 驱动）", version: "", license: "MIT", url: "https://gitlab.freedesktop.org/mesa/mesa", licenseUrl: "https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/license.rst" },
+      { name: $t("settings.mit"), version: "", license: "MIT", url: "https://gitlab.freedesktop.org/mesa/mesa", licenseUrl: "https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/license.rst" },
       { name: "FreeType", version: "2.13", license: "FreeType/GPL-2.0", url: "https://freetype.org", licenseUrl: "https://gitlab.freedesktop.org/freetype/freetype/-/blob/master/docs/FTL.TXT" },
       { name: "OpenAL Soft", version: "", license: "LGPL-2.1", url: "https://openal-soft.org", licenseUrl: "https://github.com/kcat/openal-soft/blob/master/COPYING" },
       { name: "MobileGlues", version: "", license: "LGPL-2.1", url: "https://github.com/MobileGL-Dev/MobileGlues-release", licenseUrl: "https://github.com/MobileGL-Dev/MobileGlues/blob/main/LICENSE" },
     ],
   };
   const aboutGroupLabels: Record<"frontend" | "rust" | "bundled", string> = {
-    frontend: "前端",
+    frontend: $t("settings.rust"),
     rust: "Rust",
-    bundled: "随包分发的组件",
+    bundled: $t("settings.bundled"),
   };
 
 function onPojavRange(key: string, v: number) {
@@ -570,7 +604,7 @@ async function pickBackground() {
   try {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
+      filters: [{ name: $t("icon-picker-dialog.image"), extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
     });
     if (!picked || typeof picked !== "string") return;
     const path = await api.importBackgroundImage(picked);
@@ -632,7 +666,7 @@ async function loadStats() {
   try {
     stats.value = await api.getStorageStats();
   } catch (e) {
-    message.error("加载存储统计失败：" + String(e));
+    message.error($t("settings.stats-load-failed") + String(e));
   } finally {
     loadingStats.value = false;
   }
@@ -642,9 +676,9 @@ async function refreshStats() {
   loadingStats.value = true;
   try {
     stats.value = await api.refreshStorageStats();
-    message.success("已更新存储统计");
+    message.success($t("settings.stats-updated"));
   } catch (e) {
-    message.error("更新存储统计失败：" + String(e));
+    message.error($t("settings.stats-update-failed") + String(e));
   } finally {
     loadingStats.value = false;
   }
@@ -652,19 +686,19 @@ async function refreshStats() {
 
 function confirmClear() {
   dialog.warning({
-    title: "清除缓存",
+    title: $t("settings.clear-cache"),
     content:
-      "将清理 Java 下载临时文件、Java 检测缓存等可安全删除的缓存，不会影响任何实例、库、资源或版本文件。确定继续吗？",
-    positiveText: "清除",
-    negativeText: "取消",
+      $t("settings.clear-cache-confirm"),
+    positiveText: $t("instance-content.positive-text"),
+    negativeText: $t("common.cancel"),
     onPositiveClick: async () => {
       clearing.value = true;
       try {
         const res = await api.clearCache();
-        message.success(`已清除缓存，释放 ${fmtSize(res.freed)}`);
+        message.success($t("settings.on-positive-click", { p1: fmtSize(res.freed) }));
         await refreshStats();
       } catch (e) {
-        message.error("清除缓存失败：" + String(e));
+        message.error($t("settings.clear-cache-failed") + String(e));
       } finally {
         clearing.value = false;
       }
@@ -710,13 +744,13 @@ function dismissUpdate() {
   if (!version) return;
   dismissVersion(version);
   dismissedVersion.value = version;
-  message.success("已忽略这个版本");
+  message.success($t("settings.version-ignored"));
 }
 
 function restoreDismissed() {
   clearDismissed();
   dismissedVersion.value = null;
-  message.success("已恢复提醒");
+  message.success($t("settings.reminder-restored"));
 }
 
 /* ── 插件（组件 / 渲染器）─────────────────────────────────────────────
@@ -756,29 +790,51 @@ async function pluginAction(id: string, fn: () => Promise<PluginInfo[]>, okText:
 }
 
 const installPlugin = (id: string) =>
-  pluginAction(id, () => api.installPlugin(id), "已安装");
+  pluginAction(id, () => api.installPlugin(id), $t("settings.plugin-action"));
 const togglePlugin = (p: PluginInfo) =>
-  pluginAction(p.id, () => api.setPluginEnabled(p.id, !p.enabled), p.enabled ? "已停用" : "已启用");
+  pluginAction(p.id, () => api.setPluginEnabled(p.id, !p.enabled), p.enabled ? $t("settings.toggle-plugin") : $t("common.enabled"));
 const uninstallPlugin = (p: PluginInfo) =>
   dialog.warning({
-    title: "卸载插件",
-    content: `卸载「${p.name}」？`,
-    positiveText: "卸载",
-    negativeText: "取消",
-    onPositiveClick: () => pluginAction(p.id, () => api.uninstallPlugin(p.id), "已卸载"),
+    title: $t("settings.uninstall-plugin"),
+    content: $t("settings.uninstall-confirm", { p1: p.name }),
+    positiveText: $t("common.uninstall"),
+    negativeText: $t("common.cancel"),
+    onPositiveClick: () => pluginAction(p.id, () => api.uninstallPlugin(p.id), $t("settings.yi-xie-zai")),
   });
 
 /** 本地 zip 安装：离线、内网分发、调试都走这条路（包内需带 plugin.json）。 */
 async function installLocalPlugin() {
   const file = await open({
     multiple: false,
-    filters: [{ name: "插件包", extensions: ["zip"] }],
+    filters: [{ name: $t("settings.plugin-package"), extensions: ["zip"] }],
   });
   if (!file) return;
   pluginBusy.value = "local";
   try {
     plugins.value = await api.installPluginFromFile(file as string);
-    message.success("已安装");
+    message.success($t("settings.plugin-action"));
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    pluginBusy.value = null;
+    pluginProgress.value = null;
+  }
+}
+
+/** 首启该装但还没装的（渲染器 / 驱动 / 组件）—— 给一个不用等首启窗口的入口 */
+const missingRecommended = computed(
+  () => plugins.value.filter((p) => p.recommended && p.abi_supported && !p.installed_version)
+);
+
+/** 一键补齐：把缺的渲染器/驱动/组件按顺序装完（进度走 plugin://progress） */
+async function installRecommended() {
+  if (pluginBusy.value !== null) return;
+  pluginBusy.value = "recommended";
+  try {
+    const r = await api.installRecommendedPlugins();
+    plugins.value = r.plugins;
+    if (r.failed.length) message.warning($t("settings.partial-failure", { p1: r.failed.length, p2: r.failed.join("；") }));
+    else message.success($t("settings.installed-count", { p1: r.installed }));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -790,7 +846,7 @@ async function installLocalPlugin() {
 async function savePluginManifestUrl() {
   try {
     pluginManifestUrl.value = await api.setPluginManifestUrl(pluginManifestUrl.value.trim());
-    message.success("已保存");
+    message.success($t("settings.saved"));
     await loadPlugins(true);
   } catch (e) {
     message.error(String(e));
@@ -865,16 +921,16 @@ onUnmounted(() => {
         <!-- 游戏统计已挪到首页英雄卡左下角（用户 2026-09-22 要求） -->
         <div class="grid">
           <div class="card glass">
-            <h3>内存分配（默认值）</h3>
+            <h3>{{ $t("settings.memory-default") }}</h3>
             <div class="mem-mode-row">
               <n-radio-group v-model:value="settings.settings.memory_mode" size="small">
-                <n-radio-button value="auto">自动配置</n-radio-button>
-                <n-radio-button value="custom">手动配置</n-radio-button>
+                <n-radio-button value="auto">{{ $t("instance-settings.auto") }}</n-radio-button>
+                <n-radio-button value="custom">{{ $t("settings.manual") }}</n-radio-button>
               </n-radio-group>
             </div>
             <div v-if="settings.settings.memory_mode !== 'auto'" class="mem-row">
               <div>
-                <label>最大内存</label>
+                <label>{{ $t("settings.max-memory") }}</label>
                 <!-- 表单控件一律用 UI 库（naive-ui）组件，别再手搓原生 input -->
                 <n-slider
                   v-model:value="settings.settings.max_memory_mb"
@@ -894,28 +950,28 @@ onUnmounted(() => {
                 ></div>
               </div>
               <div class="mem-gauge-labels">
-                <span><i class="dot used"></i>已使用 {{ fmtMem(memUsed) }}（{{ usedPercent }}%）</span>
-                <span><i class="dot alloc"></i>游戏分配 {{ fmtMem(effectiveMemory) }}（{{ allocPercent }}%）</span>
-                <span><i class="dot total"></i>总内存 {{ fmtMem(memTotal) }} / 可用 {{ fmtMem(memAvailable) }}</span>
+                <span><i class="dot used"></i>{{ $t("instance-settings.mem-used", { p1: fmtMem(memUsed), p2: usedPercent }) }}</span>
+                <span><i class="dot alloc"></i>{{ $t("instance-settings.mem-assigned", { p1: fmtMem(effectiveMemory), p2: allocPercent }) }}</span>
+                <span><i class="dot total"></i>{{ $t("instance-settings.mem-total", { p1: fmtMem(memTotal), p2: fmtMem(memAvailable) }) }}</span>
               </div>
             </div>
           </div>
 
           <div class="card glass">
-            <h3>JVM 参数（额外，默认值）</h3>
+            <h3>{{ $t("settings.extra-jvm-args-default") }}</h3>
             <n-input
               v-model:value="settings.settings.jvm_args"
               type="textarea"
               :rows="3"
-              placeholder="例如：-XX:+UseG1GC -XX:MaxGCPauseMillis=50"
+              :placeholder="$t('settings.jvm-args-example')"
             />
           </div>
 
           <div class="card glass">
-            <h3>游戏参数（额外，默认值）</h3>
+            <h3>{{ $t("settings.extra-game-args-default") }}</h3>
             <n-input
               v-model:value="settings.settings.game_args"
-              placeholder="例如：--fullscreen"
+              :placeholder="$t('instance-settings.game-args-hint')"
             />
           </div>
         </div>
@@ -924,28 +980,24 @@ onUnmounted(() => {
       <!-- 外观 -->
       <div v-show="tab === 'appearance'" class="settings-pane">
         <div class="card glass">
-          <h3>主题</h3>
+          <h3>{{ $t("common.theme") }}</h3>
           <div class="choice-row">
-            <span>主题</span>
+            <span>{{ $t("common.theme") }}</span>
             <div ref="themeSegRef" class="seg">
               <div class="indicator" :style="themeSegStyle"></div>
               <button
                 :class="{ active: settings.settings.theme === 'dark' }"
                 @click="settings.patch({ theme: 'dark' })"
-              >
-                深色
-              </button>
+              >{{ $t("icon-picker-dialog.dark") }}</button>
               <button
                 :class="{ active: settings.settings.theme === 'light' }"
                 @click="settings.patch({ theme: 'light' })"
-              >
-                浅色
-              </button>
+              >{{ $t("settings.light") }}</button>
             </div>
           </div>
           <div class="appearance-divider"></div>
           <div class="choice-row">
-            <span>主题色</span>
+            <span>{{ $t("settings.accent-color") }}</span>
             <div class="theme-color-row">
               <button
                 v-for="c in themeColorPresets"
@@ -957,7 +1009,7 @@ onUnmounted(() => {
                 :title="c" :aria-label="c"
                 @click="settings.patch({ theme_color: c })"
               ></button>
-              <label class="color-custom" title="自定义颜色">
+              <label class="color-custom" :title="$t('settings.custom-color')">
                 <span class="color-custom-ring" :style="{ background: settings.settings.theme_color }"></span>
                 <n-color-picker
                   :value="settings.settings.theme_color"
@@ -971,15 +1023,13 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="card glass">
-            <h3>界面</h3>
+            <h3>{{ $t("utils.categories.gui") }}</h3>
             <!-- 界面缩放：机型之间可视高度差别很大（853×384 / 792×360），
                  与其为每台机器写死尺寸，不如让用户自己调舒服的密度。 -->
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">界面缩放</span>
-                <p class="choice-hint">
-                  整体放大或缩小整个界面（字号、间距、控件一起变）。屏幕小就调小、看着累就调大，改完立即生效。
-                </p>
+                <span class="choice-label">{{ $t("settings.ui-scale") }}</span>
+                <p class="choice-hint">{{ $t("settings.ui-scale-desc") }}</p>
               </div>
               <div class="scale-ctl">
                 <n-slider
@@ -994,10 +1044,8 @@ onUnmounted(() => {
             </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">导航栏位置</span>
-              <p class="choice-hint">
-                仅手机端生效。横屏时底部导航会占掉约 70px 高度，放到左侧可以把这段还给内容区。
-              </p>
+              <span class="choice-label">{{ $t("settings.nav-position") }}</span>
+              <p class="choice-hint">{{ $t("settings.nav-position-desc") }}</p>
             </div>
             <div ref="navPositionSegRef" class="seg">
               <div class="indicator" :style="navPositionSegStyle"></div>
@@ -1013,12 +1061,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">挖孔 / 刘海</span>
-              <p class="choice-hint">
-                按手机竖屏时的摄像头位置选择（横屏会自动换算到对应侧边）。
-                打孔默认让开 44px，可用下方「避让宽度」微调；
-                刘海长短不一，建议按实际深度拖；「自动」跟随系统安全区，大多数机型够用。
-              </p>
+              <span class="choice-label">{{ $t("settings.notch") }}</span>
+              <p class="choice-hint">{{ $t("settings.notch-desc") }}</p>
             </div>
             <div class="seg">
               <button
@@ -1033,11 +1077,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">触控目标大小</span>
-              <p class="choice-hint">
-                按钮 / 输入框的点击区域大小。界面本来就是紧凑的桌面尺寸，
-                手指点不准就调大；默认「紧凑」= 保持原样。
-              </p>
+              <span class="choice-label">{{ $t("settings.touch-target") }}</span>
+              <p class="choice-hint">{{ $t("settings.touch-target-desc") }}</p>
             </div>
             <n-radio-group
               :value="settings.settings.touch_target ?? 'compact'"
@@ -1054,10 +1095,8 @@ onUnmounted(() => {
             class="choice-row"
           >
             <div class="choice-info">
-              <span class="choice-label">避让宽度</span>
-              <p class="choice-hint">
-                让开的宽度。打孔默认 44px 基本够用；刘海建议按实际深度拖。
-              </p>
+              <span class="choice-label">{{ $t("settings.notch-inset") }}</span>
+              <p class="choice-hint">{{ $t("settings.notch-inset-desc") }}</p>
             </div>
             <div class="scale-ctl">
               <n-slider
@@ -1072,8 +1111,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">首页主标题卡片</span>
-              <p class="choice-hint">控制首页顶部的主标题卡片是否显示，关闭后首页更加简洁。</p>
+              <span class="choice-label">{{ $t("settings.hero-card") }}</span>
+              <p class="choice-hint">{{ $t("settings.hero-card-desc") }}</p>
             </div>
             <n-switch
               :value="settings.settings.show_home_hero"
@@ -1082,8 +1121,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">侧边栏折叠按钮</span>
-              <p class="choice-hint">控制侧边栏底部的展开/收缩按钮是否显示，关闭后可保持侧边栏固定。</p>
+              <span class="choice-label">{{ $t("settings.sidebar-collapse-btn") }}</span>
+              <p class="choice-hint">{{ $t("settings.sidebar-collapse-desc") }}</p>
             </div>
             <n-switch
               :value="settings.settings.show_sidebar_collapse_btn"
@@ -1092,8 +1131,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">侧边栏新闻入口</span>
-              <p class="choice-hint">关闭后隐藏侧边栏的「新闻」入口与新闻页面。</p>
+              <span class="choice-label">{{ $t("settings.sidebar-news") }}</span>
+              <p class="choice-hint">{{ $t("settings.sidebar-news-desc") }}</p>
             </div>
             <n-switch
               :value="settings.settings.show_news ?? true"
@@ -1102,8 +1141,8 @@ onUnmounted(() => {
           </div>
           <div class="choice-row">
             <div class="choice-info">
-              <span class="choice-label">屏幕方向</span>
-              <p class="choice-hint">启动器界面默认锁定横屏，切换后立即生效（游戏内方向由游戏自身控制）。</p>
+              <span class="choice-label">{{ $t("settings.orientation") }}</span>
+              <p class="choice-hint">{{ $t("settings.orientation-desc") }}</p>
             </div>
             <div ref="orientationSegRef" class="seg">
               <div class="indicator" :style="orientationSegStyle"></div>
@@ -1119,26 +1158,24 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="card glass">
-          <h3>背景图片</h3>
+          <h3>{{ $t("settings.background-image") }}</h3>
           <div v-if="settings.settings.background_image" class="bg-preview">
-            <img :src="bgPreviewUrl" alt="背景预览" />
+            <img :src="bgPreviewUrl" :alt="$t('settings.background-preview')" />
           </div>
           <div class="choice-row">
-            <span>背景图片</span>
+            <span>{{ $t("settings.background-image") }}</span>
             <div class="bg-actions">
-              <button class="mini-btn" @click="pickBackground">选择图片</button>
+              <button class="mini-btn" @click="pickBackground">{{ $t("settings.pick-image") }}</button>
               <button
                 v-if="settings.settings.background_image"
                 class="mini-btn"
                 @click="settings.patch({ background_image: null })"
-              >
-                清除
-              </button>
+              >{{ $t("instance-content.positive-text") }}</button>
             </div>
           </div>
           <div v-if="settings.settings.background_image" class="tune-block">
             <div class="tune-row">
-              <label>背景模糊</label>
+              <label>{{ $t("settings.background-blur") }}</label>
               <n-slider
                 v-model:value="settings.settings.background_blur"
                 :min="0"
@@ -1148,7 +1185,7 @@ onUnmounted(() => {
               <span class="tune-val">{{ settings.settings.background_blur }} px</span>
             </div>
             <div class="tune-row">
-              <label>背景遮罩</label>
+              <label>{{ $t("settings.background-dim") }}</label>
               <n-slider
                 v-model:value="settings.settings.background_dim"
                 :min="0"
@@ -1160,9 +1197,9 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="card glass">
-          <h3>磨砂卡片</h3>
+          <h3>{{ $t("settings.glass-cards") }}</h3>
           <div class="tune-row">
-            <label>磨砂强度</label>
+            <label>{{ $t("settings.glass-intensity") }}</label>
             <n-slider
               v-model:value="settings.settings.glass_blur"
               :min="0"
@@ -1171,7 +1208,7 @@ onUnmounted(() => {
             />
             <span class="tune-val">{{ settings.settings.glass_blur }} px</span>
           </div>
-          <p class="hint">调节卡片毛玻璃模糊半径，数值越大磨砂越强。</p>
+          <p class="hint">{{ $t("settings.glass-intensity-desc") }}</p>
         </div>
       </div>
 
@@ -1186,30 +1223,26 @@ onUnmounted(() => {
                在 `download::stream_to_file` 里按 Range 拆段并合并哈希。
                实现完把 DOWNLOAD_SLIDERS_ENABLED 打开即可。 -->
           <div v-if="DOWNLOAD_SLIDERS_ENABLED" class="card glass">
-            <h3>并行下载</h3>
-            <label class="row-label">
-              同时下载文件数：{{ settings.settings.download_threads }}
-              <n-slider
+            <h3>{{ $t("settings.parallel-download") }}</h3>
+            <label class="row-label">{{ $t("settings.concurrent-files", { p1: settings.settings.download_threads }) }}<n-slider
                 v-model:value="settings.settings.download_threads"
                 :min="1"
                 :max="32"
                 :step="1"
               />
             </label>
-            <p class="hint">同时从服务器下载的文件数量。值越大并发越高，但对服务器压力也越大。</p>
-            <label class="row-label" style="margin-top: 16px;">
-              单文件分片线程数：{{ settings.settings.download_chunk_threads }}
-              <n-slider
+            <p class="hint">{{ $t("settings.parallel-download-desc") }}</p>
+            <label class="row-label" style="margin-top: 16px;">{{ $t("settings.chunk-threads", { p1: settings.settings.download_chunk_threads }) }}<n-slider
                 v-model:value="settings.settings.download_chunk_threads"
                 :min="1"
                 :max="16"
                 :step="1"
               />
             </label>
-            <p class="hint">对单个大文件使用 HTTP Range 分片并行下载的线程数。仅对支持断点续传的服务器生效，小文件始终单线程。</p>
+            <p class="hint">{{ $t("settings.chunk-threads-desc") }}</p>
           </div>
           <div class="card glass">
-            <h3><IconGlobe /> 下载镜像源</h3>
+            <h3><IconGlobe />{{ $t("settings.download-source") }}</h3>
             <div class="mirror-list">
               <button
                 v-for="m in mirrors"
@@ -1221,7 +1254,7 @@ onUnmounted(() => {
               >
                 <span class="mirror-main">
                   <span class="mirror-name">{{ m.label }}</span>
-                  <span class="mirror-base">{{ m.base || "直接使用各官方地址" }}</span>
+                  <span class="mirror-base">{{ m.base || $t('settings.official-source') }}</span>
                 </span>
                 <span class="mirror-side">
                   <span
@@ -1229,14 +1262,14 @@ onUnmounted(() => {
                     class="mirror-ms"
                     :class="{ bad: mirrorLatency[m.id] === null }"
                   >
-                    {{ mirrorLatency[m.id] === null ? "不可用" : `${mirrorLatency[m.id]} ms` }}
+                    {{ mirrorLatency[m.id] === null ? $t('settings.unavailable') : `${mirrorLatency[m.id]} ms` }}
                   </span>
                   <span
                     class="mirror-btn"
                     :class="{ disabled: testingMirror === m.id }"
                     @click.stop="testMirror(m.id, m.base)"
                   >
-                    {{ testingMirror === m.id ? "测试中…" : "测速" }}
+                    {{ testingMirror === m.id ? $t('settings.testing') : $t('settings.speed-test') }}
                   </span>
                 </span>
               </button>
@@ -1249,7 +1282,7 @@ onUnmounted(() => {
                     :checked="settings.settings.mirror === 'custom'"
                     @update:checked="selectMirror('custom')"
                   />
-                  <span>自定义镜像</span>
+                  <span>{{ $t("settings.custom-mirror") }}</span>
                 </label>
                 <n-input
                   v-model:value="settings.settings.mirror_custom"
@@ -1261,19 +1294,15 @@ onUnmounted(() => {
                   :class="{ disabled: testingMirror === 'custom' || !settings.settings.mirror_custom }"
                   @click="testMirror('custom', settings.settings.mirror_custom)"
                 >
-                  {{ testingMirror === 'custom' ? "测试中…" : "测速" }}
+                  {{ testingMirror === 'custom' ? $t('settings.testing') : $t('settings.speed-test') }}
                 </span>
               </div>
             </div>
-            <p class="hint">
-              加速游戏本体、资源文件与依赖库（Forge / Fabric / NeoForge）的下载，
-              <b>切换后立即生效，无需重启</b>；镜像缺失文件时会自动回退官方地址。
-              自定义镜像需兼容 BMCLAPI 接口，直接填写根地址即可。
-            </p>
+            <p class="hint">{{ $t("settings.mirror-desc-a") }}<b>{{ $t("settings.mirror-applies-now") }}</b>{{ $t("settings.mirror-desc-b") }}</p>
           </div>
           <div class="card glass">
-            <h3>下载中心</h3>
-            <p class="hint">所有安装与下载任务可在左侧「下载中心」实时查看进度、速度与剩余文件。</p>
+            <h3>{{ $t("router.download") }}</h3>
+            <p class="hint">{{ $t("settings.downloads-hint") }}</p>
           </div>
         </div>
       </div>
@@ -1285,12 +1314,72 @@ onUnmounted(() => {
             <h3>CurseForge API Key</h3>
             <n-input
               v-model:value="settings.settings.curseforge_api_key"
-              placeholder="在 console.curseforge.com 免费申请"
+              :placeholder="$t('settings.cf-key-apply-hint')"
             />
-            <p class="hint">可选。不填使用默认key 可能会导致 CurseForge 内容中心不可用，Modrinth 不受影响。</p>
+            <p class="hint">{{ $t("settings.cf-key-note") }}</p>
           </div>
           <div class="card glass">
-            <h3>下载代理</h3>
+            <h3>{{ $t("settings.content-translation") }}</h3>
+            <n-select
+              v-model:value="settings.settings.translate_provider"
+              :options="translateOptions"
+            />
+            <template v-if="settings.settings.translate_provider === 'custom'">
+              <n-input
+                v-model:value="settings.settings.translate_api_base"
+                :placeholder="$t('settings.api-base-hint')"
+              />
+              <n-input
+                v-model:value="settings.settings.translate_api_key"
+                type="password"
+                show-password-on="click"
+                placeholder="API Key"
+              />
+              <n-input
+                v-model:value="settings.settings.translate_api_model"
+                :placeholder="$t('settings.model-hint')"
+              />
+              <button
+                class="mirror-btn proxy-test-btn"
+                :class="{ disabled: testingTranslate }"
+                @click="testTranslate"
+              >
+                {{ testingTranslate ? $t('settings.testing') : $t('settings.test-api') }}
+              </button>
+            </template>
+            <p class="hint">
+              <template v-if="settings.settings.translate_provider === 'default'">{{ $t("settings.builtin-translate-desc") }}</template>
+              <template v-else-if="settings.settings.translate_provider === 'custom'">{{ $t("settings.custom-translate-desc") }}</template>
+              <template v-else>{{ $t("settings.baidu-translate-desc") }}</template>
+            </p>
+            <div class="proxy-row">
+              <button
+                class="mirror-btn"
+                :class="{ disabled: clearingTranslation === 'default' }"
+                @click="clearTranslations('default')"
+              >
+                {{ clearingTranslation === "default" ? $t('settings.clearing') : $t('settings.clear-builtin-cache') }}
+              </button>
+              <button
+                class="mirror-btn"
+                :class="{ disabled: clearingTranslation === 'custom' }"
+                @click="clearTranslations('custom')"
+              >
+                {{ clearingTranslation === "custom" ? $t('settings.clearing') : $t('settings.clear-custom-cache') }}
+              </button>
+            </div>
+            <div class="choice-row">
+              <div>
+                <p class="choice-hint">{{ $t("settings.autoload-body") }}</p>
+              </div>
+              <n-switch
+                :value="settings.settings.body_translate_auto"
+                @update:value="(v: boolean) => settings.patch({ body_translate_auto: v })"
+              />
+            </div>
+          </div>
+          <div class="card glass">
+            <h3>{{ $t("settings.proxy") }}</h3>
             <div class="proxy-row">
               <div ref="proxyModeSegRef" class="seg">
                 <div class="indicator" :style="proxyModeSegStyle"></div>
@@ -1308,31 +1397,30 @@ onUnmounted(() => {
                 :class="{ disabled: testingProxy }"
                 @click="testProxy"
               >
-                {{ testingProxy ? "测试中…" : "测试连接" }}
+                {{ testingProxy ? $t('settings.testing') : $t('settings.test-connection') }}
               </button>
             </div>
             <n-input
               v-if="settings.settings.proxy_mode === 'custom'"
               v-model:value="settings.settings.proxy"
-              placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+              :placeholder="$t('settings.proxy-hint')"
               @update:value="onCustomProxyInput"
             />
             <p class="hint">
               {{
                 settings.settings.proxy_mode === "system"
-                  ? "使用系统网络代理设置（默认）。"
+                  ? $t('settings.proxy-system')
                   : settings.settings.proxy_mode === "direct"
-                    ? "直连，不经过任何代理。"
-                    : "自定义代理。用于绕过 CDN 下载失败（404/连接失败）。修改后需重启启动器生效。"
+                    ? $t('settings.proxy-direct')
+                    : $t('settings.proxy-custom-desc')
               }}
             </p>
             <!-- 原生请求不会自动走系统代理：代理软件开着却选了直连时，下载会大面积失败 -->
-            <p v-if="systemProxy" class="hint" :class="{ 'hint-warn': settings.settings.proxy_mode === 'direct' }">
-              已检测到系统代理：{{ systemProxy }}<template
+            <p v-if="systemProxy" class="hint" :class="{ 'hint-warn': settings.settings.proxy_mode === 'direct' }">{{ $t("settings.system-proxy-detected", { p1: systemProxy }) }}<template
                 v-if="settings.settings.proxy_mode === 'direct'"
-              >　—　当前为直连，下载与延迟测试可能全部失败，建议改选「系统代理」。</template>
+              >{{ $t("settings.proxy-direct-warning") }}</template>
             </p>
-            <p v-else class="hint">未检测到系统代理。</p>
+            <p v-else class="hint">{{ $t("settings.no-system-proxy") }}</p>
           </div>
         </div>
       </div>
@@ -1342,40 +1430,42 @@ onUnmounted(() => {
         <div class="grid">
           <div class="card glass plugin-card">
             <div class="plugin-head">
-              <h3>插件</h3>
+              <h3>{{ $t("server-detail.plugins") }}</h3>
               <div class="plugin-head-actions">
+                <button
+                  v-if="missingRecommended.length || pluginBusy === 'recommended'"
+                  class="mini-btn"
+                  :disabled="pluginBusy !== null"
+                  @click="installRecommended"
+                >
+                  <IconDownload />{{ $t("settings.install-recommended", { p1: missingRecommended.length ? `（${missingRecommended.length}）` : "" }) }}
+                </button>
                 <button class="mini-btn" :disabled="pluginsLoading" @click="loadPlugins(true)">
-                  <IconRefresh /> 刷新
-                </button>
+                  <IconRefresh />{{ $t("common.refresh") }}</button>
                 <button class="mini-btn" :disabled="pluginBusy !== null" @click="installLocalPlugin">
-                  <IconPackage /> 本地安装
-                </button>
+                  <IconPackage />{{ $t("settings.install-local") }}</button>
               </div>
             </div>
 
-            <div v-if="!plugins.length" class="plugin-empty">
-              还没有插件。点「刷新」从插件源拉，或用「本地安装」选 zip。
-            </div>
+            <div v-if="!plugins.length" class="plugin-empty">{{ $t("settings.no-plugins-hint") }}</div>
 
             <div v-for="p in plugins" :key="p.id" class="plugin-row">
               <div class="plugin-row-main">
                 <div class="plugin-title">
                   <span class="plugin-name">{{ p.name }}</span>
                   <span v-if="p.version" class="plugin-badge">{{ p.version }}</span>
-                  <span v-else class="plugin-badge">本地</span>
-                  <span v-if="p.update_available" class="plugin-badge update">可更新</span>
-                  <span v-if="!p.abi_supported" class="plugin-badge warn">
-                    无本机架构包（{{ p.device_abi }}）
-                  </span>
+                  <span v-else class="plugin-badge">{{ $t("settings.local") }}</span>
+                  <span v-if="p.update_available" class="plugin-badge update">{{ $t("settings.update-available") }}</span>
+                  <span v-if="p.recommended && !p.installed_version" class="plugin-badge update">{{ $t("settings.recommended-badge") }}</span>
+                  <span v-if="!p.abi_supported" class="plugin-badge warn">{{ $t("settings.no-abi-package", { p1: p.device_abi }) }}</span>
                 </div>
                 <div class="plugin-summary">{{ p.summary }}</div>
                 <div class="plugin-meta">
-                  <span>{{ p.installed_version ? `已安装 ${p.installed_version}` : "未安装" }}</span>
-                  <span v-if="p.size">· 需下载 {{ fmtBytes(p.size) }}</span>
-                  <span v-if="p.installed_size">· 占用 {{ fmtBytes(p.installed_size) }}</span>
-                  <span v-if="p.installed_version && !p.enabled">· 已停用（用随包的）</span>
-                  <span v-if="p.renderers && p.renderers.length">
-                    · 对应渲染器：{{ p.renderers.map((r) => rendererNames[r] ?? r).join("、") }}
+                  <span>{{ p.installed_version ? $t('settings.installed-version', { p1: p.installed_version }) : $t('settings.not-installed') }}</span>
+                  <span v-if="p.size">{{ $t("settings.needs-download", { p1: fmtBytes(p.size) }) }}</span>
+                  <span v-if="p.installed_size">{{ $t("settings.size-used", { p1: fmtBytes(p.installed_size) }) }}</span>
+                  <span v-if="p.installed_version && !p.enabled">{{ $t("settings.disabled-fallback") }}</span>
+                  <span v-if="p.renderers && p.renderers.length">{{ $t("settings.maps-renderer", { p1: p.renderers.map((r) => rendererNames[r] ?? r).join("、") }) }}
                   </span>
                 </div>
                 <div
@@ -1400,7 +1490,7 @@ onUnmounted(() => {
                   :disabled="pluginBusy !== null || !p.abi_supported"
                   @click="installPlugin(p.id)"
                 >
-                  {{ p.installed_version ? (p.update_available ? "更新" : "重装") : "下载" }}
+                  {{ p.installed_version ? (p.update_available ? $t('settings.update') : $t('settings.reinstall')) : $t('downloads.download') }}
                 </button>
                 <button
                   v-if="p.installed_version"
@@ -1408,7 +1498,7 @@ onUnmounted(() => {
                   :disabled="pluginBusy !== null"
                   @click="togglePlugin(p)"
                 >
-                  {{ p.enabled ? "停用" : "启用" }}
+                  {{ p.enabled ? $t('settings.disable') : $t('instance-content.enable') }}
                 </button>
                 <button
                   v-if="p.installed_version"
@@ -1416,17 +1506,16 @@ onUnmounted(() => {
                   :disabled="pluginBusy !== null"
                   @click="uninstallPlugin(p)"
                 >
-                  <IconTrash /> 卸载
-                </button>
+                  <IconTrash />{{ $t("common.uninstall") }}</button>
               </div>
             </div>
           </div>
 
           <div class="card glass">
-            <h3>插件源</h3>
+            <h3>{{ $t("settings.plugin-source") }}</h3>
             <NInput v-model:value="pluginManifestUrl" placeholder="https://…/manifest.json" />
             <div class="plugin-source-actions">
-              <button class="mini-btn primary" @click="savePluginManifestUrl">保存并刷新</button>
+              <button class="mini-btn primary" @click="savePluginManifestUrl">{{ $t("settings.save-and-refresh") }}</button>
             </div>
           </div>
         </div>
@@ -1437,15 +1526,15 @@ onUnmounted(() => {
         <div class="grid storage-grid">
           <div class="card glass storage-card">
             <div class="storage-header">
-              <h3>存储统计</h3>
+              <h3>{{ $t("settings.storage-stats") }}</h3>
               <div class="storage-actions">
                 <span class="hint-inline">
-                  <template v-if="stats">{{ stats.cached ? "上次更新" : "已更新" }}：{{ fmtTime(stats.updated_at) }}</template>
-                  <template v-else>尚未扫描</template>
+                  <template v-if="stats">{{ stats.cached ? $t('settings.last-scan') : $t('settings.updated') }}：{{ fmtTime(stats.updated_at) }}</template>
+                  <template v-else>{{ $t("settings.never-scanned") }}</template>
                 </span>
                 <button class="mini-btn" :disabled="loadingStats" @click="refreshStats">
                   <IconRefresh class="btn-icon" />
-                  {{ loadingStats ? "扫描中…" : "更新" }}
+                  {{ loadingStats ? $t('settings.scanning') : $t('settings.update') }}
                 </button>
               </div>
             </div>
@@ -1469,7 +1558,7 @@ onUnmounted(() => {
                 </svg>
                 <div class="donut-center">
                   <span class="donut-total">{{ fmtSize(stats.total) }}</span>
-                  <span class="donut-label">总占用</span>
+                  <span class="donut-label">{{ $t("settings.total-usage") }}</span>
                 </div>
               </div>
 
@@ -1484,9 +1573,7 @@ onUnmounted(() => {
             </div>
 
             <div v-if="stats && stats.instances.length" class="instance-storage">
-              <h4 class="instance-storage-title">
-                每个实例
-                <span class="hint-inline">{{ stats.instances.length }} 个</span>
+              <h4 class="instance-storage-title">{{ $t("settings.per-instance") }}<span class="hint-inline">{{ $t("crash-analyzer.count-suffix", { p1: stats.instances.length }) }}</span>
               </h4>
               <ul class="instance-storage-list">
                 <li v-for="inst in stats.instances" :key="inst.id">
@@ -1498,9 +1585,7 @@ onUnmounted(() => {
             </div>
 
             <div v-if="stats && stats.servers.length" class="instance-storage">
-              <h4 class="instance-storage-title">
-                每个服务器
-                <span class="hint-inline">{{ stats.servers.length }} 个</span>
+              <h4 class="instance-storage-title">{{ $t("settings.per-server") }}<span class="hint-inline">{{ $t("crash-analyzer.count-suffix", { p1: stats.servers.length }) }}</span>
               </h4>
               <ul class="instance-storage-list">
                 <li v-for="srv in stats.servers" :key="srv.id">
@@ -1510,14 +1595,14 @@ onUnmounted(() => {
                 </li>
               </ul>
             </div>
-            <p v-else-if="!stats?.instances.length" class="hint">{{ stats ? "暂无可统计的数据" : "正在加载存储统计…" }}</p>
+            <p v-else-if="!stats?.instances.length" class="hint">{{ stats ? $t('settings.no-stats') : $t('settings.loading-stats') }}</p>
 
             <div class="storage-footer">
               <button class="mini-btn danger" :disabled="clearing" @click="confirmClear">
                 <IconTrash class="btn-icon" />
-                {{ clearing ? "清理中…" : "清除缓存" }}
+                {{ clearing ? $t('settings.cleaning') : $t('settings.clear-cache') }}
               </button>
-              <span class="hint">清理 Java 下载临时文件、Java 检测缓存等可安全删除的缓存，不会影响实例、库、资源或版本文件。</span>
+              <span class="hint">{{ $t("settings.clean-cache-desc") }}</span>
             </div>
           </div>
         </div>
@@ -1526,10 +1611,10 @@ onUnmounted(() => {
       <div v-show="tab === 'game'" class="settings-pane">
         <div class="grid">
           <div class="card glass">
-            <h3><IconPlay /> 渲染</h3>
+            <h3><IconPlay />{{ $t("settings.rendering") }}</h3>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">渲染器</span>
+                <span class="choice-label">{{ $t("instance-settings.renderer") }}</span>
               </div>
               <n-select
                 :value="(pojav.renderer as string) ?? 'opengles2'"
@@ -1541,7 +1626,7 @@ onUnmounted(() => {
             </div>
             <div class="mem-row">
               <div>
-                <label>渲染分辨率缩放</label>
+                <label>{{ $t("settings.render-scale") }}</label>
                 <n-slider
                   :value="Number(pojav.resolutionRatio ?? 100)"
                   :min="50"
@@ -1549,20 +1634,20 @@ onUnmounted(() => {
                   :step="5"
                   @update:value="(v: number) => onPojavRange('resolutionRatio', v)"
                 />
-                <div class="mem-val">{{ pojav.resolutionRatio }}% —— 越低越流畅，画面越糊</div>
+                <div class="mem-val">{{ $t("settings.percent-hint", { p1: pojav.resolutionRatio }) }}</div>
               </div>
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">忽略刘海</span>
-                <p class="choice-hint">把屏幕顶部刘海区域也让给游戏画面</p>
+                <span class="choice-label">{{ $t("settings.ignore-notch") }}</span>
+                <p class="choice-hint">{{ $t("settings.ignore-notch-desc") }}</p>
               </div>
               <n-switch :value="!!pojav.ignoreNotch" @update:value="(v: boolean) => savePojav('ignoreNotch', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">备选渲染表面</span>
-                <p class="choice-hint">画面异常（黑屏 / 花屏 / 切后台回来不刷新）时可以切换试试</p>
+                <span class="choice-label">{{ $t("settings.alt-surface") }}</span>
+                <p class="choice-hint">{{ $t("settings.alt-surface-desc") }}</p>
               </div>
               <n-switch
                 :value="pojav.alternate_surface !== false"
@@ -1571,8 +1656,8 @@ onUnmounted(() => {
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">持续性能模式</span>
-                <p class="choice-hint">向系统申请持续性能，减少长时间游玩后的降频（部分设备无效）</p>
+                <span class="choice-label">{{ $t("settings.sustained-performance") }}</span>
+                <p class="choice-hint">{{ $t("settings.sustained-performance-desc") }}</p>
               </div>
               <n-switch
                 :value="!!pojav.sustained_performance"
@@ -1582,11 +1667,9 @@ onUnmounted(() => {
           </div>
 
           <div class="card glass">
-            <h3>按键透传</h3>
-            <p class="hint">打开后，按住这个键的时候拖动也能转视角。改完重开游戏生效。</p>
-            <div v-if="!controlButtons.length" class="hint">
-              还没有布局文件，先进一次游戏。
-            </div>
+            <h3>{{ $t("settings.key-passthrough") }}</h3>
+            <p class="hint">{{ $t("settings.key-passthrough-desc") }}</p>
+            <div v-if="!controlButtons.length" class="hint">{{ $t("settings.no-layout-yet") }}</div>
             <div v-for="b in controlButtons" :key="b.index" class="choice-row">
               <div class="choice-info">
                 <span class="choice-label">{{ b.name }}</span>
@@ -1600,10 +1683,10 @@ onUnmounted(() => {
           </div>
 
           <div class="card glass">
-            <h3>操作</h3>
+            <h3>{{ $t("settings.controls") }}</h3>
             <div class="mem-row">
               <div>
-                <label>按钮大小</label>
+                <label>{{ $t("settings.button-size") }}</label>
                 <n-slider
                   :value="Number(pojav.buttonscale ?? 100)"
                   :min="50"
@@ -1616,7 +1699,7 @@ onUnmounted(() => {
             </div>
             <div class="mem-row">
               <div>
-                <label>鼠标（视角）速度</label>
+                <label>{{ $t("settings.mouse-speed") }}</label>
                 <n-slider
                   :value="Number(pojav.mousespeed ?? 100)"
                   :min="50"
@@ -1629,7 +1712,7 @@ onUnmounted(() => {
             </div>
             <div class="mem-row">
               <div>
-                <label>长按判定时间</label>
+                <label>{{ $t("settings.long-press-time") }}</label>
                 <n-slider
                   :value="Number(pojav.timeLongPressTrigger ?? 300)"
                   :min="150"
@@ -1637,13 +1720,13 @@ onUnmounted(() => {
                   :step="50"
                   @update:value="(v: number) => onPojavRange('timeLongPressTrigger', v)"
                 />
-                <div class="mem-val">{{ pojav.timeLongPressTrigger }} ms —— 拖拽/放下方块的长按阈值</div>
+                <div class="mem-val">{{ $t("settings.ms-hint", { p1: pojav.timeLongPressTrigger }) }}</div>
               </div>
             </div>
             <!-- 手柄死区（默认隐藏，见 script 里 GAMEPAD_DEADZONE_ENABLED 的说明） -->
             <div v-if="GAMEPAD_DEADZONE_ENABLED" class="mem-row">
               <div>
-                <label>手柄死区</label>
+                <label>{{ $t("settings.gamepad-deadzone") }}</label>
                 <n-slider
                   :value="Number(pojav.gamepad_deadzone_scale ?? 100)"
                   :min="0"
@@ -1656,15 +1739,15 @@ onUnmounted(() => {
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">进游戏自动开虚拟鼠标</span>
-                <p class="choice-hint">适合在游戏里点界面 / 配置整合包</p>
+                <span class="choice-label">{{ $t("settings.auto-virtual-mouse") }}</span>
+                <p class="choice-hint">{{ $t("settings.auto-virtual-mouse-desc") }}</p>
               </div>
               <n-switch :value="!!pojav.mouse_start" @update:value="(v: boolean) => savePojav('mouse_start', v)" />
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">双击交换左右手</span>
-                <p class="choice-hint">关闭后双击不会把主手/副手对调</p>
+                <span class="choice-label">{{ $t("settings.swap-hands") }}</span>
+                <p class="choice-hint">{{ $t("settings.swap-hands-desc") }}</p>
               </div>
               <n-switch
                 :value="!!pojav.disableDoubleTap"
@@ -1673,8 +1756,8 @@ onUnmounted(() => {
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">禁用手势</span>
-                <p class="choice-hint">关闭所有滑动 / 双击手势，只保留按钮与触控板</p>
+                <span class="choice-label">{{ $t("settings.disable-gestures") }}</span>
+                <p class="choice-hint">{{ $t("settings.disable-gestures-desc") }}</p>
               </div>
               <n-switch
                 :value="!!pojav.disableGestures"
@@ -1683,8 +1766,8 @@ onUnmounted(() => {
             </div>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">按钮文字全大写</span>
-                <p class="choice-hint">控制布局里按钮标签是否强制大写</p>
+                <span class="choice-label">{{ $t("settings.uppercase-buttons") }}</span>
+                <p class="choice-hint">{{ $t("settings.uppercase-buttons-desc") }}</p>
               </div>
               <n-switch
                 :value="!!pojav.buttonAllCaps"
@@ -1694,17 +1777,17 @@ onUnmounted(() => {
           </div>
 
           <div class="card glass">
-            <h3>陀螺仪</h3>
+            <h3>{{ $t("settings.gyroscope") }}</h3>
             <div class="choice-row">
               <div class="choice-info">
-                <span class="choice-label">启用陀螺仪</span>
-                <p class="choice-hint">用手机姿态控制视角（需要设备带陀螺仪）</p>
+                <span class="choice-label">{{ $t("settings.enable-gyro") }}</span>
+                <p class="choice-hint">{{ $t("settings.enable-gyro-desc") }}</p>
               </div>
               <n-switch :value="!!pojav.enableGyro" @update:value="(v: boolean) => savePojav('enableGyro', v)" />
             </div>
             <div class="mem-row">
               <div>
-                <label>灵敏度</label>
+                <label>{{ $t("settings.sensitivity") }}</label>
                 <n-slider
                   :value="Number(pojav.gyroSensitivity ?? 100)"
                   :min="50"
@@ -1716,11 +1799,11 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="choice-row">
-              <div class="choice-info"><span class="choice-label">反转 X 轴</span></div>
+              <div class="choice-info"><span class="choice-label">{{ $t("settings.invert-x") }}</span></div>
               <n-switch :value="!!pojav.gyroInvertX" @update:value="(v: boolean) => savePojav('gyroInvertX', v)" />
             </div>
             <div class="choice-row">
-              <div class="choice-info"><span class="choice-label">反转 Y 轴</span></div>
+              <div class="choice-info"><span class="choice-label">{{ $t("settings.invert-y") }}</span></div>
               <n-switch :value="!!pojav.gyroInvertY" @update:value="(v: boolean) => savePojav('gyroInvertY', v)" />
             </div>
           </div>
@@ -1736,7 +1819,7 @@ onUnmounted(() => {
             <span
               class="about-ver"
               :class="{ 'ver-arming': verHolding }"
-              title="…别松手"
+              :title="$t('settings.hold-hint')"
               @pointerdown="verDown"
               @pointerup="verCancel"
               @pointercancel="verCancel"
@@ -1744,37 +1827,31 @@ onUnmounted(() => {
               @contextmenu.prevent
             >v1.1.0</span>
           </div>
-          <p class="about-hero-slogan">现代化、简洁、无广告的 Minecraft 启动器</p>
+          <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>
 
         <div class="grid about-grid">
           <!-- 更新 -->
           <div class="card glass updater-card">
             <div class="updater-head">
-              <h3>更新</h3>
+              <h3>{{ $t("settings.update") }}</h3>
               <div class="updater-head-actions">
                 <button
                   class="mini-btn primary"
                   :disabled="updateChecking || updateDownloading"
                   @click="checkUpdate()"
                 >
-                  <IconRefresh /> {{ updateChecking ? "检查中…" : "检查更新" }}
+                  <IconRefresh /> {{ updateChecking ? $t('settings.checking') : $t('instance-content.check-updates') }}
                 </button>
               </div>
             </div>
 
             <p v-if="updateError" class="hint updater-error">{{ updateError }}</p>
-            <p v-else-if="!updateInfo" class="hint">
-              当前版本 v{{ appVersion }}。点「检查更新」看看有没有新版本。
-            </p>
+            <p v-else-if="!updateInfo" class="hint">{{ $t("settings.current-version", { p1: appVersion }) }}</p>
             <template v-else>
-              <p v-if="!updateInfo.available" class="hint">
-                已是最新版本（v{{ updateInfo.currentVersion }}）。
-              </p>
+              <p v-if="!updateInfo.available" class="hint">{{ $t("settings.up-to-date", { p1: updateInfo.currentVersion }) }}</p>
               <template v-else>
-                <p class="updater-new">
-                  发现新版本 v{{ updateInfo.version }}
-                  <span class="hint">（当前 v{{ updateInfo.currentVersion }}）</span>
+                <p class="updater-new">{{ $t("settings.new-version", { p1: updateInfo.version }) }}<span class="hint">{{ $t("settings.current-badge", { p1: updateInfo.currentVersion }) }}</span>
                 </p>
 
                 <div v-if="updateDownloading" class="updater-progress">
@@ -1791,8 +1868,8 @@ onUnmounted(() => {
                   <span class="plugin-progress-text">
                     {{
                       updateProgress?.total
-                        ? `下载中 ${fmtBytes(updateProgress.downloaded)} / ${fmtBytes(updateProgress.total)}`
-                        : "下载中…"
+                        ? $t('settings.downloading-progress', { p1: fmtBytes(updateProgress.downloaded), p2: fmtBytes(updateProgress.total) })
+                        : $t('settings.downloading')
                     }}
                   </span>
                 </div>
@@ -1803,15 +1880,12 @@ onUnmounted(() => {
                     class="mini-btn primary"
                     :disabled="updateDownloading"
                     @click="downloadUpdate()"
-                  >
-                    下载
-                  </button>
-                  <button v-else class="mini-btn primary" @click="installUpdate()">安装</button>
-                  <button class="mini-btn" @click="dismissUpdate()">忽略此版本</button>
+                  >{{ $t("downloads.download") }}</button>
+                  <button v-else class="mini-btn primary" @click="installUpdate()">{{ $t("common.install") }}</button>
+                  <button class="mini-btn" @click="dismissUpdate()">{{ $t("settings.ignore-version") }}</button>
                 </div>
 
-                <p v-if="updatePackage" class="hint">
-                  安装包已下载：{{ updatePackage.split("/").pop() }}
+                <p v-if="updatePackage" class="hint">{{ $t("settings.apk-downloaded", { p1: updatePackage.split("/").pop() }) }}
                 </p>
               </template>
             </template>
@@ -1822,15 +1896,13 @@ onUnmounted(() => {
                 :class="{ primary: autoCheck }"
                 @click="toggleAutoCheck()"
               >
-                {{ autoCheck ? "启动时自动检查：开" : "启动时自动检查：关" }}
+                {{ autoCheck ? $t('settings.auto-check-on') : $t('settings.auto-check-off') }}
               </button>
-              <button v-if="dismissedVersion" class="mini-btn" @click="restoreDismissed()">
-                恢复 v{{ dismissedVersion }} 的提醒
-              </button>
+              <button v-if="dismissedVersion" class="mini-btn" @click="restoreDismissed()">{{ $t("settings.resume-reminder", { p1: dismissedVersion }) }}</button>
             </div>
           </div>
           <div class="card glass about-card">
-            <div class="about-devs-title">开发者</div>
+            <div class="about-devs-title">{{ $t("settings.developers") }}</div>
             <div class="dev-list">
               <div class="dev-line">
                 <img class="dev-avatar" :src="devZhayiUrl" alt="ZhaYi" />
@@ -1842,73 +1914,65 @@ onUnmounted(() => {
                         <button class="dev-github-btn" @click="openUrl('https://github.com/ZhaYi-Miao')">
                           <IconGithub />
                         </button>
-                      </template>
-                      GitHub 主页
-                    </n-tooltip>
+                      </template>{{ $t("settings.github-profile") }}</n-tooltip>
                   </div>
-                  <span class="dev-role">QookiX-Launcher-Android 的开发者</span>
+                  <span class="dev-role">{{ $t("settings.developers-desc") }}</span>
                 </div>
               </div>
               <div class="dev-line">
-                <img class="dev-avatar" :src="devWeimoshengUrl" alt="维墨笙" />
+                <img class="dev-avatar" :src="devWeimoshengUrl" :alt="$t('settings.author-name')" />
                 <div class="dev-meta">
                   <div class="dev-head">
-                    <span class="dev-name">维墨笙</span>
+                    <span class="dev-name">{{ $t("settings.author-name") }}</span>
                     <n-tooltip trigger="hover" placement="top">
                       <template #trigger>
                         <button class="dev-github-btn" @click="openUrl('https://github.com/weimosheng')">
                           <IconGithub />
                         </button>
-                      </template>
-                      GitHub 主页
-                    </n-tooltip>
+                      </template>{{ $t("settings.github-profile") }}</n-tooltip>
                   </div>
-                  <span class="dev-role">QookiX-Launcher-Android 的协力开发者</span>
+                  <span class="dev-role">{{ $t("settings.contributors-desc") }}</span>
                 </div>
               </div>
             </div>
           </div>
           <div class="about-links-row">
             <button class="about-link" @click="openUrl('https://www.qookix.cn/')">
-              <span class="link-left"><IconGlobe /> 官方网站</span>
+              <span class="link-left"><IconGlobe />{{ $t("settings.website") }}</span>
               <span class="link-arrow">→</span>
             </button>
             <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android')">
-              <span class="link-left"><IconGithub /> GitHub 仓库</span>
+              <span class="link-left"><IconGithub />{{ $t("settings.github-repo") }}</span>
               <span class="link-arrow">→</span>
             </button>
             <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/issues')">
-              <span class="link-left"><IconExternal /> 问题反馈</span>
+              <span class="link-left"><IconExternal />{{ $t("settings.issues") }}</span>
               <span class="link-arrow">→</span>
             </button>
             <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/blob/master/CHANGELOG.md')">
-              <span class="link-left"><IconList /> 更新日志</span>
+              <span class="link-left"><IconList />{{ $t("settings.changelog") }}</span>
               <span class="link-arrow">→</span>
             </button>
             <button class="about-link" @click="openUrl('https://qm.qq.com/q/91keQnJ8dy')">
-              <span class="link-left"><IconUsers /> 官方 Q 群</span>
+              <span class="link-left"><IconUsers />{{ $t("settings.qq-group") }}</span>
               <span class="link-arrow">→</span>
             </button>
             <button class="about-link" @click="openUrl('https://afdian.com/a/qookix')">
-              <span class="link-left"><IconHeart /> 爱发电赞助</span>
+              <span class="link-left"><IconHeart />{{ $t("settings.afdian") }}</span>
               <span class="link-arrow">→</span>
             </button>
           </div>
           <div class="card glass about-license-card">
-            <h3>许可证</h3>
-            <p class="license-text">
-              QookiX Launcher Android 基于
-              <span class="license-accent">GPL-3.0</span>
-              开源协议发布。图标、名称与品牌归属 QookiX 开发组所有，未经许可请勿用于商业用途。
-            </p>
+            <h3>{{ $t("settings.license") }}</h3>
+            <p class="license-text">{{ $t("settings.license-desc-a") }}<span class="license-accent">GPL-3.0</span>{{ $t("settings.license-desc-b") }}</p>
             <button class="about-link" @click="openUrl('https://github.com/ZhaYi-Miao/QookiX-Launcher-Android/blob/master/LICENSE')">
-              <span class="link-left"><IconFile /> 查看 GPL-3.0 完整文本</span>
+              <span class="link-left"><IconFile />{{ $t("settings.gpl-text") }}</span>
               <span class="link-arrow">→</span>
             </button>
           </div>
           <div class="card glass about-deps-card">
-            <h3>许可与版权声明</h3>
-            <p class="license-text">QookiX Launcher Android 的构建得益于以下优秀的开源项目。</p>
+            <h3>{{ $t("settings.notices") }}</h3>
+            <p class="license-text">{{ $t("settings.thanks-desc") }}</p>
             <div class="deps-groups">
               <div class="deps-group" v-for="(list, group) in aboutDeps" :key="group">
                 <div class="deps-group-title">{{ aboutGroupLabels[group] }}</div>
@@ -1918,8 +1982,8 @@ onUnmounted(() => {
                     <span class="dep-license" v-if="d.license">{{ d.license }}</span>
                   </div>
                   <div class="dep-links">
-                    <button class="dep-link" @click="openUrl(d.url)">来源 ↗</button>
-                    <button class="dep-link" @click="openUrl(d.licenseUrl)">许可 ↗</button>
+                    <button class="dep-link" @click="openUrl(d.url)">{{ $t("settings.source-link") }}</button>
+                    <button class="dep-link" @click="openUrl(d.licenseUrl)">{{ $t("settings.license-link") }}</button>
                   </div>
                 </div>
               </div>
@@ -1955,12 +2019,12 @@ onUnmounted(() => {
             <div class="ver-credits-inner">
               <img class="vc-logo" :src="logoUrl" alt="" />
               <div class="vc-title">QookiX Launcher Android</div>
-              <div class="vc-line">制作 · ZhaYi / Weimosheng</div>
-              <div class="vc-line">感谢大家使用 QookiX，感谢你们的支持</div>
-              <div class="vc-line">欢迎随时反馈问题与建议，一起把它做得更好</div>
+              <div class="vc-line">{{ $t("settings.made-by") }}</div>
+              <div class="vc-line">{{ $t("settings.thanks") }}</div>
+              <div class="vc-line">{{ $t("settings.feedback-invite") }}</div>
             </div>
           </div>
-          <div class="ver-hint">点击任意处关闭</div>
+          <div class="ver-hint">{{ $t("settings.click-anywhere-to-close") }}</div>
         </div>
       </Transition>
     </Teleport>

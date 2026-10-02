@@ -296,6 +296,24 @@ pub async fn get_plugins() -> Result<Vec<crate::plugin::PluginInfo>, String> {
     Ok(crate::plugin::list(&plugin_data_dir().await?))
 }
 
+/// 首启准备状态：还缺哪些渲染器/驱动/组件、一共要下多少。
+#[command]
+pub async fn get_plugin_setup_status() -> Result<crate::plugin::SetupStatus, String> {
+    Ok(crate::plugin::setup_status(&plugin_data_dir().await?).await)
+}
+
+/// 补齐首启要装的插件（逐个装，逐个报 `plugin://progress`）。
+#[command]
+pub async fn install_recommended_plugins() -> Result<crate::plugin::SetupResult, String> {
+    crate::plugin::install_recommended(&plugin_data_dir().await?).await
+}
+
+/// 用户点了「稍后」：记下来，别再每次启动都弹。
+#[command]
+pub async fn dismiss_plugin_setup() -> Result<(), String> {
+    crate::plugin::set_setup_dismissed(&plugin_data_dir().await?, true)
+}
+
 /// 强制联网刷新清单（用户点「刷新」时用；平时列表只读缓存，避免进设置就卡一下）。
 #[command]
 pub async fn refresh_plugin_manifest() -> Result<Vec<crate::plugin::PluginInfo>, String> {
@@ -398,6 +416,49 @@ pub async fn curseforge_categories() -> Result<Value, String> {
 #[command]
 pub async fn project_info(provider: String, project_id: String) -> Result<browse::ProjectInfoResult, String> {
     browse::project_info(&provider, &project_id).await.map_err(|e| e.to_string())
+}
+
+// ==================== Translate Commands ====================
+//
+// 翻译配置存在 settings.json 里（translate_provider / translate_api_base 等），
+// 后端每次调用现读，改设置不必重启；成功结果按服务来源分别落缓存。
+
+#[command]
+pub async fn translate_mod_descriptions(provider: String, slugs: Vec<String>) -> Result<Value, String> {
+    crate::translate::translate_descriptions(&provider, slugs).await
+}
+
+/// `translate=false` 只取原文，不调翻译服务。
+#[command]
+pub async fn translate_project_body(provider: String, slug: String, translate: bool) -> Result<Value, String> {
+    crate::translate::translate_body(&provider, &slug, translate).await
+}
+
+#[command]
+pub async fn report_translation_stale(provider: String, slug: String) -> Result<String, String> {
+    crate::translate::report_stale(&provider, &slug).await
+}
+
+#[command]
+pub async fn report_translation_quality(
+    provider: String,
+    slug: String,
+    issue_type: String,
+    user_suggestion: Option<String>,
+    user_comment: Option<String>,
+) -> Result<String, String> {
+    crate::translate::report_quality(&provider, &slug, &issue_type, user_suggestion, user_comment).await
+}
+
+/// `service` 为空 = 全部清空。
+#[command]
+pub async fn clear_translation_cache(service: Option<String>) -> Result<u64, String> {
+    crate::translate::clear_cache(service).await
+}
+
+#[command]
+pub async fn test_translate_api(base: String, key: String, model: String) -> Result<(), String> {
+    crate::translate::test_api(base, key, model).await
 }
 
 #[command]

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { NInput, useMessage } from "naive-ui";
 import { api } from "../api";
@@ -140,7 +141,7 @@ async function openEntry(e: FsEntry) {
   }
   if (!isEditable(e)) {
     // 安卓上应用私有目录无法交给系统文件管理器打开，所以这里只说明不可编辑
-    message.info(`「${e.name}」不是可编辑的文本文件`);
+    message.info($t("file-manager.not-editable", { p1: e.name }));
     return;
   }
   if (openTabs.value.some((t) => t.rel === e.rel)) {
@@ -172,7 +173,7 @@ async function saveTab(tab?: OpenTab | null) {
     t.original = t.content;
     t.size = r.size;
     t.modified = r.modified;
-    message.success("已保存 " + t.name);
+    message.success($t("file-manager.saved") + t.name);
     await reload();
   } catch (e) {
     message.error(String(e));
@@ -197,9 +198,9 @@ function requestClose(t: OpenTab) {
     return;
   }
   confirmState.value = {
-    title: "未保存的修改",
-    content: `「${t.name}」有尚未保存的修改，关闭后会丢失。确定关闭吗？`,
-    positiveText: "放弃修改",
+    title: $t("file-manager.unsaved"),
+    content: $t("file-manager.close-confirm", { p1: t.name }),
+    positiveText: $t("file-manager.positive-text"),
     onOk: () => closeTab(t),
   };
 }
@@ -257,7 +258,7 @@ async function copyText(text: string, tip: string) {
     const ok = document.execCommand("copy");
     document.body.removeChild(ta);
     if (ok) message.success(tip);
-    else message.error("复制失败");
+    else message.error($t("crash-analyzer.copy-failed"));
   }
 }
 
@@ -266,14 +267,14 @@ function entryMenu(e: FsEntry): ContextMenuItem[] {
   if (e.is_dir) {
     items.push({
       key: "open",
-      label: "打开",
+      label: $t("common.open"),
       icon: markRaw(IconFolder),
       action: () => navigate(e.rel),
     });
   } else if (isEditable(e)) {
     items.push({
       key: "open",
-      label: "在编辑器中打开",
+      label: $t("file-manager.open"),
       icon: markRaw(IconEdit),
       action: () => openEntry(e),
     });
@@ -282,15 +283,15 @@ function entryMenu(e: FsEntry): ContextMenuItem[] {
         { key: "s1", sep: true },
     {
       key: "copy-rel",
-      label: "复制相对路径",
+      label: $t("file-manager.copy-rel"),
       icon: markRaw(IconCopy),
-      action: () => copyText(e.rel, "已复制路径"),
+      action: () => copyText(e.rel, $t("file-manager.copy-text")),
     },
     {
       key: "copy-name",
-      label: "复制文件名",
+      label: $t("file-manager.copy-name"),
       icon: markRaw(IconCopy),
-      action: () => copyText(e.name, "已复制文件名"),
+      action: () => copyText(e.name, $t("file-manager.action")),
     },
   );
   return items;
@@ -306,7 +307,7 @@ function onBlankContext(ev: MouseEvent) {
   openMenu(ev.clientX, ev.clientY, [
     {
       key: "refresh",
-      label: "刷新",
+      label: $t("common.refresh"),
       icon: markRaw(IconRefresh),
       shortcut: "F5",
       action: () => reload(),
@@ -320,7 +321,7 @@ function onTabContext(ev: MouseEvent, t: OpenTab) {
   openMenu(ev.clientX, ev.clientY, [
     {
       key: "save",
-      label: "保存",
+      label: $t("common.save"),
       icon: markRaw(IconSave),
       shortcut: "Ctrl+S",
       disabled: !isDirty(t),
@@ -328,20 +329,20 @@ function onTabContext(ev: MouseEvent, t: OpenTab) {
     },
     {
       key: "copy-rel",
-      label: "复制相对路径",
+      label: $t("file-manager.copy-rel"),
       icon: markRaw(IconCopy),
-      action: () => copyText(t.rel, "已复制路径"),
+      action: () => copyText(t.rel, $t("file-manager.copy-text")),
     },
     { key: "s1", sep: true },
     {
       key: "close",
-      label: "关闭",
+      label: $t("common.close"),
       icon: markRaw(IconClose),
       action: () => requestClose(t),
     },
     {
       key: "close-others",
-      label: "关闭其他标签",
+      label: $t("file-manager.close-others"),
       disabled: !others.length,
       action: async () => {
         for (const o of others) {
@@ -349,13 +350,13 @@ function onTabContext(ev: MouseEvent, t: OpenTab) {
         }
         const rest = openTabs.value.filter((x) => x.rel !== t.rel);
         if (rest.length) {
-          message.info(`还有 ${rest.length} 个标签存在未保存的修改`);
+          message.info($t("file-manager.hai-you-ge-biao-qian-cun", { p1: rest.length }));
         }
       },
     },
     {
       key: "close-all",
-      label: "关闭全部标签",
+      label: $t("file-manager.close-all"),
       disabled: !openTabs.value.length,
       action: () => {
         const dirty = openTabs.value.filter(isDirty).length;
@@ -365,9 +366,9 @@ function onTabContext(ev: MouseEvent, t: OpenTab) {
           return;
         }
         confirmState.value = {
-          title: "未保存的修改",
-          content: `有 ${dirty} 个文件存在尚未保存的修改，全部关闭会丢失这些改动。确定关闭吗？`,
-          positiveText: "全部关闭",
+          title: $t("file-manager.unsaved"),
+          content: $t("file-manager.close-all-confirm", { p1: dirty }),
+          positiveText: $t("file-manager.quan-bu-guan-bi"),
           onOk: () => {
             openTabs.value = [];
             activeRel.value = null;
@@ -388,28 +389,28 @@ function onEditorContext(p: { x: number; y: number }) {
   const items: ContextMenuItem[] = [
     {
       key: "cut",
-      label: "剪切",
+      label: $t("file-manager.cut"),
       shortcut: "Ctrl+X",
       disabled: !hasSel,
       action: () => editorRef.value?.cutSelection(),
     },
     {
       key: "copy",
-      label: "复制",
+      label: $t("common.copy"),
       shortcut: "Ctrl+C",
       disabled: !hasSel,
       action: () => editorRef.value?.copySelection(),
     },
     {
       key: "paste",
-      label: "粘贴",
+      label: $t("file-manager.paste"),
       shortcut: "Ctrl+V",
       action: () => editorRef.value?.pasteClipboard(),
     },
     { key: "s1", sep: true },
     {
       key: "select-all",
-      label: "全选",
+      label: $t("file-manager.select-all"),
       shortcut: "Ctrl+A",
       action: () => editorRef.value?.selectAll(),
     },
@@ -419,7 +420,7 @@ function onEditorContext(p: { x: number; y: number }) {
       { key: "s2", sep: true },
       {
         key: "save",
-        label: "保存",
+        label: $t("common.save"),
         icon: markRaw(IconSave),
         shortcut: "Ctrl+S",
         disabled: !isDirty(t),
@@ -479,30 +480,30 @@ onBeforeUnmount(() => {
     <!-- 左侧：文件浏览 -->
     <aside class="fm-side glass">
       <div class="fm-path">
-        <button class="nav" :disabled="!backStack.length" title="后退" aria-label="后退" @click="goBack">
+        <button class="nav" :disabled="!backStack.length" :title="$t('file-manager.back')" :aria-label="$t('file-manager.back')" @click="goBack">
           <IconChevronLeft />
         </button>
-        <button class="nav" :disabled="!fwdStack.length" title="前进" aria-label="前进" @click="goForward">
+        <button class="nav" :disabled="!fwdStack.length" :title="$t('file-manager.forward')" :aria-label="$t('file-manager.forward')" @click="goForward">
           <IconChevronRight />
         </button>
-        <button class="nav" :disabled="!cwd" title="上一级" aria-label="上一级" @click="goUp">
+        <button class="nav" :disabled="!cwd" :title="$t('file-manager.go-up')" :aria-label="$t('file-manager.go-up')" @click="goUp">
           <IconCornerUpLeft />
         </button>
         <div class="fm-crumbs">
-          <button class="crumb root" @click="navigate('')">服务器目录</button>
+          <button class="crumb root" @click="navigate('')">{{ $t("server-file-manager.server-dir") }}</button>
           <template v-for="c in crumbs" :key="c.rel">
             <span class="sep">/</span>
             <button class="crumb" :title="c.name" :aria-label="c.name" @click="navigate(c.rel)">{{ c.name }}</button>
           </template>
         </div>
-        <button class="nav" title="刷新" aria-label="刷新" @click="reload"><IconRefresh /></button>
+        <button class="nav" :title="$t('common.refresh')" :aria-label="$t('common.refresh')" @click="reload"><IconRefresh /></button>
       </div>
 
       <div class="fm-tools">
         <n-input
           v-model:value="filter"
           size="small"
-          placeholder="筛选当前目录"
+          :placeholder="$t('file-manager.filter-here')"
           class="fm-search"
         >
           <template #prefix><IconSearch /></template>
@@ -510,9 +511,9 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="fm-list" @contextmenu.prevent="onBlankContext">
-        <div v-if="loading && !entries.length" class="fm-empty">加载中…</div>
+        <div v-if="loading && !entries.length" class="fm-empty">{{ $t("file-manager.loading") }}</div>
         <div v-else-if="!shown.length" class="fm-empty">
-          {{ filter ? "没有匹配的文件" : "这个文件夹是空的" }}
+          {{ filter ? $t('file-manager.no-match') : $t('file-manager.empty-folder') }}
         </div>
 
         <template v-else>
@@ -535,7 +536,7 @@ onBeforeUnmount(() => {
             <div class="fm-meta">
               <div class="fm-name" :title="e.name">{{ e.name }}</div>
               <div class="fm-sub">
-                {{ e.is_dir ? "文件夹" : fmtSize(e.size)
+                {{ e.is_dir ? $t('file-manager.folder') : fmtSize(e.size)
                 }}<template v-if="e.modified"> · {{ fmtDate(e.modified) }}</template>
               </div>
             </div>
@@ -543,7 +544,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="isEditable(e)"
                 class="act"
-                title="在编辑器中打开" aria-label="在编辑器中打开"
+                :title="$t('file-manager.open')" :aria-label="$t('file-manager.open')"
                 @click.stop="openEntry(e)"
               >
                 <IconEdit />
@@ -558,7 +559,7 @@ onBeforeUnmount(() => {
     <section class="fm-main glass">
       <div class="fm-tabs">
         <!-- 手机上是单栏：打开文件后左侧列表被隐藏，需要一个显式的返回入口 -->
-        <button v-if="active" class="fm-back" title="返回文件列表" aria-label="返回文件列表" @click="requestClose(active)">
+        <button v-if="active" class="fm-back" :title="$t('file-manager.back-to-files')" :aria-label="$t('file-manager.back-to-files')" @click="requestClose(active)">
           <IconChevronLeft />
         </button>        <div
           v-for="t in openTabs"
@@ -571,7 +572,7 @@ onBeforeUnmount(() => {
         >
           <span class="dot" v-if="isDirty(t)"></span>
           <span class="fm-tab-name">{{ t.name }}</span>
-          <button class="x" title="关闭" aria-label="关闭" @click.stop="requestClose(t)"><IconClose /></button>
+          <button class="x" :title="$t('common.close')" :aria-label="$t('common.close')" @click.stop="requestClose(t)"><IconClose /></button>
         </div>
         <div class="fm-tabs-right">
           <button
@@ -579,7 +580,7 @@ onBeforeUnmount(() => {
             :disabled="!active || saving || !isDirty(active)"
             @click="saveTab()"
           >
-            <IconSave /> {{ saving ? "保存中…" : "保存" }}
+            <IconSave /> {{ saving ? $t('file-manager.saving') : $t('common.save') }}
           </button>
         </div>
       </div>
@@ -596,8 +597,8 @@ onBeforeUnmount(() => {
       </div>
       <div v-else class="fm-placeholder">
         <IconFile />
-        <p>从左侧选择一个文本文件开始编辑</p>
-        <span>支持 server.properties、ops.json、config/*.toml、日志等常见文本文件</span>
+        <p>{{ $t("file-manager.pick-text-file") }}</p>
+        <span>{{ $t("server-file-manager.supported-files") }}</span>
       </div>
     </section>
 
@@ -609,9 +610,7 @@ onBeforeUnmount(() => {
           <h4>{{ confirmState.title }}</h4>
           <p>{{ confirmState.content }}</p>
           <div class="fm-dialog-actions">
-            <button class="btn ghost" :disabled="confirmLoading" @click="confirmState = null">
-              取消
-            </button>
+            <button class="btn ghost" :disabled="confirmLoading" @click="confirmState = null">{{ $t("common.cancel") }}</button>
             <button class="btn danger" :disabled="confirmLoading" @click="handleConfirm">
               {{ confirmState.positiveText }}
             </button>

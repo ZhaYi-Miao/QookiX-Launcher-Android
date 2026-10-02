@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { NButton, NSpin, useMessage } from "naive-ui";
 import { api } from "../api";
@@ -78,7 +79,7 @@ async function loadLogs() {
     }
   } catch (e) {
     devError("[CrashAnalyzer] loadLogs failed:", e);
-    message.error("加载崩溃报告失败：" + errText(e));
+    message.error($t("crash-analyzer.load-failed") + errText(e));
   } finally {
     loading.value = false;
   }
@@ -88,9 +89,9 @@ async function analyze(force = false) {
   if (!selected.value) {
     // 没选文件时给明确提示，而不是静默 return（否则看起来像"点了没反应"）
     if (!logs.value.length) {
-      message.warning("该实例暂无崩溃报告");
+      message.warning($t("crash-analyzer.instance-no-reports"));
     } else {
-      message.warning("请先选择一个崩溃报告");
+      message.warning($t("crash-analyzer.select-first"));
     }
     return;
   }
@@ -111,7 +112,7 @@ async function analyze(force = false) {
     writeDiagCache(props.instanceId, selected.value, d);
   } catch (e) {
     devError("[CrashAnalyzer] analyze failed:", e);
-    message.error("分析失败：" + errText(e));
+    message.error($t("crash-analyzer.analyze-failed") + errText(e));
   } finally {
     analyzing.value = false;
   }
@@ -119,14 +120,14 @@ async function analyze(force = false) {
 
 async function loadRaw() {
   if (!selected.value) {
-    message.warning("请先选择一个崩溃报告");
+    message.warning($t("crash-analyzer.select-first"));
     return;
   }
   try {
     rawContent.value = await api.getCrashReportContent(props.instanceId, selected.value);
   } catch (e) {
     devError("[CrashAnalyzer] loadRaw failed:", e);
-    message.error("读取报告失败：" + errText(e));
+    message.error($t("crash-analyzer.read-failed") + errText(e));
   }
 }
 
@@ -143,12 +144,12 @@ async function toggleRaw() {
 }
 
 async function deleteLog(filename: string) {
-  if (!confirm(`确定删除 ${filename}？`)) return;
+  if (!confirm($t("crash-analyzer.confirm", { p1: filename }))) return;
   try {
     await api.deleteInstancePath(props.instanceId, `crash-reports/${filename}`);
     // 顺手清掉对应诊断缓存，避免留下孤儿数据
     localStorage.removeItem(diagKey(props.instanceId, filename));
-    message.success("已删除");
+    message.success($t("crash-analyzer.on-positive-click"));
     await loadLogs();
     diagnosis.value = null;
     rawContent.value = "";
@@ -169,9 +170,9 @@ async function copyText(text: string) {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    message.success("已复制");
+    message.success($t("crash-analyzer.copied"));
   } catch {
-    message.error("复制失败");
+    message.error($t("crash-analyzer.copy-failed"));
   }
 }
 
@@ -208,19 +209,19 @@ function normalize(d: CrashDiagnosis): CrashDiagnosis {
 function severityLabel(s: string): string {
   switch (s) {
     case "oom":
-      return "内存不足";
+      return $t("crash-analyzer.sev-oom");
     case "jvm":
-      return "JVM 崩溃";
+      return $t("crash-analyzer.sev-jvm");
     case "gl":
-      return "显卡问题";
+      return $t("crash-analyzer.sev-gl");
     case "mod":
-      return "模组问题";
+      return $t("crash-analyzer.mod-issue");
     case "lwjgl":
-      return "依赖缺失";
+      return $t("crash-analyzer.sev-lwjgl");
     case "java_ver":
-      return "Java 版本";
+      return $t("crash-analyzer.sev-java");
     default:
-      return "未知";
+      return $t("crash-analyzer.unknown");
   }
 }
 
@@ -264,10 +265,10 @@ function severityBg(s: string): string {
 
 /** 置信度 → 文案 */
 function confidenceLabel(c: number): string {
-  if (c >= 85) return "很确定";
-  if (c >= 60) return "较可能";
-  if (c > 0) return "可能";
-  return "未能定位";
+  if (c >= 85) return $t("crash-analyzer.very-likely");
+  if (c >= 60) return $t("crash-analyzer.likely");
+  if (c > 0) return $t("crash-analyzer.possible");
+  return $t("crash-analyzer.not-located");
 }
 
 watch(
@@ -301,21 +302,21 @@ function handleSelect(filename: string) {
   <div class="crash-analyzer">
     <div v-if="loading" class="crash-loading">
       <NSpin size="medium" />
-      <span>正在扫描崩溃报告…</span>
+      <span>{{ $t("crash-analyzer.scanning") }}</span>
     </div>
 
     <div v-else-if="logs.length === 0" class="crash-empty">
       <IconBug />
-      <p>暂无崩溃报告</p>
-      <span class="crash-empty-hint">游戏正常退出时不会生成崩溃报告。</span>
+      <p>{{ $t("crash-analyzer.no-reports") }}</p>
+      <span class="crash-empty-hint">{{ $t("crash-analyzer.normal-exit-hint") }}</span>
     </div>
 
     <div v-else class="crash-body">
       <!-- 日志列表 -->
       <div class="crash-log-list">
         <div class="crash-log-header">
-          <span class="crash-log-title">崩溃报告</span>
-          <span class="crash-log-count">{{ logs.length }} 个</span>
+          <span class="crash-log-title">{{ $t("crash-analyzer.crash-report") }}</span>
+          <span class="crash-log-count">{{ $t("crash-analyzer.count-suffix", { p1: logs.length }) }}</span>
         </div>
         <div class="crash-log-items">
           <div
@@ -332,7 +333,7 @@ function handleSelect(filename: string) {
               <div class="crash-log-info">
                 <div class="crash-log-name text-ellipsis">{{ l.filename }}</div>
                 <div class="crash-log-meta">
-                  <span>{{ l.kind === "crash" ? "崩溃报告" : "JVM 日志" }}</span>
+                  <span>{{ l.kind === "crash" ? $t('crash-analyzer.crash-report') : $t('crash-analyzer.jvm-log') }}</span>
                   <span>·</span>
                   <span>{{ fmtSize(l.size) }}</span>
                   <span>·</span>
@@ -342,7 +343,7 @@ function handleSelect(filename: string) {
             </button>
             <button
               class="crash-log-del"
-              title="删除" aria-label="删除"
+              :title="$t('common.delete')" :aria-label="$t('common.delete')"
               @click="deleteLog(l.filename)"
             >
               <IconTrash />
@@ -355,7 +356,7 @@ function handleSelect(filename: string) {
       <div class="crash-result">
         <div v-if="analyzing" class="crash-analyzing">
           <NSpin size="medium" />
-          <span>正在分析崩溃原因…</span>
+          <span>{{ $t("crash-analyzer.analyzing") }}</span>
         </div>
 
         <!-- 已出诊断：优先于「分析」按钮展示，否则点完按钮结果永远不显示 -->
@@ -379,15 +380,13 @@ function handleSelect(filename: string) {
 
           <!-- 原因 -->
           <div class="crash-section">
-            <div class="crash-section-label">原因</div>
+            <div class="crash-section-label">{{ $t("crash-analyzer.cause") }}</div>
             <p class="crash-reason">{{ diagnosis.reason }}</p>
           </div>
 
           <!-- 摘录 -->
           <div v-if="diagnosis.excerpt" class="crash-section">
-            <div class="crash-section-label">
-              关键信息
-              <NButton quaternary size="tiny" @click="copyExcerpt">
+            <div class="crash-section-label">{{ $t("crash-analyzer.key-info") }}<NButton quaternary size="tiny" @click="copyExcerpt">
                 <IconCopy />
               </NButton>
             </div>
@@ -396,7 +395,7 @@ function handleSelect(filename: string) {
 
           <!-- 受影响模组 -->
           <div v-if="diagnosis.affected_mods.length" class="crash-section">
-            <div class="crash-section-label">受影响模组</div>
+            <div class="crash-section-label">{{ $t("crash-analyzer.affected-mods") }}</div>
             <div class="crash-mods">
               <span v-for="m in diagnosis.affected_mods" :key="m" class="crash-mod">{{ m }}</span>
             </div>
@@ -404,13 +403,13 @@ function handleSelect(filename: string) {
 
           <!-- 建议 -->
           <div class="crash-section">
-            <div class="crash-section-label">修复建议</div>
+            <div class="crash-section-label">{{ $t("crash-analyzer.fix-suggestion") }}</div>
             <p class="crash-advice">{{ diagnosis.advice }}</p>
           </div>
 
           <!-- 其他可能原因（引擎会收集全部命中的规则，不只是主因） -->
           <div v-if="otherCauses.length" class="crash-section">
-            <div class="crash-section-label">其他可能原因（{{ otherCauses.length }}）</div>
+            <div class="crash-section-label">{{ $t("crash-analyzer.other-causes", { p1: otherCauses.length }) }}</div>
             <div class="crash-other-causes">
               <div v-for="c in otherCauses" :key="c.id" class="crash-other-cause">
                 <div class="crash-other-head">
@@ -430,7 +429,7 @@ function handleSelect(filename: string) {
 
           <!-- 环境信息（Minecraft / Java / 内存 / 显卡…） -->
           <div v-if="diagnosis.details.length" class="crash-section">
-            <div class="crash-section-label">运行环境</div>
+            <div class="crash-section-label">{{ $t("crash-analyzer.environment") }}</div>
             <div class="crash-details">
               <div v-for="d in diagnosis.details" :key="d.key" class="crash-detail">
                 <span class="crash-detail-key">{{ d.key }}</span>
@@ -441,9 +440,7 @@ function handleSelect(filename: string) {
 
           <!-- 关键堆栈 -->
           <div v-if="diagnosis.stacktrace.length" class="crash-section">
-            <div class="crash-section-label">
-              关键堆栈
-              <NButton quaternary size="tiny" @click="copyStack">
+            <div class="crash-section-label">{{ $t("crash-analyzer.key-stack") }}<NButton quaternary size="tiny" @click="copyStack">
                 <IconCopy />
               </NButton>
             </div>
@@ -457,14 +454,10 @@ function handleSelect(filename: string) {
           <!-- 操作 -->
           <div class="crash-actions">
             <NButton quaternary size="small" @click="analyze(true)">
-              <IconRefresh />
-              重新分析
-            </NButton>
+              <IconRefresh />{{ $t("crash-analyzer.reanalyze") }}</NButton>
             <NButton quaternary size="small" @click="toggleRaw">
               <IconChevronRight v-if="!showRaw" />
-              <IconChevronDown v-else />
-              查看原始报告
-            </NButton>
+              <IconChevronDown v-else />{{ $t("crash-analyzer.view-raw") }}</NButton>
           </div>
 
           <!-- 原始内容：点「查看原始报告」即自动加载，无需再单独点一次 -->
@@ -473,18 +466,14 @@ function handleSelect(filename: string) {
             <template v-else>
               <pre>{{ rawContent }}</pre>
               <NButton quaternary size="small" @click="copyRaw">
-                <IconCopy />
-                复制全部
-              </NButton>
+                <IconCopy />{{ $t("crash-analyzer.copy-all") }}</NButton>
             </template>
           </div>
         </div>
 
         <!-- 尚未分析：显示「分析此崩溃报告」按钮（selected 为真但还没出结果） -->
         <div v-else class="crash-prompt">
-          <NButton type="primary" size="small" :disabled="analyzing || !selected" @click="analyze()">
-            分析此崩溃报告
-          </NButton>
+          <NButton type="primary" size="small" :disabled="analyzing || !selected" @click="analyze()">{{ $t("crash-analyzer.analyze-this") }}</NButton>
         </div>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { t as $t } from "../i18n";
 import { defineStore } from "pinia";
 import { api } from "../api";
 import type { Instance, InstanceGroup } from "../types";
@@ -177,7 +178,7 @@ export const useInstancesStore = defineStore("instances", {
     },
     async installGame(id: string) {
       this.installingId = id;
-      this.installStage = "准备中…";
+      this.installStage = $t("stores.instances.actions");
       this.installDone = 0;
       this.installTotal = 0;
       try {
@@ -219,13 +220,13 @@ export const useInstancesStore = defineStore("instances", {
       } catch (e) {
         const raw = String(e);
         if (raw.includes("INSTANCE_NOT_INSTALLED")) {
-          throw new Error("这个实例还没安装游戏文件，请先在实例页点「安装游戏本体」");
+          throw new Error($t("stores.instances.not-installed"));
         }
         if (raw.includes("GAME_ALREADY_RUNNING")) {
-          throw new Error("游戏已经在运行了");
+          throw new Error($t("stores.instances.already-running"));
         }
         if (raw.includes("INSTANCE_CONFIG_CORRUPT")) {
-          throw new Error("实例配置损坏（instance.json 读不出来），建议删除后重新创建");
+          throw new Error($t("stores.instances.corrupt-config"));
         }
         throw e;
       } finally {

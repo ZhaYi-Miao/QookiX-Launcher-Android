@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { NModal, useMessage } from "naive-ui";
 import { pickFile as open } from "../composables/filePicker";
@@ -18,14 +19,14 @@ const loading = ref(false);
 const gameIcons = ref<{ name: string; label: string; path: string }[]>([]);
 
 const BG_OPTIONS = [
-  { name: "无", value: "" },
-  { name: "琥珀", value: "amber" },
-  { name: "蓝", value: "blue" },
-  { name: "绿", value: "green" },
-  { name: "紫", value: "purple" },
-  { name: "红", value: "red" },
-  { name: "灰蓝", value: "slate" },
-  { name: "深色", value: "dark" },
+  { name: $t("icon-picker-dialog.none"), value: "" },
+  { name: $t("icon-picker-dialog.amber"), value: "amber" },
+  { name: $t("icon-picker-dialog.blue"), value: "blue" },
+  { name: $t("icon-picker-dialog.green"), value: "green" },
+  { name: $t("icon-picker-dialog.purple"), value: "purple" },
+  { name: $t("icon-picker-dialog.red"), value: "red" },
+  { name: $t("icon-picker-dialog.slate"), value: "slate" },
+  { name: $t("icon-picker-dialog.dark"), value: "dark" },
 ];
 
 const preview = computed(() => draft.value);
@@ -46,7 +47,7 @@ function setIcon(path: string) {
 async function importImage() {
   const file = await open({
     multiple: false,
-    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    filters: [{ name: $t("icon-picker-dialog.image"), extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
   });
   if (!file) return;
   importing.value = true;
@@ -93,7 +94,7 @@ function save() {
       :auto-focus="false"
     :show="props.show"
     preset="card"
-    title="选择实例图标"
+    :title="$t('icon-picker-dialog.pick-icon')"
     style="width: 560px; max-width: 94vw"
     @update:show="(v: boolean) => emit('update:show', v)"
   >
@@ -102,11 +103,11 @@ function save() {
         <div class="ip-preview-box">
           <AppIcon :name="preview" />
         </div>
-        <div class="ip-preview-label">预览</div>
+        <div class="ip-preview-label">{{ $t("icon-picker-dialog.preview") }}</div>
       </div>
 
       <div class="ip-section">
-        <div class="ip-label">背景</div>
+        <div class="ip-label">{{ $t("icon-picker-dialog.background") }}</div>
         <div class="ip-bgs">
           <button
             v-for="b in BG_OPTIONS"
@@ -122,9 +123,9 @@ function save() {
       </div>
 
       <div class="ip-section">
-        <div class="ip-label">游戏素材图标</div>
-        <div v-if="loading" class="ip-loading">正在从游戏文件提取图标…</div>
-        <div v-else-if="gameIcons.length === 0" class="ip-empty">未找到游戏图标，请先安装游戏</div>
+        <div class="ip-label">{{ $t("icon-picker-dialog.game-assets") }}</div>
+        <div v-if="loading" class="ip-loading">{{ $t("icon-picker-dialog.extracting") }}</div>
+        <div v-else-if="gameIcons.length === 0" class="ip-empty">{{ $t("icon-picker-dialog.no-game-icon") }}</div>
         <div v-else class="ip-icons">
           <button
             v-for="icon in gameIcons"
@@ -140,22 +141,20 @@ function save() {
       </div>
 
       <div class="ip-section">
-        <div class="ip-label">自定义图片</div>
+        <div class="ip-label">{{ $t("icon-picker-dialog.custom-image") }}</div>
         <button class="ip-import" :disabled="importing" @click="importImage">
-          {{ importing ? "导入中…" : "导入图片文件" }}
+          {{ importing ? $t('icon-picker-dialog.importing') : $t('icon-picker-dialog.import-image') }}
         </button>
-        <span v-if="draft.includes('img:') && !gameIcons.some((g) => g.path === currentImg)" class="ip-img-ok">已使用自定义图片</span>
+        <span v-if="draft.includes('img:') && !gameIcons.some((g) => g.path === currentImg)" class="ip-img-ok">{{ $t("icon-picker-dialog.custom-image-applied") }}</span>
       </div>
     </div>
 
     <template #footer>
       <div class="ip-footer">
         <button class="ip-btn" @click="emit('update:show', false)">
-          <IconClose /> 取消
-        </button>
+          <IconClose />{{ $t("common.cancel") }}</button>
         <button class="ip-btn primary" @click="save">
-          <IconCheck /> 保存
-        </button>
+          <IconCheck />{{ $t("common.save") }}</button>
       </div>
     </template>
   </n-modal>

@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NModal, NSelect, NButton, useMessage } from "naive-ui";
+import { NModal, NSelect, NButton, NInput, useMessage } from "naive-ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { api } from "../api";
 import { fmtDateStr as fmtDate, instanceLabel } from "../utils/format";
 import { useInstancesStore } from "../stores/instances";
+import { useSettingsStore } from "../stores/settings";
 import { useSlidingIndicator } from "../composables/useSlidingIndicator";
 import { IconCopy, IconExternal, IconGlobe } from "./icons";
 import type { ProjectDependency, ProjectHit, ProjectVersion } from "../types";
@@ -43,9 +48,9 @@ async function copyName() {
   if (!props.project?.title) return;
   try {
     await navigator.clipboard.writeText(props.project.title);
-    message.success("已复制名称");
+    message.success($t("install-dialog.name-copied"));
   } catch {
-    message.error("复制失败");
+    message.error($t("crash-analyzer.copy-failed"));
   }
 }
 
@@ -68,6 +73,146 @@ const { indicatorStyle: typeTabIndicatorStyle, refresh: refreshTypeTabIndicator 
 watch(typeFilter, () => nextTick(() => refreshTypeTabIndicator()));
 const deps = ref<ProjectDependency[]>([]);
 const loadingDeps = ref(false);
+
+// ---- 翻译 ----
+const settingsStore = useSettingsStore();
+const translateService = computed(() => settingsStore.settings?.translate_provider ?? "default");
+/// 内置服务只提供 Modrinth 的译文；自定义接口两个来源都能翻；百度网页模式走浏览器。
+const descTranslatable = computed(() => {
+  if (!props.project) return false;
+  const svc = translateService.value;
+  if (svc === "baidu_web") return false;
+  return svc === "custom" || props.project.provider === "modrinth";
+});
+
+const descZh = ref<string | null>(null);
+const descLoading = ref(false);
+
+function openBaiduTranslate() {
+  if (!props.project) return;
+  const q = encodeURIComponent(props.project.description || props.project.title);
+  openUrl(`https://fanyi.baidu.com/mtpe-individual/transText?query=${q}&lang=en2zh`).catch(() =>
+    message.error($t("install-dialog.open-browser-failed"))
+  );
+}
+
+async function loadDescTranslation() {
+  descZh.value = null;
+  if (!props.show || !descTranslatable.value || !props.project) return;
+  descLoading.value = true;
+  try {
+    const r = await api.translateModDescriptions(props.project.provider, [props.project.id]);
+    descZh.value = r.translations[props.project.id] ?? null;
+  } catch {
+    // 翻译失败就退化成只显示原文，不打扰用户
+    descZh.value = null;
+  } finally {
+    descLoading.value = false;
+  }
+}
+
+// 反馈：过时（服务端重译后重新取一次） / 质量问题（选类型 + 可填建议）
+const feedbackPanel = ref(false);
+const feedbackMode = ref<"choose" | "quality">("choose");
+const issueType = ref("wrong_translation");
+const userSuggestion = ref("");
+const userComment = ref("");
+const submittingFeedback = ref(false);
+const issueTypes = [
+  { value: "wrong_translation", label: $t("install-dialog.wrong-translation") },
+  { value: "unnatural", label: $t("install-dialog.unnatural") },
+  { value: "missing", label: $t("install-dialog.missing") },
+  { value: "other", label: $t("install-dialog.other") },
+];
+
+async function reportStale() {
+  if (!props.project) return;
+  try {
+    const status = await api.reportStaleTranslation(props.project.provider, props.project.slug);
+    message.success($t("install-dialog.feedback-sent"));
+    feedbackPanel.value = false;
+    if (status === "updated") await loadDescTranslation();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+async function submitQuality() {
+  if (!props.project || submittingFeedback.value) return;
+  submittingFeedback.value = true;
+  try {
+    await api.reportTranslationQuality(
+      props.project.provider,
+      props.project.slug,
+      issueType.value,
+      userSuggestion.value,
+      userComment.value
+    );
+    message.success($t("install-dialog.feedback-sent"));
+    feedbackPanel.value = false;
+    feedbackMode.value = "choose";
+    userSuggestion.value = "";
+    userComment.value = "";
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    submittingFeedback.value = false;
+  }
+}
+
+// 正文：默认收起，展开时才请求（不展开就不会白拉一次项目详情）
+const bodyOpen = ref(false);
+const bodyLoading = ref(false);
+const bodyZh = ref<string | null>(null);
+const bodyOriginal = ref("");
+const bodyNote = ref("");
+const showZhBody = ref(false);
+const bodyTranslatable = computed(() => ["default", "custom"].includes(translateService.value));
+
+function renderMarkdown(src: string): string {
+  return DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
+}
+
+async function loadBody(translate: boolean) {
+  if (!props.project) return;
+  bodyLoading.value = true;
+  bodyNote.value = "";
+  try {
+    const r = await api.translateProjectBody(
+      props.project.provider,
+      props.project.slug || props.project.id,
+      translate
+    );
+    bodyOriginal.value = r.original ?? "";
+    bodyZh.value = r.body ?? null;
+    showZhBody.value = !!r.body;
+    if (r.error) bodyNote.value = r.error;
+    else if (!r.supported) bodyNote.value = $t("install-dialog.body-unsupported");
+  } catch (e) {
+    bodyNote.value = String(e);
+  } finally {
+    bodyLoading.value = false;
+  }
+}
+
+async function toggleBody() {
+  bodyOpen.value = !bodyOpen.value;
+  if (!bodyOpen.value || bodyOriginal.value || bodyLoading.value) return;
+  const auto = !!settingsStore.settings?.body_translate_auto;
+  await loadBody(auto && bodyTranslatable.value);
+}
+
+async function translateBodyNow() {
+  if (bodyZh.value) {
+    showZhBody.value = !showZhBody.value;
+    return;
+  }
+  if (!bodyTranslatable.value) {
+    message.info($t("install-dialog.body-unsupported"));
+    return;
+  }
+  await loadBody(true);
+}
 
 const isModpack = computed(() => props.project?.project_type === "modpack");
 
@@ -112,7 +257,7 @@ function versionType(v: ProjectVersion): string {
 }
 
 function typeLabel(t: string) {
-  return { release: "正式版", beta: "测试版", alpha: "先行版" }[t] ?? "正式版";
+  return { release: $t("install-dialog.release"), beta: $t("install-dialog.beta"), alpha: $t("install-dialog.alpha") }[t] ?? $t("install-dialog.release");
 }
 
 const filteredVersions = computed(() => {
@@ -176,8 +321,19 @@ function resetForProject() {
   selectedInstance.value = isModpack.value ? null : pref;
   installMsg.value = "";
   typeFilter.value = "all";
+  // 换项目时把翻译状态清干净，免得看到上一个项目的译文
+  descZh.value = null;
+  descLoading.value = false;
+  feedbackPanel.value = false;
+  feedbackMode.value = "choose";
+  bodyOpen.value = false;
+  bodyZh.value = null;
+  bodyOriginal.value = "";
+  bodyNote.value = "";
+  showZhBody.value = false;
   loadVersions();
   loadMcWikiUrl();
+  loadDescTranslation();
 }
 
 async function onOpen() {
@@ -197,7 +353,7 @@ watch(
 );
 
 function depLabel(t: string) {
-  return { required: "必需", optional: "可选", incompatible: "不兼容", embedded: "内嵌" }[t] ?? t;
+  return { required: $t("install-dialog.required"), optional: $t("install-dialog.optional"), incompatible: $t("install-dialog.incompatible"), embedded: $t("install-dialog.embedded") }[t] ?? t;
 }
 
 async function install() {
@@ -207,19 +363,19 @@ async function install() {
   );
   if (!isModpack.value && !selectedInstance.value) {
     api.logDebug("[fe] 拦截：未选择实例");
-    message.warning("请选择一个实例");
+    message.warning($t("install-dialog.pick-instance"));
     return;
   }
   if (!selectedVersion.value) {
     api.logDebug(`[fe] 拦截：未选择版本 selectedVersion=${String(selectedVersion.value)}`);
-    message.warning(versions.value.length ? "请选择一个版本" : "该 mod 没有可用版本，可能不兼容当前实例或加载失败");
+    message.warning(versions.value.length ? $t("install-dialog.pick-version") : $t("install-dialog.no-compatible-version"));
     return;
   }
   api.logDebug(
     `[fe] 发起 invoke instanceId=${String(selectedInstance.value)} version=${String(selectedVersion.value)} kind=${props.project.project_type}`
   );
   installing.value = true;
-  message.success(isModpack.value ? "已开始安装，进度见下载中心" : "已添加到下载队列");
+  message.success(isModpack.value ? $t("install-dialog.install-started") : $t("install-dialog.queued"));
   // 整合包安装是长任务（下载整包 + 逐个拉取 mod 元数据 + 装游戏本体），
   // 不阻塞对话框——立即关闭，进度与成败都通过 install://progress 事件进下载中心。
   api
@@ -232,7 +388,7 @@ async function install() {
     )
     .then((r) => {
       api.logDebug(`[fe] 返回成功 ${JSON.stringify(r)}`);
-      if (!isModpack.value) message.success("安装完成");
+      if (!isModpack.value) message.success($t("install-dialog.computed"));
     })
     .catch((e) => {
       api.logDebug(`[fe] 返回失败 ${String(e)}`);
@@ -251,7 +407,7 @@ async function install() {
       :auto-focus="false" class="install-dialog-card"
     :show="props.show"
     preset="card"
-    :title="props.project?.title ?? '安装内容'"
+    :title="props.project?.title ?? $t('install-dialog.install-content')"
     style="width: 640px; max-width: 94vw"
     :mask-closable="true"
     :close-on-esc="true"
@@ -266,40 +422,75 @@ async function install() {
           <div class="id-title">{{ props.project.title }}</div>
           <div class="id-meta">
             <span class="id-author">{{ props.project.author }}</span>
-            <span class="id-dl">{{ (props.project.downloads / 10000).toFixed(1) }} 万下载</span>
+            <span class="id-dl">{{ $t("install-dialog.downloads-count", { p1: (props.project.downloads / 10000).toFixed(1) }) }}</span>
             <span class="id-type">{{ props.project.project_type }}</span>
           </div>
-          <div class="id-desc">{{ props.project.description }}</div>
+          <div v-if="descLoading" class="id-desc">{{ $t("install-dialog.translating") }}</div>
+          <template v-else-if="descZh">
+            <div class="id-desc id-desc-zh">{{ descZh }}</div>
+            <div class="id-desc id-desc-en">{{ props.project.description }}</div>
+          </template>
+          <div v-else class="id-desc">{{ props.project.description }}</div>
           <div class="id-links">
-            <a v-if="mcWikiUrl" :href="mcWikiUrl" target="_blank" class="id-link"><IconGlobe /> MC百科</a>
-            <a v-if="sourceUrl" :href="sourceUrl" target="_blank" class="id-link"><IconExternal /> 在浏览器打开</a>
-            <button class="id-link" @click="copyName"><IconCopy /> 复制名称</button>
+            <a v-if="mcWikiUrl" :href="mcWikiUrl" target="_blank" class="id-link"><IconGlobe />{{ $t("install-dialog.mc-wiki") }}</a>
+            <a v-if="sourceUrl" :href="sourceUrl" target="_blank" class="id-link"><IconExternal />{{ $t("install-dialog.open-in-browser") }}</a>
+            <button class="id-link" @click="copyName"><IconCopy />{{ $t("install-dialog.copy-name") }}</button>
+            <button
+              v-if="translateService === 'baidu_web'"
+              class="id-link"
+              @click="openBaiduTranslate"
+            >{{ $t("install-dialog.baidu-translate") }}</button>
+            <button
+              v-else-if="descZh"
+              class="id-link"
+              :class="{ on: feedbackPanel }"
+              @click="feedbackPanel = !feedbackPanel"
+            >{{ $t("install-dialog.feedback") }}</button>
+          </div>
+          <div v-if="feedbackPanel" class="id-feedback">
+            <template v-if="feedbackMode === 'choose'">
+              <div class="id-feedback-title">{{ $t("install-dialog.feedback-what") }}</div>
+              <div class="id-feedback-actions">
+                <n-button size="small" @click="reportStale">{{ $t("install-dialog.feedback-outdated") }}</n-button>
+                <n-button size="small" @click="feedbackMode = 'quality'">{{ $t("install-dialog.feedback-wrong") }}</n-button>
+                <n-button size="small" @click="feedbackPanel = false">{{ $t("common.cancel") }}</n-button>
+              </div>
+            </template>
+            <template v-else>
+              <n-select v-model:value="issueType" :options="issueTypes" size="small" />
+              <n-input v-model:value="userSuggestion" size="small" :placeholder="$t('install-dialog.feedback-suggestion')" />
+              <n-input v-model:value="userComment" size="small" :placeholder="$t('install-dialog.feedback-note')" />
+              <div class="id-feedback-actions">
+                <n-button size="small" type="primary" :loading="submittingFeedback" @click="submitQuality">{{ $t("install-dialog.submit") }}</n-button>
+                <n-button size="small" @click="feedbackMode = 'choose'">{{ $t("install-dialog.back") }}</n-button>
+              </div>
+            </template>
           </div>
         </div>
       </div>
 
       <div class="id-form">
         <label v-if="!isModpack" class="id-field">
-          <span>安装到实例</span>
-          <n-select v-model:value="selectedInstance" :options="instanceOptions()" placeholder="选择实例" />
+          <span>{{ $t("install-dialog.install-to") }}</span>
+          <n-select v-model:value="selectedInstance" :options="instanceOptions()" :placeholder="$t('install-dialog.select-instance')" />
         </label>
 
         <div v-if="isModpack" class="id-field">
-          <span class="id-modpack-hint">整合包将自动创建新实例</span>
+          <span class="id-modpack-hint">{{ $t("install-dialog.modpack-new-instance") }}</span>
         </div>
 
         <div class="id-field">
           <div class="id-ver-head">
-            <span>选择版本</span>
+            <span>{{ $t("install-dialog.select-version") }}</span>
             <div ref="typeTabBox" class="id-type-tabs">
               <div class="indicator" :style="typeTabIndicatorStyle"></div>
-              <button :class="{ active: typeFilter === 'all' }" @click="typeFilter = 'all'">全部</button>
-              <button :class="{ active: typeFilter === 'release' }" @click="typeFilter = 'release'">正式版</button>
-              <button :class="{ active: typeFilter === 'beta' }" @click="typeFilter = 'beta'">测试版</button>
-              <button :class="{ active: typeFilter === 'alpha' }" @click="typeFilter = 'alpha'">先行版</button>
+              <button :class="{ active: typeFilter === 'all' }" @click="typeFilter = 'all'">{{ $t("install-dialog.all") }}</button>
+              <button :class="{ active: typeFilter === 'release' }" @click="typeFilter = 'release'">{{ $t("install-dialog.release") }}</button>
+              <button :class="{ active: typeFilter === 'beta' }" @click="typeFilter = 'beta'">{{ $t("install-dialog.beta") }}</button>
+              <button :class="{ active: typeFilter === 'alpha' }" @click="typeFilter = 'alpha'">{{ $t("install-dialog.alpha") }}</button>
             </div>
           </div>
-          <div v-if="loadingVersions" class="id-loading">加载中…</div>
+          <div v-if="loadingVersions" class="id-loading">{{ $t("file-manager.loading") }}</div>
           <div v-else class="id-ver-list">
             <button
               v-for="v in filteredVersions.slice(0, 80)"
@@ -313,39 +504,66 @@ async function install() {
               <span class="id-ver-mc">{{ (v.game_versions ?? []).slice(-2).join(", ") }}</span>
               <span class="id-ver-date">{{ fmtDate(v.date_published) }}</span>
             </button>
-            <div v-if="!filteredVersions.length" class="id-empty">该分类下没有版本</div>
+            <div v-if="!filteredVersions.length" class="id-empty">{{ $t("install-dialog.no-versions") }}</div>
           </div>
         </div>
 
         <!-- dependencies -->
         <div v-if="(deps.length || loadingDeps) && !isModpack" class="id-deps">
-          <span class="id-deps-label">前置依赖</span>
+          <span class="id-deps-label">{{ $t("install-dialog.dependencies") }}</span>
           <div v-if="!loadingDeps" class="id-deps-list">
             <button
               v-for="d in deps"
               :key="d.projectId"
               class="id-dep-chip"
               :class="d.dependencyType"
-              :title="`查看 ${d.title} 详情`" :aria-label="`查看 ${d.title} 详情`"
+              :title="$t('install-dialog.view-details', { p1: d.title })" :aria-label="$t('install-dialog.view-details', { p1: d.title })"
               @click="emit('install-dep', d)"
             >
               <span class="id-dep-tag">{{ depLabel(d.dependencyType) }}</span>
               {{ d.title }}
             </button>
           </div>
-          <div v-if="loadingDeps" class="id-deps-loading">正在查询前置…</div>
+          <div v-if="loadingDeps" class="id-deps-loading">{{ $t("install-dialog.querying-deps") }}</div>
+        </div>
+      </div>
+
+      <!-- 正文按需展开：不展开就不发请求 -->
+      <div class="id-body">
+        <div class="id-body-head">
+          <button class="id-link" @click="toggleBody">{{ bodyOpen ? $t('install-dialog.collapse-body') : $t('install-dialog.show-body') }}</button>
+          <button
+            v-if="bodyOpen"
+            class="id-link"
+            :class="{ on: showZhBody }"
+            :disabled="bodyLoading"
+            @click="translateBodyNow"
+          >
+            {{ bodyLoading ? $t('file-manager.loading') : bodyZh ? (showZhBody ? $t('install-dialog.show-source') : $t('install-dialog.show-translation')) : $t('install-dialog.translate-body') }}
+          </button>
+        </div>
+        <div v-if="bodyOpen" class="id-body-box">
+          <div v-if="bodyLoading" class="id-loading">{{ $t("file-manager.loading") }}</div>
+          <template v-else>
+            <p v-if="bodyNote" class="id-body-note">{{ bodyNote }}</p>
+            <div
+              v-if="(showZhBody ? bodyZh : bodyOriginal)"
+              class="id-body-content"
+              v-html="renderMarkdown((showZhBody ? bodyZh : bodyOriginal) ?? '')"
+            ></div>
+            <p v-else-if="!bodyNote" class="id-body-note">{{ $t("install-dialog.no-body") }}</p>
+          </template>
         </div>
       </div>
 
       <div v-if="installMsg" class="id-msg">{{ installMsg }}</div>
-      <div v-if="!isModpack && !instances.instances.length" class="id-noinst">
-        还没有实例，<a @click="emit('update:show', false); router.push('/instances')">先去创建实例</a>
+      <div v-if="!isModpack && !instances.instances.length" class="id-noinst">{{ $t("install-dialog.no-instance-yet") }}<a @click="emit('update:show', false); router.push('/instances')">{{ $t("install-dialog.create-instance-first") }}</a>
       </div>
 
       <!-- 操作按钮放在内容区内（而非 #footer）：
            版本列表较长时会把窗口撑高，footer 会跑到视口外点不到。 -->
       <div class="id-footer">
-        <n-button @click="emit('update:show', false)">关闭</n-button>
+        <n-button @click="emit('update:show', false)">{{ $t("common.close") }}</n-button>
         <n-button
           type="primary"
           :loading="installing"
@@ -353,9 +571,7 @@ async function install() {
             api.logDebug('[fe] 一键安装按钮被点击');
             install();
           "
-        >
-          一键安装
-        </n-button>
+        >{{ $t("install-dialog.mcreator") }}</n-button>
       </div>
     </div>
   </n-modal>
@@ -432,6 +648,98 @@ async function install() {
 .id-link:hover {
   color: var(--accent, #e89a4b);
   border-color: var(--accent-45);
+}
+.id-link.on {
+  color: var(--accent);
+  border-color: var(--accent-45);
+}
+.id-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* 译文放松行数限制：被裁成两行就看不出翻了什么 */
+.id-desc-zh {
+  color: var(--text-2);
+  -webkit-line-clamp: 4;
+}
+.id-desc-en {
+  margin-top: 4px;
+  opacity: 0.72;
+}
+.id-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.id-feedback-title {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.id-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.id-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.id-body-head {
+  display: flex;
+  gap: 8px;
+}
+/* 手机横屏视口只有 390px 上下，正文必须自己滚，不能把弹窗撑破 */
+.id-body-box {
+  max-height: 34vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+.id-body-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.id-body-content {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.id-body-content :deep(img),
+.id-body-content img {
+  max-width: 100%;
+  height: auto;
+}
+.id-body-content h1,
+.id-body-content h2,
+.id-body-content h3 {
+  font-size: 13px;
+  margin: 10px 0 6px;
+}
+.id-body-content p {
+  margin: 6px 0;
+}
+.id-body-content a {
+  color: var(--accent);
+}
+.id-body-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.id-body-content th,
+.id-body-content td {
+  border: 1px solid var(--border);
+  padding: 3px 6px;
 }
 .id-site {
   display: inline-flex;

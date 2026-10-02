@@ -17,6 +17,7 @@
  * - 物理：全部弹簧用「固定小步长累积积分」推进，避免可变帧长导致回弹不一致，
  *   保证动画在不同帧率下都顺滑。
  */
+import { t as $t } from "../i18n";
 import { onMounted, onUnmounted, ref } from "vue";
 import logoUrl from "../assets/logo.png";
 import creeperFaceUrl from "../assets/creeper-face.png";
@@ -937,8 +938,8 @@ onUnmounted(() => {
       <div v-if="showAchieve" class="achv-banner" aria-live="polite">
         <img class="achv-icon-img" :src="appIconAndroid" alt="" />
         <div class="achv-text">
-          <div class="achv-title">成就已达成！</div>
-          <div class="achv-name">偷吃曲奇的人</div>
+          <div class="achv-title">{{ $t("about-showcase.achievement-unlocked") }}</div>
+          <div class="achv-name">{{ $t("about-showcase.cookie-thief") }}</div>
         </div>
       </div>
     </Transition>

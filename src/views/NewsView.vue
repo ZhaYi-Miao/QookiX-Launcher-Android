@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { onMounted } from "vue";
 import { NButton, NEmpty, NSpin, useMessage } from "naive-ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -29,18 +30,16 @@ onMounted(async () => {
 <template>
   <div class="news-view">
     <div class="news-header">
-      <h1>Minecraft 新闻</h1>
+      <h1>{{ $t("news.mc-news") }}</h1>
       <n-button size="small" secondary :loading="newsStore.loading" @click="refresh">
-        <template #icon><IconRefresh /></template>
-        刷新
-      </n-button>
+        <template #icon><IconRefresh /></template>{{ $t("common.refresh") }}</n-button>
     </div>
 
     <div v-if="newsStore.loading && !newsStore.news.length" class="news-state">
       <n-spin size="small" />
-      <span>加载中…</span>
+      <span>{{ $t("file-manager.loading") }}</span>
     </div>
-    <n-empty v-else-if="!newsStore.news.length" class="news-state" description="暂无新闻" />
+    <n-empty v-else-if="!newsStore.news.length" class="news-state" :description="$t('news.no-news')" />
 
     <div v-else class="news-list">
       <article

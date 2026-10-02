@@ -8,6 +8,7 @@
  *   - SettingsTab.vue  实例设置（Java / 内存 / 别名 / 参数 / 图标）
  *   - FileManager.vue / LogViewer.vue / CrashAnalyzer.vue（早已独立）
  */
+import { t as $t } from "../i18n";
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
@@ -22,6 +23,7 @@ import CrashAnalyzer from "../components/CrashAnalyzer.vue";
 import ContentTab from "../components/instance/ContentTab.vue";
 import SavesTab from "../components/instance/SavesTab.vue";
 import SettingsTab from "../components/instance/SettingsTab.vue";
+import KeysTab from "../components/instance/KeysTab.vue";
 import { fmtDateLocale as fmtDate, fmtSize } from "../utils/format";
 import {
   IconBox,
@@ -90,15 +92,18 @@ function kindOf(t: string) {
 }
 
 const ALL_TABS = [
-  { key: "mods", label: "模组", icon: IconBox, folder: "mods" },
-  { key: "shaders", label: "光影", icon: IconLayers, folder: "shaderpacks" },
-  { key: "resourcepacks", label: "材质包", icon: IconImage, folder: "resourcepacks" },
-  { key: "screenshots", label: "截图", icon: IconCamera, folder: "screenshots" },
-  { key: "saves", label: "世界", icon: IconFolder, folder: "saves" },
-  { key: "files", label: "文件", icon: IconHardDrive },
-  { key: "logs", label: "日志", icon: IconFile },
-  { key: "crash", label: "崩溃分析", icon: IconBug },
-  { key: "settings", label: "设置", icon: IconSliders },
+  { key: "mods", label: $t("browse.mods"), icon: IconBox, folder: "mods" },
+  { key: "shaders", label: $t("utils.categories.shader"), icon: IconLayers, folder: "shaderpacks" },
+  { key: "resourcepacks", label: $t("instance-detail.resourcepacks"), icon: IconImage, folder: "resourcepacks" },
+  { key: "screenshots", label: $t("instance-detail.screenshots"), icon: IconCamera, folder: "screenshots" },
+  { key: "saves", label: $t("instance-detail.group"), icon: IconFolder, folder: "saves" },
+  { key: "files", label: $t("instance-detail.files"), icon: IconHardDrive },
+  { key: "logs", label: $t("common.logs"), icon: IconFile },
+  { key: "crash", label: $t("crash-dialog.crash"), icon: IconBug },
+  // 手机端的「按键」是屏幕上的触控控制层（控制布局全局共享，不按实例区分），
+  // 所以不给它 folder —— 给了会被「文件夹存在才显示」的规则挡掉。
+  { key: "keys", label: $t("instance-detail.keys"), icon: IconLayout },
+  { key: "settings", label: $t("router.settings"), icon: IconSliders },
 ];
 // 左侧竖向导航栏的选项。图标是组件，naive-ui 的 options 需要渲染函数。
 const railOptions = computed(() =>
@@ -143,7 +148,7 @@ watch(tabs, (ts) => {
 function loaderLabel() {
   const i = instance.value;
   if (!i) return "";
-  return i.loader === "vanilla" ? "原版" : i.loader.charAt(0).toUpperCase() + i.loader.slice(1);
+  return i.loader === "vanilla" ? $t("utils.categories.vanilla") : i.loader.charAt(0).toUpperCase() + i.loader.slice(1);
 }
 
 // ---- 内容 tab：通过 ref 驱动子组件（tab 栏的检查更新/导入按钮）----
@@ -177,14 +182,14 @@ async function launch() {
   const i = instance.value;
   if (!i) return;
   if (!accounts.accounts.length) {
-    message.warning("请先添加账号（正版或离线）");
+    message.warning($t("instance-saves.need-account"));
     accounts.showManager = true;
     return;
   }
   try {
     // 被渲染器确认弹窗拦下时返回 null，此时游戏还没启动
     const res = await instances.launch(i.id);
-    if (res) message.success("游戏已启动，可在「日志」查看输出");
+    if (res) message.success($t("instance-detail.launched-see-logs"));
   } catch (e) {
     message.error(String(e));
   }
@@ -197,7 +202,7 @@ async function installGame() {
   installingGame.value = true;
   try {
     await instances.installGame(instanceId);
-    message.success("游戏本体已安装");
+    message.success($t("instance-detail.game-installed"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -208,15 +213,15 @@ async function installGame() {
 function removeInstance() {
   const isSymlink = instance.value?.is_symlink;
   confirmState.value = {
-    title: "删除实例",
+    title: $t("instance-card.delete-instance"),
     content: isSymlink
-      ? `此实例通过符号链接导入，删除只会移除启动器中的链接，原始目录${instance.value?.source_path ? `（${instance.value.source_path}）` : ""}的文件会完整保留。确定删除该实例吗？`
-      : "删除实例将移除其游戏目录与全部内容，此操作不可恢复。",
-    positiveText: "删除",
+      ? $t("instance-detail.delete-symlink-confirm", { p1: instance.value?.source_path ? `（${instance.value.source_path}）` : "" })
+      : $t("instance-detail.delete-confirm"),
+    positiveText: $t("common.delete"),
     onOk: async () => {
       try {
         await instances.remove(instanceId);
-        message.success("实例已删除");
+        message.success($t("instance-card.on-ok"));
         router.push("/instances");
       } catch (e) {
         message.error(String(e));
@@ -303,13 +308,11 @@ watch(
         <span class="badge">{{ loaderLabel() }}</span>
         <span v-if="instance.loader_version" class="lv">{{ instance.loader_version }}</span>        <div class="d-actions">
           <button class="btn primary" @click="launch">
-            <IconPlay />
-            启动游戏
-          </button>
+            <IconPlay />{{ $t("instance-card.launch") }}</button>
           <button
             class="btn ghost pin"
             :class="{ active: pins.isPinned(homePinId) }"
-            :title="pins.isPinned(homePinId) ? '取消固定到首页' : '固定到首页'" :aria-label="pins.isPinned(homePinId) ? '取消固定到首页' : '固定到首页'"
+            :title="pins.isPinned(homePinId) ? $t('instance-card.unpin-home') : $t('instance-saves.pin-home')" :aria-label="pins.isPinned(homePinId) ? $t('instance-card.unpin-home') : $t('instance-saves.pin-home')"
             @click="toggleInstancePin('home')"
           >
             <IconMapPin />
@@ -317,12 +320,12 @@ watch(
           <button
             class="btn ghost pin"
             :class="{ active: pins.isPinned(sidebarPinId) }"
-            :title="pins.isPinned(sidebarPinId) ? '取消固定到侧边栏' : '固定到侧边栏'" :aria-label="pins.isPinned(sidebarPinId) ? '取消固定到侧边栏' : '固定到侧边栏'"
+            :title="pins.isPinned(sidebarPinId) ? $t('instance-card.unpin-sidebar') : $t('instance-card.pin-sidebar')" :aria-label="pins.isPinned(sidebarPinId) ? $t('instance-card.unpin-sidebar') : $t('instance-card.pin-sidebar')"
             @click="toggleInstancePin('sidebar')"
           >
             <IconLayout />
           </button>
-          <button class="btn danger" title="删除实例" aria-label="删除实例" @click="removeInstance">
+          <button class="btn danger" :title="$t('instance-card.delete-instance')" :aria-label="$t('instance-card.delete-instance')" @click="removeInstance">
             <IconTrash />
           </button>
         </div>
@@ -330,17 +333,17 @@ watch(
     </Teleport>
     <div v-if="!instance.installed" class="not-installed glass">
       <div>
-        <h3>游戏本体尚未安装</h3>
-        <p>安装 MC {{ instance.mc_version }} 本体后即可启动（mod 已就绪的不受影响）</p>
+        <h3>{{ $t("instance-detail.game-not-installed") }}</h3>
+        <p>{{ $t("instance-detail.install-to-launch", { p1: instance.mc_version }) }}</p>
       </div>
       <button class="btn primary" :disabled="installingGame" @click="installGame">
-        <IconPlay /> {{ installingGame ? "安装中…" : "安装游戏" }}
+        <IconPlay /> {{ installingGame ? $t('instance-detail.installing') : $t('instance-detail.install-game') }}
       </button>
     </div>
 
     <div v-if="instance.is_symlink" class="symlink-notice glass">
       <IconExternal />
-      <span>当前实例通过符号链接方式导入，对 mods / 存档等文件所做的更改会直接影响原始目录<template v-if="instance.source_path">（来源：{{ instance.source_path }}）</template>。下载的 mod 也会保存到原始目录。</span>
+      <span>{{ $t("instance-detail.symlink-notice") }}<template v-if="instance.source_path">{{ $t("instance-detail.source", { p1: instance.source_path }) }}</template>{{ $t("instance-detail.symlink-notice-2") }}</span>
     </div>
 
     <!--
@@ -377,10 +380,10 @@ watch(
 
       <!-- screenshots -->
       <template v-if="tab === 'screenshots'">
-        <div v-if="loadingShots" class="center">加载中…</div>
+        <div v-if="loadingShots" class="center">{{ $t("file-manager.loading") }}</div>
         <div v-else-if="!shotFiles.length" class="empty glass">
-          <p>还没有截图</p>
-          <button class="btn ghost" @click="tab = 'files'"><IconHardDrive /> 在文件管理器中查看</button>
+          <p>{{ $t("instance-detail.no-screenshot") }}</p>
+          <button class="btn ghost" @click="tab = 'files'"><IconHardDrive />{{ $t("instance-detail.open-in-file-manager") }}</button>
         </div>
         <div v-else class="shot-grid">
           <div
@@ -416,6 +419,9 @@ watch(
         <CrashAnalyzer :instance-id="instanceId" />
       </template>
 
+      <!-- 按键（触控控制层布局管理） -->
+      <KeysTab v-if="tab === 'keys'" :instance-id="instanceId" />
+
       <!-- settings -->
       <SettingsTab v-if="tab === 'settings'" :instance-id="instanceId" />
     </div>
@@ -436,7 +442,7 @@ watch(
       <div v-if="confirmState" ref="confirmCardRef" style="display: flex; flex-direction: column; gap: 16px;">
         <div style="font-size: 14px; color: var(--text-2); line-height: 1.6;">{{ confirmState.content }}</div>
         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-          <n-button @click="confirmState = null">取消</n-button>
+          <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
           <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
         </div>
       </div>
@@ -447,7 +453,7 @@ watch(
       :auto-focus="false"
       v-model:show="showPreview"
       preset="card"
-      title="截图预览"
+      :title="$t('instance-detail.screenshot-preview')"
       style="width: min(860px, 92vw)"
       :mask-closable="true"
       :close-on-esc="true"
@@ -456,7 +462,7 @@ watch(
       <img ref="previewCardRef" :src="previewImg" class="preview-img" alt="" />
     </n-modal>
   </div>
-  <div v-else class="center">实例不存在或已删除</div>
+  <div v-else class="center">{{ $t("instance-detail.instance-gone") }}</div>
 </template>
 
 <style scoped>

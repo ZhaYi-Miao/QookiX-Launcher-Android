@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, reactive, ref, watch } from "vue";
 import { NButton, NInput, NModal, NPopover, useDialog, useMessage } from "naive-ui";
 import { useAccountsStore } from "../stores/accounts";
@@ -165,7 +166,7 @@ function onAvatarError(uuid: string) {
 
 async function select(acc: Account) {
   await accounts.select(acc.uuid);
-  message.success(`当前游玩账号：${acc.username}`);
+  message.success($t("account-chip.playing-as", { p1: acc.username }));
   popoverShow.value = false;
 }
 
@@ -177,14 +178,14 @@ function openOfflineDialog() {
 async function addOffline() {
   const name = offlineName.value.trim();
   if (!name) {
-    message.warning("请输入用户名");
+    message.warning($t("account-chip.username-required"));
     return;
   }
   addingOffline.value = true;
   try {
     await accounts.addOffline(name);
     showOfflineDialog.value = false;
-    message.success("离线账号已添加");
+    message.success($t("account-chip.offline-added"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -209,23 +210,21 @@ function remove(acc: Account) {
   // 必须二次确认：移除按钮在手机上是**常显**的（触屏没有 hover），
   // 又紧贴「切换账号」的整行点击区，误触一次正版账号就得重走微软登录。
   dialog.warning({
-    title: "移除账号",
-    content: `确定要移除账号「${acc.username}」吗？${
-      acc.type === "microsoft" ? "再次使用需要重新登录微软账号。" : ""
-    }`,
-    positiveText: "移除",
-    negativeText: "取消",
+    title: $t("account-chip.remove-account"),
+    content: $t("account-chip.remove-confirm", { p1: acc.username, p2: acc.type === "microsoft" ? $t("account-chip.relogin-needed") : "" }),
+    positiveText: $t("account-chip.positive-text"),
+    negativeText: $t("common.cancel"),
     onPositiveClick: () => {
       accounts
         .remove(acc.uuid)
-        .then(() => message.success("账号已移除"))
+        .then(() => message.success($t("account-chip.account-removed")))
         .catch((e) => message.error(String(e)));
     },
   });
 }
 
 function typeLabel(a: Account) {
-  return a.type === "microsoft" ? "正版" : "离线";
+  return a.type === "microsoft" ? $t("account-chip.premium") : $t("account-chip.offline");
 }
 </script>
 
@@ -249,14 +248,14 @@ function typeLabel(a: Account) {
         </div>
         <template v-if="!props.collapsed">
           <div class="acct-info">
-            <div class="acct-name text-ellipsis">{{ current?.username ?? "未登录" }}</div>
+            <div class="acct-name text-ellipsis">{{ current?.username ?? $t('account-chip.not-logged-in') }}</div>
             <div class="acct-type">
               {{
                 current
                   ? current.type === "microsoft"
-                    ? "正版账号"
-                    : "离线账号"
-                  : "点击添加账号"
+                    ? $t('account-chip.premium-account')
+                    : $t('account-chip.offline-account')
+                  : $t('account-chip.tap-to-add-account')
               }}
             </div>
           </div>
@@ -267,9 +266,9 @@ function typeLabel(a: Account) {
     </template>
 
     <div class="acctm-body">
-      <div class="acctm-title">当前游玩账号</div>
+      <div class="acctm-title">{{ $t("account-chip.current-account") }}</div>
 
-      <div v-if="!accounts.accounts.length" class="acctm-empty">还没有账号</div>
+      <div v-if="!accounts.accounts.length" class="acctm-empty">{{ $t("account-chip.no-accounts") }}</div>
       <div v-else class="acctm-list">
         <div
           v-for="acc in accounts.accounts"
@@ -285,7 +284,7 @@ function typeLabel(a: Account) {
             <span class="acctm-type" :class="acc.type">{{ typeLabel(acc) }}</span>
           </div>
           <IconCheck v-if="current?.uuid === acc.uuid" class="acctm-check" />
-          <button class="acctm-remove" title="移除账号" aria-label="移除账号" @click.stop="remove(acc)">
+          <button class="acctm-remove" :title="$t('account-chip.remove-account')" :aria-label="$t('account-chip.remove-account')" @click.stop="remove(acc)">
             <IconTrash />
           </button>
         </div>
@@ -295,11 +294,9 @@ function typeLabel(a: Account) {
 
       <div class="acctm-add">
         <button class="acctm-btn ms" @click="startMs">
-          <IconPlus /> 添加 Microsoft 账户
-        </button>
+          <IconPlus />{{ $t("account-chip.add-microsoft") }}</button>
         <button class="acctm-btn" @click="openOfflineDialog">
-          <IconPlus /> 添加离线账号
-        </button>
+          <IconPlus />{{ $t("account-chip.add-offline") }}</button>
       </div>
     </div>
   </n-popover>
@@ -309,23 +306,23 @@ function typeLabel(a: Account) {
       :auto-focus="false"
     v-model:show="showOfflineDialog"
     preset="card"
-    title="添加离线账号"
+    :title="$t('account-chip.add-offline')"
     style="width: 380px; max-width: 90vw"
   >
     <div class="acctm-offline-box">
       <n-input
         v-model:value="offlineName"
-        placeholder="游戏内用户名（≤16 字符）"
+        :placeholder="$t('account-chip.game-username')"
         :maxlength="16"
         clearable
         @keyup.enter="addOffline"
       />
-      <p class="acctm-offline-hint">离线账号的 UUID 由用户名确定，可与官方启动器互通。</p>
+      <p class="acctm-offline-hint">{{ $t("account-chip.offline-uuid-hint") }}</p>
     </div>
     <template #footer>
       <div class="acctm-offline-footer">
-        <n-button @click="showOfflineDialog = false">取消</n-button>
-        <n-button type="primary" :loading="addingOffline" @click="addOffline">添加</n-button>
+        <n-button @click="showOfflineDialog = false">{{ $t("common.cancel") }}</n-button>
+        <n-button type="primary" :loading="addingOffline" @click="addOffline">{{ $t("account-chip.add") }}</n-button>
       </div>
     </template>
   </n-modal>

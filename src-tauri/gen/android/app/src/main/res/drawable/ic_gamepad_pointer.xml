@@ -1,0 +1,34 @@
+<!-- 手柄在菜单里的虚拟光标：白心 + 描边十字，任何背景上都看得见 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+
+    <!-- 外圈 -->
+    <path
+        android:pathData="M11,2.6a8.4,8.4 0 1,0 0.01,0z"
+        android:strokeColor="#CC000000"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M11,2.6a8.4,8.4 0 1,0 0.01,0z"
+        android:strokeColor="#E6FFFFFF"
+        android:strokeWidth="0.9"
+        android:fillColor="#00000000" />
+
+    <!-- 十字线 -->
+    <path
+        android:pathData="M11,0.8v5.2M11,16v5.2M0.8,11h5.2M16,11h5.2"
+        android:strokeColor="#CC000000"
+        android:strokeWidth="1.8" />
+    <path
+        android:pathData="M11,0.8v5.2M11,16v5.2M0.8,11h5.2M16,11h5.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="0.9" />
+
+    <!-- 中心点 -->
+    <path
+        android:pathData="M11,9.4a1.6,1.6 0 1,0 0.01,0z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

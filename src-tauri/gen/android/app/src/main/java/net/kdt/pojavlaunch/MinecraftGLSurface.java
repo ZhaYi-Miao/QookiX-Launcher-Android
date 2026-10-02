@@ -27,6 +27,10 @@ import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 
 import net.kdt.pojavlaunch.customcontrols.ControlLayout;
+import net.kdt.pojavlaunch.customcontrols.gamepad.Gamepad;
+import net.kdt.pojavlaunch.customcontrols.gamepad.GamepadHandler;
+import net.kdt.pojavlaunch.customcontrols.gamepad.GamepadInputDispatcher;
+import net.kdt.pojavlaunch.customcontrols.gamepad.direct.DirectGamepadEnableHandler;
 import net.kdt.pojavlaunch.customcontrols.mouse.AbstractTouchpad;
 import net.kdt.pojavlaunch.customcontrols.mouse.AndroidPointerCapture;
 import net.kdt.pojavlaunch.customcontrols.mouse.InGUIEventProcessor;
@@ -44,15 +48,13 @@ import org.lwjgl.glfw.CallbackBridge;
 /**
  * Class dealing with showing minecraft surface and taking inputs to dispatch them to minecraft
  *
- * <p><b>与 Pojav 原版的差异（有意为之）</b>：这里剥掉了「实体手柄重映射」那一半
- * （原版字段 {@code mGamepadHandler} / {@code mInputManager}、{@code createGamepad}、
- * {@code onDirectGamepadEnabled}，以及两处 {@code Gamepad.isGamepadEvent} 分支）。
- * 原因：它依赖 {@code fr.spse.gamepad_remapper} 这个只在 JitPack 发布的 AAR，
- * 而本机开发环境无法访问 JitPack；QookiX 也没有手柄重映射的设置界面。
- * 虚拟控件（含 {@code ControlJoystick} 摇杆）不受影响 —— 摇杆走的是
- * {@code ControlJoystick} + {@code JoystickView}，与实体手柄无关。
+ * <p><b>实体手柄</b>：手柄的第一个按键/摇杆事件会按需创建 {@link Gamepad}，
+ * 之后手柄输入被翻译成键鼠喂给游戏（抓取光标时用游戏内映射表，回菜单换成菜单映射表）。
+ * 上游那半靠 JitPack 上的 {@code fr.spse.gamepad_remapper} 解析原始事件，这里换成了
+ * 自己写的 {@link GamepadInputDispatcher}，不再引外部依赖。
+ * 虚拟控件（含 {@code ControlJoystick} 摇杆）不受影响，两条输入路径互不干扰。
  */
-public class MinecraftGLSurface extends View implements GrabListener {
+public class MinecraftGLSurface extends View implements GrabListener, DirectGamepadEnableHandler {
     /* Sensitivity, adjusted according to screen size */
     private final double mSensitivityFactor = (1.4 * (1080f/ Tools.getDisplayMetrics((Activity) getContext()).heightPixels));
 
@@ -87,6 +89,10 @@ public class MinecraftGLSurface extends View implements GrabListener {
     private int sTouchLogTick;
     private AndroidPointerCapture mPointerCapture;
     private boolean mLastGrabState = false;
+    /** 实体手柄处理器：第一个手柄事件到来时按需创建 */
+    private GamepadHandler mGamepadHandler;
+    /** 手柄事件分发器（每个手柄设备一份，用它判断右摇杆报在哪些轴上） */
+    private GamepadInputDispatcher mGamepadDispatcher;
 
     public MinecraftGLSurface(Context context) {
         this(context, null);
@@ -95,6 +101,8 @@ public class MinecraftGLSurface extends View implements GrabListener {
     public MinecraftGLSurface(Context context, AttributeSet attributeSet) {
         super(context, attributeSet);
         setFocusable(true);
+        // 游戏侧要求手柄直连（GLFW 手柄缓冲）时回调到这里
+        CallbackBridge.setDirectGamepadEnableHandler(this);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.O)
@@ -316,6 +324,13 @@ public class MinecraftGLSurface extends View implements GrabListener {
     @SuppressLint("NewApi")
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        // 手柄的摇杆 / 扳机 / 十字键轴：先于鼠标判定，手柄事件里没有鼠标指针
+        if (Gamepad.isGamepadEvent(event)) {
+            if (mGamepadHandler == null) createGamepad(this, event.getDevice());
+            mGamepadDispatcher.handleMotionEvent(event, mGamepadHandler);
+            return true;
+        }
+
         int mouseCursorIndex = -1;
 
         for(int i = 0; i < event.getPointerCount(); i++) {
@@ -383,6 +398,13 @@ public class MinecraftGLSurface extends View implements GrabListener {
             }
         }
 
+        // 实体手柄按键：必须在键盘映射之前拦下（KEYCODE_BUTTON_* 不该走键盘表）
+        if (Gamepad.isGamepadEvent(event)) {
+            if (mGamepadHandler == null) createGamepad(this, event.getDevice());
+            mGamepadDispatcher.handleKeyEvent(event, mGamepadHandler);
+            return true;
+        }
+
         int index = EfficientAndroidLWJGLKeycode.getIndexByKey(eventKeycode);
         if(EfficientAndroidLWJGLKeycode.containsIndex(index)) {
             EfficientAndroidLWJGLKeycode.execKey(event, index);
@@ -391,6 +413,31 @@ public class MinecraftGLSurface extends View implements GrabListener {
 
         // Some events will be generated an infinite number of times when no consumed
         return (event.getFlags() & KeyEvent.FLAG_FALLBACK) == KeyEvent.FLAG_FALLBACK;
+    }
+
+    /** 手柄（准确说是它的第一个事件）到来时才创建；direct 模式切换后会被重建。 */
+    private void createGamepad(View contextView, InputDevice inputDevice) {
+        // 打一行日志：用户反馈「手柄没反应」时，先看这里有没有接上
+        Log.i("MGLSurface", "手柄已接入：" + (inputDevice == null ? "(未知设备)" : inputDevice.getName()));
+        mGamepadDispatcher = new GamepadInputDispatcher(inputDevice);
+        mGamepadHandler = new Gamepad(contextView, inputDevice, true);
+    }
+
+    /**
+     * 游戏侧要求「手柄直连」（把事件塞进 GLFW 的手柄缓冲，让游戏当成真手柄读）时回调。
+     *
+     * 我们没实现直连写入，所以这里只把现有手柄摘掉并置空 —— 下一个手柄事件会重建一个
+     * 继续走键鼠模拟。比什么都不做要好：至少手柄还能操作游戏。
+     */
+    @Override
+    public void onDirectGamepadEnabled() {
+        post(() -> {
+            if (mGamepadHandler instanceof Gamepad) {
+                ((Gamepad) mGamepadHandler).removeSelf();
+            }
+            mGamepadHandler = null;
+            mGamepadDispatcher = null;
+        });
     }
 
     /** Convert the mouse button, then send it

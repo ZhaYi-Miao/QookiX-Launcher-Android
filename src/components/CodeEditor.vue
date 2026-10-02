@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage } from "naive-ui";
 import { highlight, langLabel } from "../utils/highlight";
@@ -170,7 +171,7 @@ async function copySelection() {
     /* 同样不可用 */
   }
   if (!document.execCommand("copy")) {
-    message.warning("复制失败，可长按编辑区用系统菜单复制");
+    message.warning($t("code-editor.copy-failed"));
   }
 }
 
@@ -211,7 +212,7 @@ async function pasteClipboard() {
   }
   if (!text) {
     // 以前这里是静默失败，用户完全不知道发生了什么
-    message.warning("读不到剪贴板内容，可长按编辑区用系统菜单粘贴");
+    message.warning($t("code-editor.paste-failed"));
     return;
   }
   insert(text);
@@ -347,9 +348,9 @@ onBeforeUnmount(() => {
 
     <div class="ed-status">
       <span class="ed-lang">{{ langLabel(ext) }}</span>
-      <span>行 {{ cursorLine }}，列 {{ cursorCol }}</span>
-      <span>{{ lines.length }} 行</span>
-      <span class="ed-tip">Ctrl+S 保存 · Tab 缩进</span>
+      <span>{{ $t("code-editor.line-col", { p1: cursorLine, p2: cursorCol }) }}</span>
+      <span>{{ $t("code-editor.line-count", { p1: lines.length }) }}</span>
+      <span class="ed-tip">{{ $t("code-editor.shortcut-hint") }}</span>
     </div>
   </div>
 </template>

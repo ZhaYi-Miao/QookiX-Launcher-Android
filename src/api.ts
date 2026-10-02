@@ -1,3 +1,4 @@
+import { t as $t } from "./i18n";
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import { trackStart, trackEnd, trackError } from "./loadingBar";
 import type { PinItem } from "./stores/pins";
@@ -27,7 +28,10 @@ import type {
   PlaytimeStats,
   WorldBackupInfo,
   PluginInfo,
+  PluginSetupResult,
+  PluginSetupStatus,
   ControlButtonInfo,
+  ControlLayoutInfo,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -178,7 +182,7 @@ function invoke<T>(
     if (UNIMPLEMENTED_WRITE.has(mappedCmd)) {
       // 写操作必须显式失败：否则 UI 会「假成功」（问题清单 P0-4 / P0-10）
       return Promise.reject(
-        new Error(`该功能在当前平台（Android）暂未实现：${cmd}`)
+        new Error($t("api.not-implemented", { p1: cmd }))
       );
     }
     return Promise.resolve(UNIMPLEMENTED_DEFAULTS[mappedCmd] as T);
@@ -220,11 +224,29 @@ export const api = {
   setPluginManifestUrl: (url: string) =>
     invoke<string>("set_plugin_manifest_url", { url }),
 
+  // 首启准备：渲染器/驱动/组件都是插件，新装的要一次性补齐
+  getPluginSetupStatus: () =>
+    invoke<PluginSetupStatus>("get_plugin_setup_status", undefined, { silent: true }),
+  installRecommendedPlugins: () => invoke<PluginSetupResult>("install_recommended_plugins"),
+  dismissPluginSetup: () => invoke<void>("dismiss_plugin_setup"),
+
   // 控制布局：按键透传（按住这个键时拖动也能转视角）
   getControlButtons: () =>
     invoke<ControlButtonInfo[]>("get_control_buttons", undefined, { silent: true }),
   setControlButtonPassthru: (index: number, enabled: boolean) =>
     invoke<ControlButtonInfo[]>("set_control_button_passthru", { index, enabled }),
+
+  // 控制布局：管理（布局全局共享，不区分实例；改动类命令都返回最新列表）
+  listControlLayouts: () =>
+    invoke<ControlLayoutInfo[]>("list_control_layouts", undefined, { silent: true }),
+  setCurrentControlLayout: (name: string) =>
+    invoke<ControlLayoutInfo[]>("set_current_control_layout", { name }),
+  duplicateControlLayout: (name: string, newName: string) =>
+    invoke<ControlLayoutInfo[]>("duplicate_control_layout", { name, newName }),
+  renameControlLayout: (name: string, newName: string) =>
+    invoke<ControlLayoutInfo[]>("rename_control_layout", { name, newName }),
+  deleteControlLayout: (name: string) =>
+    invoke<ControlLayoutInfo[]>("delete_control_layout", { name }),
 
   // settings & java
   getSettings: () => invoke<Settings>("get_settings"),
@@ -426,6 +448,44 @@ export const api = {
     invoke<{ categories: { id: number; name: string }[] }>("curseforge_categories", { projectType }),
   projectInfo: (provider: string, projectId: string) =>
     invoke<ProjectHit>("project_info", { provider, projectId }),
+
+  // ---- 内容中心翻译 ----
+  translateModDescriptions: (provider: string, slugs: string[]) =>
+    invoke<{
+      translations: Record<string, string>;
+      failed: string[];
+      rateLimited: boolean;
+      error?: string | null;
+    }>("translate_mod_descriptions", { provider, slugs }),
+  translateProjectBody: (provider: string, slug: string, translate: boolean) =>
+    invoke<{
+      body: string | null;
+      bodyCached: boolean;
+      original: string;
+      supported: boolean;
+      error?: string | null;
+    }>("translate_project_body", { provider, slug, translate }),
+  reportStaleTranslation: (provider: string, slug: string) =>
+    invoke<string>("report_translation_stale", { provider, slug }),
+  reportTranslationQuality: (
+    provider: string,
+    slug: string,
+    issueType: string,
+    userSuggestion?: string,
+    userComment?: string
+  ) =>
+    invoke<string>("report_translation_quality", {
+      provider,
+      slug,
+      issueType,
+      userSuggestion: userSuggestion ?? null,
+      userComment: userComment ?? null,
+    }),
+  /** service 不传 = 全部清空，返回释放的字节数 */
+  clearTranslationCache: (service?: "default" | "custom") =>
+    invoke<number>("clear_translation_cache", { service: service ?? null }),
+  testTranslateApi: (base: string, key: string, model: string) =>
+    invoke<void>("test_translate_api", { base, key, model }),
   installContent: (
     instanceId: string,
     provider: string,

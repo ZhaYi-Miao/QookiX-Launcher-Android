@@ -5,6 +5,7 @@
  * 内存仪表）、实例别名、JVM/游戏参数、账号覆盖、分辨率、实例图标，
  * 以及 edit 草稿的防抖自动保存。
  */
+import { t as $t } from "../../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   NButton,
@@ -55,15 +56,15 @@ const globalRenderer = ref<string>("opengles2");
 const effectiveRenderer = computed(() => {
   const mode = edit.value.renderer_mode;
   if (mode === "custom") {
-    return { key: edit.value.renderer, why: "本实例指定" };
+    return { key: edit.value.renderer, why: $t("instance-settings.why") };
   }
   if (mode === "global") {
-    return { key: globalRenderer.value, why: "跟随全局设置" };
+    return { key: globalRenderer.value, why: $t("instance-settings.gen-sui-quan-ju-she-zhi") };
   }
   const key = autoRendererFor(instance.value?.mc_version);
   return {
     key,
-    why: `按版本自动（MC ${instance.value?.mc_version ?? "未知"}）`,
+    why: $t("instance-settings.an-ban-ben-zi-dong", { p1: instance.value?.mc_version ?? $t("crash-analyzer.unknown") }),
   };
 });
 // 别名不进自动保存的 edit 对象：每敲一个字符触发一次 patch + 列表重载
@@ -250,7 +251,7 @@ async function saveAlias() {
   savingAlias.value = true;
   try {
     await instances.patch({ id: props.instanceId, alias: aliasDraft.value });
-    message.success("别名已保存");
+    message.success($t("instance-settings.alias-saved"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -296,11 +297,11 @@ onBeforeUnmount(() => {
 <template>
   <div class="settings-grid">
     <div class="set-card glass">
-      <h4>内存分配</h4>
+      <h4>{{ $t("instance-settings.memory") }}</h4>
       <n-radio-group v-model:value="edit.memory_mode" size="small" class="mem-modes">
-        <n-radio-button value="global">根据全局配置</n-radio-button>
-        <n-radio-button value="auto">自动配置</n-radio-button>
-        <n-radio-button value="custom">自定义</n-radio-button>
+        <n-radio-button value="global">{{ $t("instance-settings.from-global") }}</n-radio-button>
+        <n-radio-button value="auto">{{ $t("instance-settings.auto") }}</n-radio-button>
+        <n-radio-button value="custom">{{ $t("instance-settings.mcreator") }}</n-radio-button>
       </n-radio-group>
 
       <template v-if="edit.memory_mode === 'custom'">
@@ -316,9 +317,9 @@ onBeforeUnmount(() => {
 
       <div v-else class="mem-current">
         {{ effectiveMemory }} MB
-        <span v-if="edit.memory_mode === 'global' && globalMemoryMode === 'auto'" class="mem-mode-note">（全局自动配置）</span>
-        <span v-else-if="edit.memory_mode === 'global'" class="mem-mode-note">（全局手动配置）</span>
-        <span v-else-if="edit.memory_mode === 'auto'" class="mem-mode-note">（自动配置）</span>
+        <span v-if="edit.memory_mode === 'global' && globalMemoryMode === 'auto'" class="mem-mode-note">{{ $t("instance-settings.global-auto-note") }}</span>
+        <span v-else-if="edit.memory_mode === 'global'" class="mem-mode-note">{{ $t("instance-settings.global-manual-note") }}</span>
+        <span v-else-if="edit.memory_mode === 'auto'" class="mem-mode-note">{{ $t("instance-settings.auto-note") }}</span>
       </div>
 
       <div class="mem-gauge">
@@ -330,24 +331,24 @@ onBeforeUnmount(() => {
           ></div>
         </div>
         <div class="mem-gauge-labels">
-          <span><i class="dot used"></i>已使用 {{ fmtMem(memUsed) }}（{{ usedPercent }}%）</span>
-          <span><i class="dot alloc"></i>游戏分配 {{ fmtMem(effectiveMemory) }}（{{ allocPercent }}%）</span>
-          <span><i class="dot total"></i>总内存 {{ fmtMem(memTotal) }} / 可用 {{ fmtMem(memAvailable) }}</span>
+          <span><i class="dot used"></i>{{ $t("instance-settings.mem-used", { p1: fmtMem(memUsed), p2: usedPercent }) }}</span>
+          <span><i class="dot alloc"></i>{{ $t("instance-settings.mem-assigned", { p1: fmtMem(effectiveMemory), p2: allocPercent }) }}</span>
+          <span><i class="dot total"></i>{{ $t("instance-settings.mem-total", { p1: fmtMem(memTotal), p2: fmtMem(memAvailable) }) }}</span>
         </div>
       </div>
     </div>
 
     <div class="set-card glass">
-      <h4>渲染器</h4>
+      <h4>{{ $t("instance-settings.renderer") }}</h4>
       <n-radio-group
         :value="edit.renderer_mode"
         size="small"
         class="mem-modes"
         @update:value="onRendererMode"
       >
-        <n-radio-button value="auto">自动（推荐）</n-radio-button>
-        <n-radio-button value="global">跟随全局</n-radio-button>
-        <n-radio-button value="custom">指定</n-radio-button>
+        <n-radio-button value="auto">{{ $t("instance-settings.auto-recommended") }}</n-radio-button>
+        <n-radio-button value="global">{{ $t("instance-settings.follow-global") }}</n-radio-button>
+        <n-radio-button value="custom">{{ $t("instance-settings.explicit") }}</n-radio-button>
       </n-radio-group>
 
       <template v-if="edit.renderer_mode === 'custom'">
@@ -360,22 +361,18 @@ onBeforeUnmount(() => {
         />
       </template>
 
-      <p class="hint">
-        当前生效：<b>{{ rendererNames[effectiveRenderer.key] ?? effectiveRenderer.key }}</b>
+      <p class="hint">{{ $t("instance-settings.effective") }}<b>{{ rendererNames[effectiveRenderer.key] ?? effectiveRenderer.key }}</b>
         （{{ effectiveRenderer.why }}）
       </p>
-      <p class="hint">
-        自动规则：26.x 换用了新版着色器（GL4ES 跑不动）→ MobileGlues；其余 1.x 版本
-        GL4ES 兼容性更好（MobileGlues 在 1.8.9 这类老版本上会因后处理着色器翻译失败崩在启动阶段）。
-      </p>
+      <p class="hint">{{ $t("instance-settings.renderer-auto-rule") }}</p>
     </div>
 
     <div class="set-card glass">
-      <h4>实例别名（协议启动）</h4>
+      <h4>{{ $t("instance-settings.alias") }}</h4>
       <div class="alias-row">
         <n-input
           v-model:value="aliasDraft"
-          placeholder="例如 my-sky（仅小写字母、数字、- 和 _）"
+          :placeholder="$t('instance-settings.alias-hint')"
           @keydown.enter="saveAlias"
         />
         <n-button
@@ -383,37 +380,35 @@ onBeforeUnmount(() => {
           :disabled="savingAlias || aliasDraft === (instance?.alias ?? '')"
           @click="saveAlias"
         >
-          {{ savingAlias ? "保存中…" : "保存" }}
+          {{ savingAlias ? $t('file-manager.saving') : $t('common.save') }}
         </n-button>
       </div>
-      <p class="hint">
-        设置后可用 <code>qookix://launch/{{ aliasDraft || "别名" }}</code> 从浏览器或命令行直接启动本实例。
-      </p>
+      <p class="hint">{{ $t("instance-settings.alias-usage") }}<code>qookix://launch/{{ aliasDraft || $t('instance-settings.alias-label') }}</code>{{ $t("instance-settings.alias-benefit") }}</p>
     </div>
 
     <div class="set-card glass">
-      <h4>JVM 参数（额外）</h4>
+      <h4>{{ $t("instance-settings.extra-jvm-args") }}</h4>
       <n-input
         v-model:value="edit.jvm_args"
         type="textarea"
         :rows="3"
-        placeholder="例如：-XX:+UseG1GC -Dfile.encoding=UTF-8"
+        :placeholder="$t('instance-settings.jvm-args-hint')"
       />
     </div>
 
     <div class="set-card glass">
-      <h4>游戏参数（额外）</h4>
-      <n-input v-model:value="edit.game_args" placeholder="例如：--fullscreen" />
+      <h4>{{ $t("instance-settings.extra-game-args") }}</h4>
+      <n-input v-model:value="edit.game_args" :placeholder="$t('instance-settings.game-args-hint')" />
     </div>
 
     <div class="set-card glass">
-      <h4>账号</h4>
+      <h4>{{ $t("instance-settings.account") }}</h4>
       <n-select
         v-model:value="edit.account_id"
         :options="[
-          { label: `跟随全局当前账号（${accounts.current?.username ?? '未选择'}）`, value: '' },
+          { label: $t('instance-settings.follow-global-account', { p1: accounts.current?.username ?? $t('instance-settings.none-selected') }), value: '' },
           ...accounts.accounts.map((a) => ({
-            label: `${a.username}（${a.type === 'microsoft' ? '正版' : '离线'}）`,
+            label: `${a.username}（${a.type === 'microsoft' ? $t('account-chip.premium') : $t('account-chip.offline')}）`,
             value: a.uuid,
           })),
         ]"
@@ -421,21 +416,21 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="set-card glass">
-      <h4>游戏窗口分辨率（可选）</h4>
+      <h4>{{ $t("instance-settings.resolution") }}</h4>
       <div class="res-row">
-        <n-input v-model:value="edit.resolution_w" placeholder="宽，如 1920" />
+        <n-input v-model:value="edit.resolution_w" :placeholder="$t('instance-settings.width-hint')" />
         <span>×</span>
-        <n-input v-model:value="edit.resolution_h" placeholder="高，如 1080" />
+        <n-input v-model:value="edit.resolution_h" :placeholder="$t('instance-settings.height-hint')" />
       </div>
     </div>
 
     <div class="set-card glass">
-      <h4>实例图标</h4>
+      <h4>{{ $t("instance-settings.icon") }}</h4>
       <div class="icon-pick">
         <div class="icon-preview">
           <AppIcon :name="edit.icon" />
         </div>
-        <button class="btn" @click="showIconPicker = true">选择图标</button>
+        <button class="btn" @click="showIconPicker = true">{{ $t("instance-settings.pick-icon") }}</button>
       </div>
     </div>
 

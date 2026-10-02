@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, onMounted, ref, watch, inject } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
@@ -70,7 +71,7 @@ const INSTANCE_PACK_ENABLED = false;
 async function importPack() {
   const file = await dialogOpen({
     multiple: false,
-    filters: [{ name: "QookiX 实例分享包", extensions: ["qkxinst"] }],
+    filters: [{ name: $t("instances.share-pack"), extensions: ["qkxinst"] }],
   });
   if (!file) return;
   importingPack.value = true;
@@ -78,8 +79,8 @@ async function importPack() {
     const r = await api.importInstancePack(file as string);
     message.success(
       r.pendingDownloads > 0
-        ? `「${r.instance.name}」导入成功，游戏本体与 ${r.pendingDownloads} 个在线内容正在后台下载`
-        : `「${r.instance.name}」导入成功，游戏本体正在后台安装`
+        ? $t("instances.import-downloading", { p1: r.instance.name, p2: r.pendingDownloads })
+        : $t("instances.import-installing", { p1: r.instance.name })
     );
     await instances.refresh();
     router.push(`/instance/${r.instance.id}`);
@@ -156,7 +157,7 @@ const sections = computed(() => {
   list.push({
     key: "__ungrouped__",
     group: null,
-    name: "未分组",
+    name: $t("create-instance.ungrouped"),
     color: null,
     items: instances.ungrouped,
   });
@@ -193,17 +194,17 @@ async function saveGroupDialog() {
   if (!d) return;
   const name = d.name.trim();
   if (!name) {
-    message.warning("请输入分组名称");
+    message.warning($t("instances.group-name-required"));
     return;
   }
   groupSaving.value = true;
   try {
     if (d.mode === "create") {
       await instances.createGroup(name, d.color);
-      message.success(`分组「${name}」已创建`);
+      message.success($t("instances.group-created", { p1: name }));
     } else if (d.id) {
       await instances.renameGroup(d.id, name, d.color);
-      message.success("分组已更新");
+      message.success($t("instances.group-updated"));
     }
     groupDialog.value = null;
   } catch (e) {
@@ -216,15 +217,15 @@ async function saveGroupDialog() {
 function confirmDeleteGroup(g: InstanceGroup) {
   const count = instances.inGroup(g.id).length;
   confirmState.value = {
-    title: "删除分组",
+    title: $t("instances.positive-text"),
     content: count
-      ? `删除「${g.name}」后，其中的 ${count} 个实例会被移到「未分组」，实例本身不会被删除。`
-      : `确定要删除分组「${g.name}」吗？`,
-    positiveText: "删除分组",
+      ? $t("instances.delete-group-hint", { p1: g.name, p2: count })
+      : $t("instances.delete-group-confirm", { p1: g.name }),
+    positiveText: $t("instances.positive-text"),
     onOk: async () => {
       try {
         await instances.deleteGroup(g.id);
-        message.success("分组已删除");
+        message.success($t("instances.on-ok"));
       } catch (e) {
         message.error(String(e));
       }
@@ -237,8 +238,8 @@ async function moveTo(groupId: string | null) {
   if (!inst) return;
   try {
     await instances.moveToGroup(inst.id, groupId);
-    const name = groupId ? (instances.groupById(groupId)?.name ?? "") : "未分组";
-    message.success(`「${inst.name}」已移动到 ${name}`);
+    const name = groupId ? (instances.groupById(groupId)?.name ?? "") : $t("create-instance.ungrouped");
+    message.success($t("instances.moved-to-group", { p1: inst.name, p2: name }));
     movingInstance.value = null;
   } catch (e) {
     message.error(String(e));
@@ -248,7 +249,7 @@ async function moveTo(groupId: string | null) {
 
 <template>
   <div class="instances-view">
-    <div v-if="instances.loading" class="loading">加载中…</div>
+    <div v-if="instances.loading" class="loading">{{ $t("file-manager.loading") }}</div>
 
     <template v-else-if="totalCount">
       <div class="toolbar">
@@ -257,8 +258,7 @@ async function moveTo(groupId: string | null) {
             class="chip"
             :class="{ active: filter === 'all' }"
             @click="filter = 'all'"
-          >
-            全部 <span class="chip-count">{{ totalCount }}</span>
+          >{{ $t("install-dialog.all") }}<span class="chip-count">{{ totalCount }}</span>
           </button>
           <button
             v-for="g in instances.groups"
@@ -275,8 +275,7 @@ async function moveTo(groupId: string | null) {
             class="chip"
             :class="{ active: filter === 'ungrouped' }"
             @click="filter = 'ungrouped'"
-          >
-            未分组 <span class="chip-count">{{ instances.ungrouped.length }}</span>
+          >{{ $t("create-instance.ungrouped") }}<span class="chip-count">{{ instances.ungrouped.length }}</span>
           </button>
           <!-- 后端未实现，见 script 里 INSTANCE_PACK_ENABLED 的说明 -->
           <button
@@ -285,8 +284,7 @@ async function moveTo(groupId: string | null) {
             :disabled="importingPack"
             @click="importPack"
           >
-            <IconPlus /> 导入分享包
-          </button>
+            <IconPlus />{{ $t("instances.import-share") }}</button>
         </div>
       </div>
 
@@ -302,10 +300,8 @@ async function moveTo(groupId: string | null) {
               <span class="group-count">{{ s.items.length }}</span>
             </button>
             <div v-if="s.group" class="group-ops">
-              <button class="op" title="重命名分组" aria-label="重命名分组" @click="openRenameGroup(s.group)">
-                重命名
-              </button>
-              <button class="op danger" title="删除分组" aria-label="删除分组" @click="confirmDeleteGroup(s.group)">
+              <button class="op" :title="$t('instances.rename-group')" :aria-label="$t('instances.rename-group')" @click="openRenameGroup(s.group)">{{ $t("common.rename") }}</button>
+              <button class="op danger" :title="$t('instances.positive-text')" :aria-label="$t('instances.positive-text')" @click="confirmDeleteGroup(s.group)">
                 <IconTrash />
               </button>
             </div>
@@ -317,7 +313,7 @@ async function moveTo(groupId: string | null) {
               :instance="inst"
               @move="movingInstance = $event"
             />
-            <p v-if="!s.items.length" class="group-empty">暂无实例</p>
+            <p v-if="!s.items.length" class="group-empty">{{ $t("instances.no-instances") }}</p>
           </div>
         </section>
       </div>
@@ -330,14 +326,14 @@ async function moveTo(groupId: string | null) {
           :instance="inst"
           @move="movingInstance = $event"
         />
-        <p v-if="!filtered.length" class="group-empty">该分组下暂无实例</p>
+        <p v-if="!filtered.length" class="group-empty">{{ $t("instances.group-empty") }}</p>
       </div>
     </template>
 
     <div v-else class="empty glass">
       <div class="empty-icon"><IconGrid /></div>
-      <p>还没有任何实例，创建一个开始游戏吧</p>
-      <button class="btn primary" @click="router.push('/create')">创建第一个实例</button>
+      <p>{{ $t("instances.empty-hint") }}</p>
+      <button class="btn primary" @click="router.push('/create')">{{ $t("home.create-first") }}</button>
     </div>
 
     <!-- 新建 / 重命名分组 -->
@@ -345,22 +341,22 @@ async function moveTo(groupId: string | null) {
       :auto-focus="false"
       :show="groupDialog !== null"
       preset="card"
-      :title="groupDialog?.mode === 'create' ? '新建分组' : '重命名分组'"
+      :title="groupDialog?.mode === 'create' ? $t('title-bar.new-group') : $t('instances.rename-group')"
       style="width: 420px; max-width: 92vw"
       @update:show="(v: boolean) => { if (!v) groupDialog = null; }"
     >
       <div v-if="groupDialog" class="dialog-body">
         <label class="field">
-          <span>名称</span>
+          <span>{{ $t("instances.name") }}</span>
           <n-input
             v-model:value="groupDialog.name"
-            placeholder="例如：生存、模组整合、测试"
+            :placeholder="$t('instances.name-hint')"
             maxlength="40"
             @keydown.enter="saveGroupDialog"
           />
         </label>
         <div class="field">
-          <span>颜色</span>
+          <span>{{ $t("instances.color") }}</span>
           <div class="palette">
             <button
               v-for="c in PALETTE"
@@ -374,8 +370,8 @@ async function moveTo(groupId: string | null) {
           </div>
         </div>
         <div class="dialog-foot">
-          <n-button @click="groupDialog = null">取消</n-button>
-          <n-button type="primary" :loading="groupSaving" @click="saveGroupDialog">保存</n-button>
+          <n-button @click="groupDialog = null">{{ $t("common.cancel") }}</n-button>
+          <n-button type="primary" :loading="groupSaving" @click="saveGroupDialog">{{ $t("common.save") }}</n-button>
         </div>
       </div>
     </n-modal>
@@ -385,7 +381,7 @@ async function moveTo(groupId: string | null) {
       :auto-focus="false"
       :show="movingInstance !== null"
       preset="card"
-      title="移动到分组"
+      :title="$t('instance-card.move-to-group')"
       style="width: 380px; max-width: 92vw"
       @update:show="(v: boolean) => { if (!v) movingInstance = null; }"
     >
@@ -397,7 +393,7 @@ async function moveTo(groupId: string | null) {
           @click="moveTo(null)"
         >
           <i class="dot" style="background: var(--text-3)"></i>
-          <span>未分组</span>
+          <span>{{ $t("create-instance.ungrouped") }}</span>
         </button>
         <button
           v-for="g in instances.groups"
@@ -410,8 +406,7 @@ async function moveTo(groupId: string | null) {
           <span>{{ g.name }}</span>
         </button>
         <button class="move-item add" @click="openCreateGroup">
-          <IconPlus /> 新建分组
-        </button>
+          <IconPlus />{{ $t("title-bar.new-group") }}</button>
       </div>
     </n-modal>
 
@@ -426,7 +421,7 @@ async function moveTo(groupId: string | null) {
       <div v-if="confirmState" class="dialog-body">
         <div class="confirm-text">{{ confirmState.content }}</div>
         <div class="dialog-foot">
-          <n-button @click="confirmState = null">取消</n-button>
+          <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
           <n-button type="error" :loading="confirmLoading" @click="handleConfirm">
             {{ confirmState.positiveText }}
           </n-button>

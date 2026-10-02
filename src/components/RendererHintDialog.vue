@@ -12,6 +12,7 @@
  * 确认后只改**这一个实例**的 renderer 字段。点「暂不/仍用」会在本地记住
  * 「这个实例 + 这个渲染器已经问过」，不再重复问；用户换了渲染器再出问题会重新提示。
  */
+import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { NButton, NModal } from "naive-ui";
 import { api } from "../api";
@@ -43,7 +44,7 @@ async function switchAndLaunch() {
   try {
     await instances.patch({ id: g.instanceId, renderer: g.recommended });
     instances.pendingRendererGuard = null;
-    notifySuccess(`已把该实例切换为 ${g.recommendedName}，正在启动`);
+    notifySuccess($t("renderer-hint-dialog.notify-success", { p1: g.recommendedName }));
     await instances.launch(g.instanceId, g.world, g.server, { force: true });
   } catch (e) {
     notifyError(String(e));
@@ -137,7 +138,7 @@ async function doSwitch() {
     // 记一笔「这个实例 + 这个渲染器已经处理过」：切换后日志里那批旧报错还在，
     // 不记账的话每次打开启动器都会拿旧账再弹一次。
     markRendererWarned(it.instance_id, it.used);
-    notifySuccess(`已把该实例切换为 ${it.recommended_name}，下次启动生效`);
+    notifySuccess($t("renderer-hint-dialog.yi-ba-gai-shi-li-qie", { p1: it.recommended_name }));
     show.value = false;
     issue.value = null;
   } catch (e) {
@@ -179,43 +180,30 @@ onBeforeUnmount(() => {
   >
     <template #header>
       <div class="rh-header">
-        <span class="rh-badge">渲染器提醒</span>
-        <span class="rh-title">这个渲染器在该版本上大概率不行</span>
+        <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-hint") }}</span>
+        <span class="rh-title">{{ $t("renderer-hint-dialog.incompatible-title") }}</span>
       </div>
     </template>
 
     <div v-if="guard" class="rh-body">
       <div class="rh-switch">
-        <span class="rh-chip rh-chip-used">{{ guard.usedName }}（当前会用）</span>
+        <span class="rh-chip rh-chip-used">{{ $t("renderer-hint-dialog.current-option", { p1: guard.usedName }) }}</span>
         <span class="rh-arrow">→</span>
-        <span class="rh-chip rh-chip-rec">{{ guard.recommendedName }}（推荐）</span>
+        <span class="rh-chip rh-chip-rec">{{ $t("renderer-hint-dialog.recommended-option", { p1: guard.recommendedName }) }}</span>
       </div>
 
-      <p class="rh-advice">
-        本实例是 MC <b>{{ guard.mcVersion }}</b
-        >。26.x 与 1.x 要的渲染器是反的：1.x 用 MobileGlues 会在加载着色器时崩在启动阶段
-        （画面全白）；26.x 用 GL4ES 则渲染不出来。
-      </p>
+      <p class="rh-advice">{{ $t("renderer-hint-dialog.instance-version-a") }}<b>{{ guard.mcVersion }}</b
+        >{{ $t("renderer-hint-dialog.renderer-conflict") }}</p>
 
-      <p class="rh-advice">
-        要不要先把这个实例切成 <b>{{ guard.recommendedName }}</b> 再启动？（只影响这个实例）
-      </p>
+      <p class="rh-advice">{{ $t("renderer-hint-dialog.switch-question") }}<b>{{ guard.recommendedName }}</b>{{ $t("renderer-hint-dialog.relaunch-confirm") }}</p>
 
-      <p class="rh-advice rh-advice-dim">
-        注意：点「切换…并启动」会把该实例的渲染器**固定**为
-        {{ guard.recommendedName }}，也就是不再跟随全局设置；想恢复跟随，
-        去实例设置里改回「跟随全局」即可。
-      </p>
+      <p class="rh-advice rh-advice-dim">{{ $t("renderer-hint-dialog.pin-warning", { p1: guard.recommendedName }) }}</p>
     </div>
 
     <template #footer>
       <div class="rh-footer">
-        <NButton size="small" quaternary @click="launchAnyway">
-          仍用 {{ guard?.usedName }} 启动
-        </NButton>
-        <NButton size="small" type="primary" :loading="switching" @click="switchAndLaunch">
-          切换为 {{ guard?.recommendedName }} 并启动
-        </NButton>
+        <NButton size="small" quaternary @click="launchAnyway">{{ $t("renderer-hint-dialog.keep-and-launch", { p1: guard?.usedName }) }}</NButton>
+        <NButton size="small" type="primary" :loading="switching" @click="switchAndLaunch">{{ $t("renderer-hint-dialog.switch-and-launch", { p1: guard?.recommendedName }) }}</NButton>
       </div>
     </template>
   </NModal>
@@ -230,8 +218,8 @@ onBeforeUnmount(() => {
   >
     <template #header>
       <div class="rh-header">
-        <span class="rh-badge">渲染器建议</span>
-        <span class="rh-title">这个实例换个渲染器会更稳</span>
+        <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-suggestion") }}</span>
+        <span class="rh-title">{{ $t("renderer-hint-dialog.suggestion-text") }}</span>
       </div>
     </template>
 
@@ -239,28 +227,24 @@ onBeforeUnmount(() => {
       <p class="rh-reason">{{ issue.reason }}</p>
 
       <div class="rh-switch">
-        <span class="rh-chip rh-chip-used">{{ issue.used_name }}（当前）</span>
+        <span class="rh-chip rh-chip-used">{{ $t("renderer-hint-dialog.current-badge", { p1: issue.used_name }) }}</span>
         <span class="rh-arrow">→</span>
-        <span class="rh-chip rh-chip-rec">{{ issue.recommended_name }}（推荐）</span>
+        <span class="rh-chip rh-chip-rec">{{ $t("renderer-hint-dialog.recommended-option", { p1: issue.recommended_name }) }}</span>
       </div>
 
-      <p class="rh-advice">
-        本实例是 MC <b>{{ issue.mc_version }}</b
-        >，推荐的渲染器是 <b>{{ issue.recommended_name }}</b>。点击下面的按钮只会把
-        <b>这个实例</b>切过去（其它实例不受影响），下次启动生效。
-      </p>
+      <p class="rh-advice">{{ $t("renderer-hint-dialog.instance-version-a") }}<b>{{ issue.mc_version }}</b
+        >{{ $t("renderer-hint-dialog.recommended-is") }}<b>{{ issue.recommended_name }}</b>{{ $t("renderer-hint-dialog.switch-hint-a") }}<b>{{ $t("renderer-hint-dialog.this-instance") }}</b>{{ $t("renderer-hint-dialog.switch-hint-b") }}</p>
 
       <details v-if="issue.evidence.length" class="rh-evidence">
-        <summary>查看日志证据（{{ issue.evidence.length }} 条）</summary>
+        <summary>{{ $t("renderer-hint-dialog.view-log-evidence", { p1: issue.evidence.length }) }}</summary>
         <pre>{{ issue.evidence.join("\n") }}</pre>
       </details>
     </div>
 
     <template #footer>
       <div class="rh-footer">
-        <NButton size="small" quaternary @click="dismiss">暂不切换</NButton>
-        <NButton size="small" type="primary" :loading="switching" @click="doSwitch">
-          切换为 {{ issue?.recommended_name }}
+        <NButton size="small" quaternary @click="dismiss">{{ $t("renderer-hint-dialog.keep-current") }}</NButton>
+        <NButton size="small" type="primary" :loading="switching" @click="doSwitch">{{ $t("renderer-hint-dialog.switch-to", { p1: issue?.recommended_name }) }}
         </NButton>
       </div>
     </template>

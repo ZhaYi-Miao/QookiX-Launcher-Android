@@ -10,6 +10,7 @@ import { useInstancesStore } from "../stores/instances";
 import { useSettingsStore } from "../stores/settings";
 import { usePinsStore } from "../stores/pins";
 import { useMessage } from "naive-ui";
+import { t } from "../i18n";
 import {
   IconChevronsLeft,
   IconCompass,
@@ -39,15 +40,15 @@ const sidebarRef = ref<HTMLElement | null>(null);
 // 新闻可隐藏：settings.show_news 为 false 时不显示该导航项（默认显示）
 const nav = computed(() => {
   const list = [
-    { name: "home", label: "首页", icon: IconHome, to: "/" },
-    { name: "browse", label: "内容", icon: IconCompass, to: "/browse" },
-    { name: "instances", label: "实例", icon: IconGrid, to: "/instances" },
-    { name: "multiplayer", label: "多人", icon: IconUsers, to: "/multiplayer" },
-    { name: "skins", label: "皮肤", icon: IconSkin, to: "/skins" },
-    { name: "settings", label: "设置", icon: IconSettings, to: "/settings" },
+    { name: "home", label: t("nav.home"), icon: IconHome, to: "/" },
+    { name: "browse", label: t("nav.browse"), icon: IconCompass, to: "/browse" },
+    { name: "instances", label: t("nav.instances"), icon: IconGrid, to: "/instances" },
+    { name: "multiplayer", label: t("nav.multiplayer"), icon: IconUsers, to: "/multiplayer" },
+    { name: "skins", label: t("nav.skins"), icon: IconSkin, to: "/skins" },
+    { name: "settings", label: t("nav.settings"), icon: IconSettings, to: "/settings" },
   ];
   if (settingsStore.settings?.show_news ?? true) {
-    list.push({ name: "news", label: "新闻", icon: IconNewspaper, to: "/news" });
+    list.push({ name: "news", label: t("nav.news"), icon: IconNewspaper, to: "/news" });
   }
   return list;
 });
@@ -125,7 +126,7 @@ function unpin(id: string) {
 async function stopAll() {
   try {
     await instances.stop();
-    message.success("已关闭所有实例");
+    message.success(t("nav.stopped-all"));
   } catch (e) {
     message.error(String(e));
   }
@@ -150,7 +151,7 @@ async function stopAll() {
         <span
           v-if="n.name === 'downloads' && downloadCount > 0"
           class="nav-badge"
-          :title="`正在下载 ${downloadCount} 项`"
+          :title="t('nav.downloading', { count: downloadCount })"
         >{{ downloadCount }}</span>
       </router-link>
     </nav>
@@ -159,7 +160,7 @@ async function stopAll() {
     <div v-if="pinnedInstances.length" class="pin-section">
       <!-- 与上方导航之间只有这一条分割线（.pin-section 不再自带 border-top） -->
       <div class="pin-divider"></div>
-      <div v-if="!collapsed" class="pin-section-title">固定</div>
+      <div v-if="!collapsed" class="pin-section-title">{{ t("nav.pinned") }}</div>
       <div class="pin-list">
         <router-link
           v-for="p in pinnedInstances"
@@ -176,7 +177,7 @@ async function stopAll() {
           <button
             v-if="!collapsed"
             class="pin-unpin"
-            title="取消固定" aria-label="取消固定"
+            :title="t('nav.unpin')" :aria-label="t('nav.unpin')"
             @click.prevent.stop="unpin(p.id)"
           >
             <IconClose />
@@ -189,20 +190,20 @@ async function stopAll() {
     <div class="side-foot">
       <button v-if="tasks.gameRunning" class="stop-all-btn" @click="stopAll">
         <IconStop />
-        <span v-if="!collapsed">关闭所有实例</span>
+        <span v-if="!collapsed">{{ t("nav.stop-all") }}</span>
       </button>
       <router-link
         to="/downloads"
         class="nav-item foot-nav"
         :class="{ active: route.path.startsWith('/downloads') }"
-        :title="collapsed ? '下载' : undefined"
+        :title="collapsed ? t('nav.downloads') : undefined"
       >
         <IconDownload class="nav-icon" />
-        <span v-if="!collapsed" class="nav-label">下载</span>
+        <span v-if="!collapsed" class="nav-label">{{ t("nav.downloads") }}</span>
         <span
           v-if="downloadCount > 0"
           class="nav-badge"
-          :title="`正在下载 ${downloadCount} 项`"
+          :title="t('nav.downloading', { count: downloadCount })"
         >{{ downloadCount }}</span>
       </router-link>
       <AccountChip v-if="!isMobile" :collapsed="collapsed" />

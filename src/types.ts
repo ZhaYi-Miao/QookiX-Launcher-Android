@@ -26,6 +26,13 @@ export interface Settings {
   download_threads: number;
   download_chunk_threads: number;
   curseforge_api_key: string | null;
+  /** 内容描述/正文翻译服务：default（自建）| custom（OpenAI 兼容）| baidu_web（开浏览器） */
+  translate_provider: string;
+  translate_api_base: string;
+  translate_api_key: string | null;
+  translate_api_model: string;
+  /** 打开资源详情时自动加载正文译文 */
+  body_translate_auto: boolean;
   theme: string;
   theme_color: string;
   close_behavior: string;
@@ -379,9 +386,42 @@ export interface PluginInfo {
   error: string | null;
   /** 渲染器插件提供的渲染后端键（`opengles2` / `mobileglues` / `vulkan_zink`）。 */
   renderers: string[];
+  /** 属于「首启要装」的类别（渲染器 / 驱动 / 组件） */
+  recommended: boolean;
+}
+
+/** 首启准备状态：还缺哪些渲染器/驱动/组件、一共要下多少。 */
+export interface PluginSetupStatus {
+  needed: boolean;
+  /** 用户点过「稍后」 */
+  dismissed: boolean;
+  missing: PluginInfo[];
+  total_size: number;
+  /** 清单拿不到时的说明（首启离线） */
+  error: string | null;
+}
+
+/** 一次「补齐首启插件」的结果。 */
+export interface PluginSetupResult {
+  plugins: PluginInfo[];
+  installed: number;
+  /** 形如「MobileGlues：下载失败：…」 */
+  failed: string[];
 }
 
 /** 控制布局里的一个按钮（与 Rust `controls::ControlButtonInfo` 对应）。 */
+/** 一份触控控制布局（`<files>/controlmap/<名字>.json`，全局共享，不区分实例） */
+export interface ControlLayoutInfo {
+  name: string;
+  buttons: number;
+  joysticks: number;
+  drawers: number;
+  current: boolean;
+  size: number;
+  /** 最后修改时间（unix 秒，0 = 取不到） */
+  modified: number;
+}
+
 export interface ControlButtonInfo {
   index: number;
   name: string;

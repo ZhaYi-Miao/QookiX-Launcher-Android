@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { onBeforeUnmount, onMounted, ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listen } from "@tauri-apps/api/event";
@@ -42,13 +43,13 @@ function openCrash() {
 }
 
 const SEV_META: Record<string, { label: string; cls: string }> = {
-  jvm: { label: "JVM 崩溃", cls: "sev-jvm" },
-  oom: { label: "内存不足", cls: "sev-oom" },
-  gl: { label: "显卡问题", cls: "sev-gl" },
-  java_ver: { label: "Java 版本", cls: "sev-java" },
-  lwjgl: { label: "依赖缺失", cls: "sev-lwjgl" },
-  mod: { label: "模组冲突", cls: "sev-mod" },
-  unknown: { label: "未知原因", cls: "sev-unknown" },
+  jvm: { label: $t("crash-analyzer.sev-jvm"), cls: "sev-jvm" },
+  oom: { label: $t("crash-analyzer.sev-oom"), cls: "sev-oom" },
+  gl: { label: $t("crash-analyzer.sev-gl"), cls: "sev-gl" },
+  java_ver: { label: $t("crash-analyzer.sev-java"), cls: "sev-java" },
+  lwjgl: { label: $t("crash-analyzer.sev-lwjgl"), cls: "sev-lwjgl" },
+  mod: { label: $t("crash-dialog.sev-mod"), cls: "sev-mod" },
+  unknown: { label: $t("crash-dialog.sev-unknown"), cls: "sev-unknown" },
 };
 
 const sevMeta = computed(
@@ -92,10 +93,10 @@ watch(
       exit_code: code,
       crash_report: null,
       severity: "unknown",
-      title: "游戏异常退出",
-      reason: `游戏进程以退出码 ${code} 结束。`,
+      title: $t("crash-dialog.unknown"),
+      reason: $t("crash-dialog.reason", { p1: code }),
       advice:
-        "常见原因是内存不足、Java 版本不匹配或模组冲突。点「查看日志」可看到最后的输出与本次启动日志。",
+        $t("crash-dialog.advice"),
       excerpt: "",
     };
     show.value = true;
@@ -115,24 +116,23 @@ watch(
     <template #header>
       <div class="crash-header">
         <span class="crash-badge" :class="sevMeta.cls">{{ sevMeta.label }}</span>
-        <span class="crash-title">{{ info?.title ?? "游戏崩溃" }}</span>
+        <span class="crash-title">{{ info?.title ?? $t('crash-dialog.game-crashed') }}</span>
       </div>
     </template>
 
     <div v-if="info" class="crash-body">
       <p class="crash-reason">{{ info.reason }}</p>
       <div v-if="info.affected_mods && info.affected_mods.length" class="crash-mods">
-        <span class="mods-label">相关模组</span>
+        <span class="mods-label">{{ $t("crash-dialog.related-mods") }}</span>
         <div class="mods-list">
           <span v-for="m in info.affected_mods" :key="m" class="mod-chip">{{ m }}</span>
         </div>
       </div>
-      <div v-if="info.exit_code !== null && info.exit_code !== undefined" class="crash-code">
-        进程退出码：<code>{{ info.exit_code }}</code>
+      <div v-if="info.exit_code !== null && info.exit_code !== undefined" class="crash-code">{{ $t("crash-dialog.exit-code") }}<code>{{ info.exit_code }}</code>
       </div>
       <p class="crash-advice">{{ info.advice }}</p>
       <div v-if="info.excerpt" class="crash-excerpt">
-        <div class="excerpt-head">崩溃报告摘录</div>
+        <div class="excerpt-head">{{ $t("crash-dialog.report-excerpt") }}</div>
         <pre>{{ info.excerpt }}</pre>
       </div>
     </div>
@@ -141,9 +141,9 @@ watch(
       <div class="crash-footer">
         <span v-if="info?.crash_report" class="crash-path">{{ info.crash_report }}</span>
         <div class="footer-btns">
-          <NButton @click="openLogs">查看日志</NButton>
-          <NButton v-if="info?.crash_report" @click="openCrash">崩溃分析</NButton>
-          <NButton type="primary" @click="show = false">知道了</NButton>
+          <NButton @click="openLogs">{{ $t("crash-dialog.view-logs") }}</NButton>
+          <NButton v-if="info?.crash_report" @click="openCrash">{{ $t("crash-dialog.crash") }}</NButton>
+          <NButton type="primary" @click="show = false">{{ $t("crash-dialog.got-it") }}</NButton>
         </div>
       </div>
     </template>

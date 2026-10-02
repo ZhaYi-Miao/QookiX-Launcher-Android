@@ -6,6 +6,7 @@
  * 安卓端早期把标题栏整个删掉后这些入口就全丢了，所以这里做一个不含窗口控件的版本：
  * 页面动作照旧由路由 meta 与各 store 提供，标题栏只负责呈现。
  */
+import { t as $t } from "../i18n";
 import { computed, inject } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -80,8 +81,7 @@ const finishedCount = computed(() => tasks.taskList.filter((t) => t.finished).le
     <div id="tb-context" class="tb-context"></div>
     <div class="tb-actions">
       <button v-if="route.name === 'instances'" class="tb-action" @click="requestCreateGroup">
-        <IconPlus class="tb-action-icon" /> 新建分组
-      </button>
+        <IconPlus class="tb-action-icon" />{{ $t("title-bar.new-group") }}</button>
       <!-- 「创建服务器」依赖后端 `create_hosted_server` 系列命令，这些命令在
            api.ts 里整批标注为**未实现**（Rust 侧零实现）。先隐藏入口，
            功能补齐后把 HOSTED_SERVER_ENABLED 打开即可恢复。 -->
@@ -90,8 +90,7 @@ const finishedCount = computed(() => tasks.taskList.filter((t) => t.finished).le
         class="tb-action primary"
         @click="servers.requestCreate()"
       >
-        <IconPlus class="tb-action-icon" /> 创建服务器
-      </button>
+        <IconPlus class="tb-action-icon" />{{ $t("title-bar.new-server") }}</button>
       <button v-if="pageAction?.to" class="tb-action primary" @click="router.push(pageAction.to)">
         <component :is="actionIcons[pageAction.icon ?? '']" class="tb-action-icon" />
         {{ pageAction.text }}
@@ -102,8 +101,7 @@ const finishedCount = computed(() => tasks.taskList.filter((t) => t.finished).le
         :disabled="!finishedCount"
         @click="tasks.clearFinished()"
       >
-        <IconTrash class="tb-action-icon" /> 清除已完成
-      </button>
+        <IconTrash class="tb-action-icon" />{{ $t("title-bar.clear-finished") }}</button>
     </div>
   </div>
 </template>

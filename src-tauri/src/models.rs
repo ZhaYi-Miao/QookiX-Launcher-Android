@@ -346,6 +346,22 @@ pub struct Settings {
     pub download_threads: i32,
     pub download_chunk_threads: i32,
     pub curseforge_api_key: Option<String>,
+    /// 内容描述 / 正文的翻译服务：
+    /// "default"（自建翻译服务）| "custom"（自定义 OpenAI 兼容接口）| "baidu_web"（前端开浏览器）。
+    #[serde(default = "default_translate_provider")]
+    pub translate_provider: String,
+    /// 自定义翻译接口的 base 地址（如 https://api.deepseek.com/v1）。
+    #[serde(default)]
+    pub translate_api_base: String,
+    /// 自定义翻译接口的密钥。
+    #[serde(default)]
+    pub translate_api_key: Option<String>,
+    /// 自定义翻译接口使用的模型名。
+    #[serde(default)]
+    pub translate_api_model: String,
+    /// 打开资源详情时自动加载正文译文（默认关）。
+    #[serde(default)]
+    pub body_translate_auto: bool,
     pub theme: String,
     pub theme_color: String,
     pub close_behavior: String,
@@ -412,6 +428,10 @@ pub struct Settings {
     /// `:root[data-touch=...]` 一段，值由 App.vue 写到 <html> 上。
     #[serde(default = "default_touch_target")]
     pub touch_target: String,
+}
+
+fn default_translate_provider() -> String {
+    "default".to_string()
 }
 
 fn default_ui_scale() -> i32 {

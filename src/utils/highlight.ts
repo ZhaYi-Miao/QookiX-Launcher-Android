@@ -7,6 +7,7 @@
  */
 
 // 匹配顺序很重要：字符串必须排在注释之前，否则 "#" 会被误判为注释。
+import { t as $t } from "../i18n";
 const TOKEN_RE = new RegExp(
   [
     /"(?:\\.|[^"\\])*"(?=\s*:)/.source, // 1 键名
@@ -63,7 +64,7 @@ const LANG_LABEL: Record<string, string> = {
   yml: "YAML",
   ini: "INI",
   xml: "XML",
-  lang: "语言文件",
+  lang: $t("utils.highlight.config"),
   mcmeta: "MCMeta",
   snbt: "SNBT",
   nbt: "NBT",
@@ -73,9 +74,9 @@ const LANG_LABEL: Record<string, string> = {
   lua: "Lua",
   py: "Python",
   sh: "Shell",
-  bat: "批处理",
-  log: "日志",
-  txt: "纯文本",
+  bat: $t("utils.highlight.yaml"),
+  log: $t("common.logs"),
+  txt: $t("utils.highlight.java-script"),
   md: "Markdown",
   csv: "CSV",
   html: "HTML",
@@ -84,6 +85,6 @@ const LANG_LABEL: Record<string, string> = {
 
 /** 返回用于展示的语言名，未知扩展名返回大写的扩展名。 */
 export function langLabel(ext: string): string {
-  if (!ext) return "纯文本";
+  if (!ext) return $t("utils.highlight.java-script");
   return LANG_LABEL[ext] ?? ext.toUpperCase();
 }

@@ -9,6 +9,7 @@
  *  - 1.x 反过来：MG 翻不动 `shaders/post/*`（`Invalid #version`），1.8.9 会崩在启动阶段 → 用 GL4ES。
  */
 
+import { t as $t } from "../i18n";
 export type RendererKey = "opengles2" | "mobileglues" | "vulkan_zink";
 
 /** 渲染器键 → 人话。 */
@@ -19,9 +20,9 @@ export const rendererNames: Record<string, string> = {
 };
 
 export const rendererOptions = [
-  { label: "GL4ES（兼容性最好）", value: "opengles2" },
-  { label: "MobileGlues（26.x 必需）", value: "mobileglues" },
-  { label: "Zink + Turnip（实验）", value: "vulkan_zink" },
+  { label: $t("utils.renderer.jian-rong-xing-zui-hao"), value: "opengles2" },
+  { label: $t("utils.renderer.mobileglues"), value: "mobileglues" },
+  { label: $t("utils.renderer.vulkan-zink"), value: "vulkan_zink" },
 ];
 
 export function rendererLabel(key?: string | null): string {

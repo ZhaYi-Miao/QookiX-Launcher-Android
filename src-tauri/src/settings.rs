@@ -102,6 +102,14 @@ pub async fn get_settings() -> Result<Settings> {
             download_threads: raw_i64(&settings, &["download_threads", "downloadThreads"], 4) as i32,
             download_chunk_threads: raw_i64(&settings, &["download_chunk_threads", "downloadChunkThreads"], 2) as i32,
             curseforge_api_key: raw_str(&settings, &["curseforge_api_key", "curseforgeApiKey"]),
+            translate_provider: raw_str(&settings, &["translate_provider", "translateProvider"])
+                .unwrap_or_else(|| "default".into()),
+            translate_api_base: raw_str(&settings, &["translate_api_base", "translateApiBase"])
+                .unwrap_or_default(),
+            translate_api_key: raw_str(&settings, &["translate_api_key", "translateApiKey"]),
+            translate_api_model: raw_str(&settings, &["translate_api_model", "translateApiModel"])
+                .unwrap_or_default(),
+            body_translate_auto: raw_bool(&settings, &["body_translate_auto", "bodyTranslateAuto"], false),
             theme: raw_str(&settings, &["theme"]).unwrap_or_else(|| "dark".into()),
             theme_color: raw_str(&settings, &["theme_color", "themeColor"]).unwrap_or_else(|| "#E89A4B".into()),
             close_behavior: raw_str(&settings, &["close_behavior", "closeBehavior"]).unwrap_or_else(|| "minimize".into()),
@@ -170,6 +178,11 @@ pub async fn get_settings() -> Result<Settings> {
             download_threads: 4,
             download_chunk_threads: 2,
             curseforge_api_key: None,
+            translate_provider: "default".to_string(),
+            translate_api_base: String::new(),
+            translate_api_key: None,
+            translate_api_model: String::new(),
+            body_translate_auto: false,
             theme: "dark".to_string(),
             theme_color: "#E89A4B".to_string(),
             close_behavior: "minimize".to_string(),
@@ -217,6 +230,11 @@ pub async fn update_settings(settings: Settings) -> Result<()> {
     map.insert("download_threads".to_string(), Value::Number(settings.download_threads.into()));
     map.insert("download_chunk_threads".to_string(), Value::Number(settings.download_chunk_threads.into()));
     map.insert("curseforge_api_key".to_string(), Value::String(settings.curseforge_api_key.unwrap_or_default()));
+    map.insert("translate_provider".to_string(), Value::String(settings.translate_provider));
+    map.insert("translate_api_base".to_string(), Value::String(settings.translate_api_base));
+    map.insert("translate_api_key".to_string(), Value::String(settings.translate_api_key.unwrap_or_default()));
+    map.insert("translate_api_model".to_string(), Value::String(settings.translate_api_model));
+    map.insert("body_translate_auto".to_string(), Value::Bool(settings.body_translate_auto));
     map.insert("theme".to_string(), Value::String(settings.theme));
     map.insert("theme_color".to_string(), Value::String(settings.theme_color));
     map.insert("close_behavior".to_string(), Value::String(settings.close_behavior));

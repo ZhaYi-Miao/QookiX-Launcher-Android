@@ -4,6 +4,7 @@
  * 从 InstanceDetailView 拆出，自行负责：存档列表加载、服务器列表与 ping、
  * MOTD 彩色解析、从存档/服务器直接启动、固定到首页。
  */
+import { t as $t } from "../../i18n";
 import { onMounted, ref, watch } from "vue";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
@@ -131,17 +132,17 @@ async function launchWorld(name: string) {
   const i = instances.get(props.instanceId);
   if (!i) return;
   if (!accounts.accounts.length) {
-    message.warning("请先添加账号（正版或离线）");
+    message.warning($t("instance-saves.need-account"));
     accounts.showManager = true;
     return;
   }
   launchingWorld.value = name;
   if (!supportsQuickPlay(i.mc_version)) {
-    message.info(`此实例是 ${i.mc_version}，不支持命令行直达存档，将启动游戏后手动进入存档`);
+    message.info($t("instance-saves.quickplay-unsupported", { p1: i.mc_version }));
   }
   try {
     const res = await instances.launch(i.id, name);
-    if (res) message.success(`正在进入世界「${name}」`);
+    if (res) message.success($t("instance-saves.entering-world", { p1: name }));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -154,14 +155,14 @@ async function launchServer(entry: ServerEntry) {
   const i = instances.get(props.instanceId);
   if (!i) return;
   if (!accounts.accounts.length) {
-    message.warning("请先添加账号（正版或离线）");
+    message.warning($t("instance-saves.need-account"));
     accounts.showManager = true;
     return;
   }
   launchingServer.value = entry.address;
   try {
     const res = await instances.launch(i.id, undefined, entry.address);
-    if (res) message.success(`正在加入服务器「${entry.name || entry.address}」`);
+    if (res) message.success($t("instance-saves.joining-server", { p1: entry.name || entry.address }));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -285,7 +286,7 @@ async function createBackup() {
   backingUp.value = true;
   try {
     await api.createWorldBackup(props.instanceId, backupWorld.value);
-    message.success("备份完成");
+    message.success($t("instance-saves.backup-done"));
     await loadBackups(backupWorld.value);
   } catch (e) {
     message.error(String(e));
@@ -305,15 +306,15 @@ function restoreBackup(filename: string) {
   const b = backups.value.find((x) => x.filename === filename);
   const when = b ? fmtDate(b.modified) : filename;
   dialog.warning({
-    title: "恢复备份",
-    content: `确定要用「${when}」的这份备份覆盖当前存档吗？恢复前会自动为当前存档留一份快照。`,
-    positiveText: "恢复",
-    negativeText: "取消",
+    title: $t("instance-saves.restore"),
+    content: $t("instance-saves.restore-confirm", { p1: when }),
+    positiveText: $t("common.restore"),
+    negativeText: $t("common.cancel"),
     onPositiveClick: async () => {
       restoring.value = filename;
       try {
         await api.restoreWorldBackup(props.instanceId, backupWorld.value, filename);
-        message.success("已恢复，恢复前的存档状态也自动留了一份备份");
+        message.success($t("instance-saves.on-positive-click"));
         await loadBackups(backupWorld.value);
         await loadFiles();
       } catch (e) {
@@ -335,15 +336,15 @@ const dialog = useDialog();
  */
 function deleteBackup(filename: string) {
   dialog.warning({
-    title: "删除备份",
-    content: `确定要永久删除备份「${filename}」吗？此操作不可恢复。`,
-    positiveText: "删除",
-    negativeText: "取消",
+    title: $t("instance-saves.delete-backup"),
+    content: $t("instance-saves.delete-backup-confirm", { p1: filename }),
+    positiveText: $t("common.delete"),
+    negativeText: $t("common.cancel"),
     onPositiveClick: async () => {
       try {
         await api.deleteWorldBackup(props.instanceId, backupWorld.value, filename);
         await loadBackups(backupWorld.value);
-        message.success("备份已删除");
+        message.success($t("instance-saves.bei-fen-yi-shan-chu"));
       } catch (e) {
         message.error(String(e));
       }
@@ -366,19 +367,17 @@ watch(
   <div class="tab-root">
     <div class="world-sub">
       <button class="seg" :class="{ active: worldSub === 'sp' }" @click="selectWorldSub('sp')">
-        <IconFolder /> 单人游戏
-      </button>
+        <IconFolder />{{ $t("instance-saves.singleplayer") }}</button>
       <button class="seg" :class="{ active: worldSub === 'mp' }" @click="selectWorldSub('mp')">
-        <IconGlobe /> 多人游戏
-      </button>
+        <IconGlobe />{{ $t("instance-saves.users") }}</button>
     </div>
 
     <!-- 单人游戏：本地世界存档 -->
     <template v-if="worldSub === 'sp'">
-      <div v-if="loadingFiles" class="center">加载中…</div>
+      <div v-if="loadingFiles" class="center">{{ $t("file-manager.loading") }}</div>
       <div v-else-if="!fileItems.length" class="empty glass">
-        <p>还没有世界存档</p>
-        <p class="hint">安装游戏后创建的世界会出现在这里</p>
+        <p>{{ $t("instance-saves.no-worlds") }}</p>
+        <p class="hint">{{ $t("instance-saves.no-worlds-hint") }}</p>
       </div>
       <div v-else class="content-list glass">
         <div v-for="f in fileItems.filter((x) => x.isDir)" :key="f.name" class="world-row">
@@ -387,22 +386,21 @@ watch(
           <div class="c-info">
             <div class="c-name text-ellipsis">{{ f.name }}</div>
             <div class="c-meta">
-              <span class="ver">世界存档</span>
+              <span class="ver">{{ $t("instance-saves.worlds") }}</span>
               <span v-if="f.modified" class="ver">{{ fmtDate(f.modified) }}</span>
             </div>
           </div>
           <div class="c-actions">
             <button
               class="mini-btn"
-              title="备份 / 恢复" aria-label="备份 / 恢复"
+              :title="$t('instance-saves.backup-restore')" :aria-label="$t('instance-saves.backup-restore')"
               @click="openBackups(f.name)"
             >
-              <IconBox /> 备份
-            </button>
+              <IconBox />{{ $t("instance-saves.backup") }}</button>
             <button
               class="mini-btn pin"
               :class="{ active: pins.isPinned(worldPinId(f.name)) }"
-              :title="pins.isPinned(worldPinId(f.name)) ? '取消固定' : '固定到首页'" :aria-label="pins.isPinned(worldPinId(f.name)) ? '取消固定' : '固定到首页'"
+              :title="pins.isPinned(worldPinId(f.name)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')" :aria-label="pins.isPinned(worldPinId(f.name)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')"
               @click="toggleWorldPin(f)"
             >
               <IconMapPin />
@@ -412,20 +410,20 @@ watch(
               :disabled="!!launchingWorld"
               @click="launchWorld(f.name)"
             >
-              <IconPlay /> {{ launchingWorld === f.name ? "启动中…" : "启动" }}
+              <IconPlay /> {{ launchingWorld === f.name ? $t('instance-saves.launching') : $t('instance-saves.launch') }}
             </button>
           </div>
         </div>
-        <div v-if="!fileItems.some((x) => x.isDir)" class="center">这个实例还没有世界存档</div>
+        <div v-if="!fileItems.some((x) => x.isDir)" class="center">{{ $t("instance-saves.instance-no-worlds") }}</div>
       </div>
     </template>
 
     <!-- 多人游戏：服务器列表 -->
     <template v-else>
-      <div v-if="loadingServers" class="center">加载中…</div>
+      <div v-if="loadingServers" class="center">{{ $t("file-manager.loading") }}</div>
       <div v-else-if="!servers.length" class="empty glass">
-        <p>还没有添加服务器</p>
-        <p class="hint">在游戏内"多人游戏"中添加一个服务器，它会出现在这里</p>
+        <p>{{ $t("instance-saves.no-servers") }}</p>
+        <p class="hint">{{ $t("instance-saves.add-server-hint") }}</p>
       </div>
       <div v-else class="content-list glass">
         <div v-for="s in servers" :key="s.address" class="server-row">
@@ -438,13 +436,12 @@ watch(
                   <i v-for="n in 5" :key="n" :class="{ on: n <= latencyInfo(serverStatus[s.address]?.latency_ms).count }"></i>
                 </span>
                 <span v-if="serverStatus[s.address]?.latency_ms != null">{{ serverStatus[s.address]?.latency_ms }} ms</span>
-                <span v-else-if="serverStatus[s.address] && !serverStatus[s.address]?.online">离线</span>
+                <span v-else-if="serverStatus[s.address] && !serverStatus[s.address]?.online">{{ $t("account-chip.offline") }}</span>
                 <span v-else>…</span>
               </span>
               <span v-if="serverStatus[s.address]?.players_online != null" class="players">
-                {{ serverStatus[s.address]?.players_online }}<template v-if="serverStatus[s.address]?.players_max != null">/{{ serverStatus[s.address]?.players_max }}</template> 人在线
-              </span>
-              <span v-else-if="serverStatus[s.address]?.error" class="err" :title="serverStatus[s.address]?.error ?? undefined">无法连接</span>
+                {{ serverStatus[s.address]?.players_online }}<template v-if="serverStatus[s.address]?.players_max != null">/{{ serverStatus[s.address]?.players_max }}</template>{{ $t("instance-saves.players") }}</span>
+              <span v-else-if="serverStatus[s.address]?.error" class="err" :title="serverStatus[s.address]?.error ?? undefined">{{ $t("instance-saves.unreachable") }}</span>
             </div>
             <div v-if="serverStatus[s.address]?.motd" class="server-motd">
               <span
@@ -464,7 +461,7 @@ watch(
             <button
               class="mini-btn pin"
               :class="{ active: pins.isPinned(serverPinId(s.address)) }"
-              :title="pins.isPinned(serverPinId(s.address)) ? '取消固定' : '固定到首页'" :aria-label="pins.isPinned(serverPinId(s.address)) ? '取消固定' : '固定到首页'"
+              :title="pins.isPinned(serverPinId(s.address)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')" :aria-label="pins.isPinned(serverPinId(s.address)) ? $t('instance-saves.unpin') : $t('instance-saves.pin-home')"
               @click="toggleServerPin(s)"
             >
               <IconMapPin />
@@ -472,13 +469,13 @@ watch(
             <button
               class="mini-btn play"
               :disabled="!!launchingServer || pinging.has(s.address)"
-              :title="launchingServer === s.address ? '启动中…' : '启动并加入此服务器'" :aria-label="launchingServer === s.address ? '启动中…' : '启动并加入此服务器'"
+              :title="launchingServer === s.address ? $t('instance-saves.launching') : $t('instance-saves.launch-and-join')" :aria-label="launchingServer === s.address ? $t('instance-saves.launching') : $t('instance-saves.launch-and-join')"
               @click="launchServer(s)"
             >
-              <IconPlay /> {{ launchingServer === s.address ? "启动中" : "启动" }}
+              <IconPlay /> {{ launchingServer === s.address ? $t('instance-saves.starting') : $t('instance-saves.launch') }}
             </button>
             <button class="mini-btn" :disabled="pinging.has(s.address) || !!launchingServer" @click="pingOne(s.address)">
-              <IconRefresh /> {{ pinging.has(s.address) ? "测试中" : "刷新" }}
+              <IconRefresh /> {{ pinging.has(s.address) ? $t('instance-saves.testing') : $t('common.refresh') }}
             </button>
           </div>
         </div>
@@ -490,20 +487,18 @@ watch(
       :auto-focus="false"
       v-model:show="backupOpen"
       preset="card"
-      :title="`存档备份：${backupWorld}`"
+      :title="$t('instance-saves.backup-name', { p1: backupWorld })"
       style="width: 560px; max-width: 94vw"
       :mask-closable="true"
       :close-on-esc="true"
     >
       <div class="bk-body">
         <div class="bk-toolbar">
-          <span class="hint">备份保存在实例目录 backups/ 下，恢复前会自动为当前存档留一份快照</span>
-          <n-button size="small" type="primary" :loading="backingUp" @click="createBackup">
-            创建备份
-          </n-button>
+          <span class="hint">{{ $t("instance-saves.backup-hint") }}</span>
+          <n-button size="small" type="primary" :loading="backingUp" @click="createBackup">{{ $t("instance-saves.create-backup") }}</n-button>
         </div>
-        <div v-if="loadingBackups" class="center">加载中…</div>
-        <div v-else-if="!backups.length" class="center">还没有备份</div>
+        <div v-if="loadingBackups" class="center">{{ $t("file-manager.loading") }}</div>
+        <div v-else-if="!backups.length" class="center">{{ $t("instance-saves.no-backups") }}</div>
         <div v-else class="bk-list">
           <div v-for="b in backups" :key="b.filename" class="bk-row">
             <div class="c-info">
@@ -516,10 +511,8 @@ watch(
                 type="warning"
                 :loading="restoring === b.filename"
                 @click="restoreBackup(b.filename)"
-              >
-                恢复
-              </n-button>
-              <button class="bk-del" title="删除备份" aria-label="删除备份" @click="deleteBackup(b.filename)">
+              >{{ $t("common.restore") }}</n-button>
+              <button class="bk-del" :title="$t('instance-saves.delete-backup')" :aria-label="$t('instance-saves.delete-backup')" @click="deleteBackup(b.filename)">
                 <IconTrash />
               </button>
             </div>

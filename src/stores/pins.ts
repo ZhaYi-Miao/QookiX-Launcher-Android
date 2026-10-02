@@ -1,3 +1,4 @@
+import { t as $t } from "../i18n";
 import { defineStore } from "pinia";
 import { api } from "../api";
 import { error as devError } from "../utils/logger";
@@ -96,7 +97,7 @@ export const usePinsStore = defineStore("pins", {
       try {
         await api.setPins(this.items);
       } catch (e) {
-        devError("保存固定项失败", e);
+        devError($t("stores.pins.dev-error"), e);
       }
     },
     /** target 参与 id 组成，首页与侧边栏的固定项互不覆盖 */

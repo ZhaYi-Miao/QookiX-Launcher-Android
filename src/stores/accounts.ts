@@ -1,3 +1,4 @@
+import { t as $t } from "../i18n";
 import { defineStore } from "pinia";
 import { api } from "../api";
 import { useSettingsStore } from "./settings";
@@ -87,7 +88,7 @@ export const useAccountsStore = defineStore("accounts", {
             this.msError = "";
             await this.load(true);
             await this.select(acc.uuid);
-            this.msSuccess = `${acc.username} 登录成功`;
+            this.msSuccess = $t("stores.accounts.login-ok", { p1: acc.username });
             return;
           } catch (e: unknown) {
             if (!this.msFlow) return;
@@ -100,7 +101,7 @@ export const useAccountsStore = defineStore("accounts", {
             return;
           }
         }
-        this.msError = "等待超时，请重新尝试";
+        this.msError = $t("stores.accounts.login-timeout");
       } finally {
         this.msPolling = false;
       }
@@ -115,7 +116,7 @@ export const useAccountsStore = defineStore("accounts", {
         this.msPolling = false;
         await this.load(true);
         await this.select(acc.uuid);
-        this.msSuccess = `${acc.username} 登录成功`;
+        this.msSuccess = $t("stores.accounts.login-ok", { p1: acc.username });
       } catch (e: unknown) {
         const msg = String(e);
         if (msg !== "__auth_pending__" && this.msFlow) {

@@ -1,0 +1,15 @@
+{
+  "nav.home": "Home",
+  "nav.instances": "Instances",
+  "nav.browse": "Browse",
+  "nav.multiplayer": "Multiplayer",
+  "nav.skins": "Skins",
+  "nav.settings": "Settings",
+  "nav.news": "News",
+  "nav.downloads": "Downloads",
+  "nav.pinned": "Pinned",
+  "nav.unpin": "Unpin",
+  "nav.downloading": "Downloading {count}",
+  "nav.stop-all": "Stop all instances",
+  "nav.stopped-all": "Stopped all instances"
+}

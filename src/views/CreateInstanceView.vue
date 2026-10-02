@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { fmtBytes } from "../utils/format";
 import { isAprilFools } from "../utils/versions";
@@ -81,12 +82,12 @@ watch([mcVersion, loader], async ([mc, ld]) => {
 });
 
 const loaderOptions = computed(() => [
-  { label: "最新稳定版", value: "" },
+  { label: $t("create-instance.latest-stable"), value: "" },
   ...loaderVersions.value.slice(0, 30).map((v) => ({ label: v, value: v })),
 ]);
 
 async function create() {
-  if (!mcVersion.value) return message.warning("请选择游戏版本");
+  if (!mcVersion.value) return message.warning($t("create-instance.select-version"));
   const instName = name.value.trim() || mcVersion.value;
   creating.value = true;
   try {
@@ -102,10 +103,10 @@ async function create() {
     if (newGroup.value) {
       await instances.moveToGroup(inst.id, newGroup.value);
     }
-    message.success("实例已创建，正在安装游戏文件…");
+    message.success($t("create-instance.created-installing"));
     router.push(`/instance/${inst.id}`);
     instances.installGame(inst.id).catch((e) => {
-      message.error(`安装失败: ${String(e)}`);
+      message.error($t("create-instance.install-failed", { p1: String(e) }));
     });
   } catch (e) {
     message.error(String(e));
@@ -118,13 +119,13 @@ async function create() {
 async function importPack() {
   const file = await open({
     multiple: false,
-    filters: [{ name: "整合包", extensions: ["zip", "mrpack"] }],
+    filters: [{ name: $t("instance-content.modpack"), extensions: ["zip", "mrpack"] }],
   });
   if (!file) return;
   importing.value = true;
   try {
     const inst = await api.importModpack(file as string);
-    message.success(`已导入「${inst.name}」，接下来安装游戏`);
+    message.success($t("create-instance.imported-next", { p1: inst.name }));
     router.push(`/instance/${inst.id}`);
   } catch (e) {
     message.error(String(e));
@@ -196,8 +197,8 @@ async function pickMcFolder() {
   } catch (e) {
     message.error(
       isMobile.value
-        ? "当前平台不支持直接选择游戏文件夹（需电脑端操作后把实例复制过来）"
-        : `选择文件夹失败：${String(e)}`
+        ? $t("create-instance.folder-unsupported")
+        : $t("create-instance.pick-folder-failed", { p1: String(e) })
     );
   }
 }
@@ -256,7 +257,7 @@ async function goStep2() {
 
 function pathBasename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || "导入的实例";
+  return parts[parts.length - 1] || $t("create-instance.imported");
 }
 
 function toggleVersion(id: string) {
@@ -269,8 +270,8 @@ function toggleVersion(id: string) {
 }
 
 async function importMc() {
-  if (!importSrc.value) return message.warning("请先选择 .minecraft 文件夹");
-  if (selectedVersions.value.length === 0) return message.warning("请至少选择一个游戏版本");
+  if (!importSrc.value) return message.warning($t("create-instance.pick-minecraft-first"));
+  if (selectedVersions.value.length === 0) return message.warning($t("create-instance.version-required"));
   // align loaders / loader versions with the selected versions, using the
   // auto-detected loader for each version
   const loaders: string[] = [];
@@ -310,16 +311,16 @@ async function importMc() {
     const fellBack = migrateMode.value === "symlink" && plans.some((p) => p.symlink_fallback);
     if (plans.length === 1) {
       if (fellBack) {
-        message.warning("符号链接不可用（需要管理员或开发者模式），已自动改用复制");
+        message.warning($t("create-instance.symlink-fallback"));
       } else {
-        message.success("导入并安装完成");
+        message.success($t("create-instance.import-done"));
       }
       router.push(`/instance/${plans[0].instance_id}`);
     } else {
       if (fellBack) {
-        message.warning(`已导入 ${plans.length} 个实例（符号链接不可用，已自动改用复制）`);
+        message.warning($t("create-instance.imported-symlink-fallback", { p1: plans.length }));
       } else {
-        message.success(`已导入 ${plans.length} 个实例并安装`);
+        message.success($t("create-instance.imported-count", { p1: plans.length }));
       }
       router.push("/instances");
     }
@@ -344,7 +345,7 @@ function loaderLabel(ld: string): string {
     case "optifine":
       return "OptiFine";
     default:
-      return "原版";
+      return $t("utils.categories.vanilla");
   }
 }
 
@@ -428,50 +429,49 @@ onUnmounted(() => {
 <template>
   <div class="create-view">
     <button class="back" @click="router.push('/instances')">
-      <IconChevronLeft /> 返回实例列表
-    </button>
+      <IconChevronLeft />{{ $t("create-instance.back-to-list") }}</button>
 
     <div class="mode-tabs glass">
-      <button :class="{ active: mode === 'fresh' }" @click="mode = 'fresh'">全新创建</button>
-      <button :class="{ active: mode === 'import' }" @click="mode = 'import'">导入整合包</button>
+      <button :class="{ active: mode === 'fresh' }" @click="mode = 'fresh'">{{ $t("create-instance.create-new") }}</button>
+      <button :class="{ active: mode === 'import' }" @click="mode = 'import'">{{ $t("create-instance.import-modpack") }}</button>
       <button
         v-if="!isMobile"
         :class="{ active: mode === 'importmc' }"
         @click="mode = 'importmc'"
-      >导入游戏文件夹</button>
+      >{{ $t("create-instance.import-folder") }}</button>
     </div>
 
     <!-- fresh create -->
     <div v-if="mode === 'fresh'" class="fresh glass">
       <div class="fresh-head">
-        <button class="icon-box" title="选择图标" aria-label="选择图标" @click="showIconPicker = true">
+        <button class="icon-box" :title="$t('instance-settings.pick-icon')" :aria-label="$t('instance-settings.pick-icon')" @click="showIconPicker = true">
           <AppIcon :name="iconStr" />
         </button>
         <div class="fresh-title">
-          <h2>创建全新实例</h2>
-          <p>设置图标、名称、游戏版本与加载器</p>
+          <h2>{{ $t("create-instance.create-fresh") }}</h2>
+          <p>{{ $t("create-instance.setup-hint") }}</p>
         </div>
       </div>
 
       <!-- 左列：实例配置 -->
       <div class="fresh-left">
         <div class="field">
-          <label>实例名称</label>
-          <n-input v-model:value="name" placeholder="留空则自动用版本号命名" maxlength="40" />
+          <label>{{ $t("create-instance.instance-name") }}</label>
+          <n-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
         </div>
 
         <div v-if="instances.groups.length" class="field">
-          <label>分组</label>
+          <label>{{ $t("create-instance.group") }}</label>
           <n-select
             v-model:value="newGroup"
             :options="groupOptions"
-            placeholder="未分组"
+            :placeholder="$t('create-instance.ungrouped')"
             clearable
           />
         </div>
 
         <div class="field">
-          <label>加载器</label>
+          <label>{{ $t("browse.loader") }}</label>
           <div class="loader-row">
             <button
               v-for="l in loaders"
@@ -489,7 +489,7 @@ onUnmounted(() => {
             :options="loaderOptions"
             :loading="loadingLoader"
             :disabled="!mcVersion"
-            :placeholder="mcVersion ? '选择加载器版本（留空使用最新稳定版）' : '请先在右侧选择游戏版本'"
+            :placeholder="mcVersion ? $t('create-instance.loader-version') : $t('create-instance.pick-version-first')"
             class="loader-select"
           />
         </div>
@@ -501,14 +501,14 @@ onUnmounted(() => {
           </div>
           <div class="sum-text">
             <div class="sum-name">
-              {{ name.trim() || (mcVersion ? `${mcVersion} ${loaderLabel(loader)}` : "未命名实例") }}
+              {{ name.trim() || (mcVersion ? `${mcVersion} ${loaderLabel(loader)}` : $t('create-instance.unnamed')) }}
             </div>
             <div class="sum-meta">
-              {{ mcVersion || "未选择游戏版本" }} · {{ loaderLabel(loader) }}<template v-if="loader !== 'vanilla'"> · {{ loaderVersion || "最新稳定版" }}</template>
+              {{ mcVersion || $t('create-instance.no-version') }} · {{ loaderLabel(loader) }}<template v-if="loader !== 'vanilla'"> · {{ loaderVersion || $t('create-instance.latest-stable') }}</template>
             </div>
           </div>
           <button class="btn primary" :disabled="creating || !mcVersion" @click="create">
-            <IconPlus /> {{ creating ? "创建中…" : "创建实例" }}
+            <IconPlus /> {{ creating ? $t('create-instance.creating') : $t('router.chuang-jian-shi-li') }}
           </button>
         </div>
       </div>
@@ -516,13 +516,13 @@ onUnmounted(() => {
       <!-- 右列：游戏版本选择 -->
       <div class="fresh-right">
         <div class="field">
-          <label>游戏版本</label>
+          <label>{{ $t("browse.game-version") }}</label>
           <div class="ver-cats">
             <button
               v-for="c in [
-                { key: 'release', label: '正式版' },
-                { key: 'snapshot', label: '快照版' },
-                { key: 'april', label: '愚人节版' },
+                { key: 'release', label: $t('install-dialog.release') },
+                { key: 'snapshot', label: $t('create-instance.snapshots') },
+                { key: 'april', label: $t('create-instance.april-fools') },
               ]"
               :key="c.key"
               :class="{ active: versionCat === c.key }"
@@ -540,9 +540,9 @@ onUnmounted(() => {
               @click="mcVersion = v.id"
             >
               <span class="ver-id mono">{{ v.id }}</span>
-              <span class="ver-type">{{ v.type === 'release' || v.type.startsWith('old_') ? '正式' : '快照' }}</span>
+              <span class="ver-type">{{ v.type === 'release' || v.type.startsWith('old_') ? $t('create-instance.release') : $t('create-instance.snapshot') }}</span>
             </button>
-            <div v-if="!filteredVersions.length" class="ver-empty">该分类下暂无版本</div>
+            <div v-if="!filteredVersions.length" class="ver-empty">{{ $t("create-instance.no-versions-in-category") }}</div>
           </div>
         </div>
       </div>
@@ -551,11 +551,11 @@ onUnmounted(() => {
     <!-- import -->
     <div v-else-if="mode === 'import'" class="import glass">
       <div class="import-icon"><IconFolder /></div>
-      <h2>导入整合包</h2>
-      <p>支持 Modrinth 整合包（.mrpack）与 CurseForge 整合包（.zip）。</p>
-      <p class="sub-p">导入后将自动创建对应版本与加载器的实例，并把模组等文件放入其中。</p>
+      <h2>{{ $t("create-instance.import-modpack") }}</h2>
+      <p>{{ $t("create-instance.modpack-support-hint") }}</p>
+      <p class="sub-p">{{ $t("create-instance.import-auto-hint") }}</p>
       <button class="btn primary big" :disabled="importing" @click="importPack">
-        <IconFolder /> {{ importing ? "导入中…" : "选择整合包文件" }}
+        <IconFolder /> {{ importing ? $t('icon-picker-dialog.importing') : $t('create-instance.pick-modpack') }}
       </button>
     </div>
 
@@ -563,25 +563,23 @@ onUnmounted(() => {
     <div v-else class="importmc glass">
       <div class="fresh-head">
         <div class="fresh-title">
-          <h2>导入 .minecraft 游戏文件夹</h2>
-          <p>选择已有的游戏目录（PCL2 / HMCL 等），将其存档、模组、配置等迁移到新实例</p>
+          <h2>{{ $t("create-instance.import-minecraft") }}</h2>
+          <p>{{ $t("create-instance.import-folder-hint") }}</p>
         </div>
       </div>
 
       <div class="field">
-        <label>游戏文件夹</label>
+        <label>{{ $t("create-instance.game-folder") }}</label>
         <button class="folder-btn" @click="pickMcFolder">
-          <IconFolder /> {{ importSrc || "选择 .minecraft 文件夹" }}
+          <IconFolder /> {{ importSrc || $t('create-instance.pick-minecraft') }}
         </button>
-        <div v-if="importSrc && !scanning && mcVersions.length === 0" class="detected-hint warn">
-          未能在文件夹中找到任何版本（versions 目录为空）
-        </div>
+        <div v-if="importSrc && !scanning && mcVersions.length === 0" class="detected-hint warn">{{ $t("create-instance.no-versions-found") }}</div>
       </div>
 
       <div v-if="importProgress" class="import-progress">
         <div class="ip-row">
           <span class="ip-label">
-            {{ importProgress.phase === "done" ? "安装完成" : "迁移中" }}：{{ importProgress.name }}
+            {{ importProgress.phase === "done" ? $t('install-dialog.computed') : $t('create-instance.migrating') }}：{{ importProgress.name }}
           </span>
           <span class="ip-count">{{ importProgress.current }} / {{ importProgress.total }}</span>
         </div>
@@ -594,13 +592,11 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <NModal v-model:show="showVersionDialog" preset="card" :title="importStep === 1 ? '选择要迁移的版本' : '确认迁移信息'" style="max-width: 640px;" @update:show="(v: boolean) => { if (!v) importStep = 1; }">
+      <NModal v-model:show="showVersionDialog" preset="card" :title="importStep === 1 ? $t('create-instance.pick-migrate') : $t('create-instance.confirm-migrate')" style="max-width: 640px;" @update:show="(v: boolean) => { if (!v) importStep = 1; }">
         <div class="ver-dialog-body">
           <!-- Step 1: select versions -->
           <template v-if="importStep === 1">
-            <div class="detected-hint">
-              检测到 {{ mcVersions.length }} 个已安装版本，已选 {{ selectedVersions.length }} 个。每个版本创建一个独立实例，实例名使用版本号。
-            </div>
+            <div class="detected-hint">{{ $t("create-instance.detected-versions", { p1: mcVersions.length, p2: selectedVersions.length }) }}</div>
             <div class="ver-list">
               <template v-for="g in groupedVersions" :key="g.loader">
                 <div class="ver-group-title">
@@ -623,44 +619,38 @@ onUnmounted(() => {
           </template>
           <!-- Step 2: size info + migration method -->
           <template v-else>
-            <div class="detected-hint">
-              已选 {{ selectedVersions.length }} 个版本：{{ selectedVersions.join("、") }}
+            <div class="detected-hint">{{ $t("create-instance.selected-versions", { p1: selectedVersions.length, p2: selectedVersions.join("、") }) }}
             </div>
-            <div v-if="calcSize" class="scan-hint">正在计算迁移数据量…</div>
+            <div v-if="calcSize" class="scan-hint">{{ $t("create-instance.calculating-size") }}</div>
             <div v-else-if="scan" class="scan-panel">
               <div class="scan-row">
-                <span class="scan-label">将迁移（{{ migrateMode === 'symlink' ? '符号链接' : '复制' }}）</span>
-                <span class="scan-val">{{ scan.import_files }} 个文件 · {{ fmtBytes(scan.import_bytes) }}</span>
+                <span class="scan-label">{{ $t("create-instance.will-migrate", { p1: migrateMode === 'symlink' ? $t("create-instance.fu-hao-lian-jie") : $t("common.copy") }) }}</span>
+                <span class="scan-val">{{ $t("create-instance.files-size", { p1: scan.import_files, p2: fmtBytes(scan.import_bytes) }) }}</span>
               </div>
               <div class="scan-row">
-                <span class="scan-label">需要下载（游戏核心）</span>
+                <span class="scan-label">{{ $t("create-instance.need-download") }}</span>
                 <span class="scan-val">
-                  {{ scan.download_files }} 个文件 · {{ fmtBytes(scan.download_bytes) }}
-                  <em v-if="!scan.assets_known">（资源文件大小需在安装时联网获取）</em>
+                  {{ $t("create-instance.files-size", { p1: scan.download_files, p2: fmtBytes(scan.download_bytes) }) }}<em v-if="!scan.assets_known">{{ $t("create-instance.assets-size-hint") }}</em>
                 </span>
               </div>
             </div>
             <div class="field">
-              <label>迁移方式</label>
+              <label>{{ $t("create-instance.migrate-method") }}</label>
               <div class="loader-row">
-                <button class="loader-btn" :class="{ active: migrateMode === 'copy' }" @click="migrateMode = 'copy'">复制文件</button>
-                <button class="loader-btn" :class="{ active: migrateMode === 'symlink' }" @click="migrateMode = 'symlink'">符号链接</button>
+                <button class="loader-btn" :class="{ active: migrateMode === 'copy' }" @click="migrateMode = 'copy'">{{ $t("create-instance.copy") }}</button>
+                <button class="loader-btn" :class="{ active: migrateMode === 'symlink' }" @click="migrateMode = 'symlink'">{{ $t("create-instance.fu-hao-lian-jie") }}</button>
               </div>
-              <p class="sub-p">
-                复制方式占用额外磁盘空间但完全独立；符号链接不占用空间，下载的 mod 会直接保存到原始目录，但原文件夹不可删除或移动到其他磁盘。
-              </p>
+              <p class="sub-p">{{ $t("create-instance.copy-vs-symlink") }}</p>
             </div>
           </template>
         </div>
         <template #footer>
           <div class="dialog-actions">
-            <button v-if="importStep === 2" class="btn ghost" @click="importStep = 1">上一步</button>
-            <button v-if="importStep === 1" class="btn ghost" @click="showVersionDialog = false">取消</button>
-            <button v-if="importStep === 1" class="btn primary" :disabled="selectedVersions.length === 0" @click="goStep2">
-              下一步
-            </button>
+            <button v-if="importStep === 2" class="btn ghost" @click="importStep = 1">{{ $t("create-instance.prev-step") }}</button>
+            <button v-if="importStep === 1" class="btn ghost" @click="showVersionDialog = false">{{ $t("common.cancel") }}</button>
+            <button v-if="importStep === 1" class="btn primary" :disabled="selectedVersions.length === 0" @click="goStep2">{{ $t("create-instance.next-step") }}</button>
             <button v-if="importStep === 2" class="btn primary" :disabled="importingMc || calcSize || !scan" @click="importMc">
-              <IconPlus /> {{ importingMc ? "导入中…" : `迁移 ${selectedVersions.length} 个版本` }}
+              <IconPlus /> {{ importingMc ? $t('icon-picker-dialog.importing') : $t('create-instance.migrate-count', { p1: selectedVersions.length }) }}
             </button>
           </div>
         </template>

@@ -135,6 +135,9 @@ struct PluginState {
 struct PluginConfig {
     #[serde(default)]
     manifest_url: Option<String>,
+    /// 用户在首启窗口点了「稍后」，别再每次启动都弹
+    #[serde(default)]
+    setup_dismissed: bool,
 }
 
 /// 给前端用的插件视图（清单信息 + 本机安装状态合并后）。
@@ -156,6 +159,8 @@ pub struct PluginInfo {
     pub error: Option<String>,
     /// 渲染器插件提供的渲染后端键（设置里选的渲染器要能在这里找到才生效）。
     pub renderers: Vec<String>,
+    /// 属于「首启要装」的类别（渲染器 / 驱动 / 组件），设置页据此打「推荐」角标
+    pub recommended: bool,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -188,9 +193,16 @@ pub fn manifest_url(data_dir: &str) -> String {
 }
 
 pub fn set_manifest_url(data_dir: &str, url: &str) -> Result<(), String> {
-    let cfg = PluginConfig {
-        manifest_url: Some(url.trim().to_string()),
-    };
+    // 读-改-写：整体覆盖会把 setup_dismissed 这类同文件里的标记一起抹掉
+    let mut cfg = read_json::<PluginConfig>(&config_path(data_dir)).unwrap_or_default();
+    cfg.manifest_url = Some(url.trim().to_string());
+    write_json(&config_path(data_dir), &cfg)
+}
+
+/// 记下「首启准备」是否已被用户跳过。
+pub fn set_setup_dismissed(data_dir: &str, dismissed: bool) -> Result<(), String> {
+    let mut cfg = read_json::<PluginConfig>(&config_path(data_dir)).unwrap_or_default();
+    cfg.setup_dismissed = dismissed;
     write_json(&config_path(data_dir), &cfg)
 }
 
@@ -209,6 +221,105 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 pub fn device_abi() -> String {
     crate::java::get_device_arch().to_string()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 首启准备：自动补齐渲染器
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 首启要装的插件类别：渲染器 / 驱动 / 组件。
+///
+/// 前两类就是「用哪个渲染器」本身；**组件**（LWJGL 3.4 + SDL3 + spirv-cross）也得有 ——
+/// 它 47MB 是最重的一块，但 MC 26.x 走 SDL3 窗口层、zink 走 spirv-cross，而这两样都是
+/// 构建期产物、被 `.gitignore` 排除，release 包里并没有：不装的话那些版本照样起不来，
+/// 随包只剩 GL4ES 这一条老路。
+const RECOMMENDED_KINDS: &[&str] = &["renderer", "driver", "components"];
+
+/// 首启准备状态：还缺哪些、一共多大、用户跳过没有。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupStatus {
+    /// 还有缺的（前端据此决定弹不弹首启窗口）
+    pub needed: bool,
+    /// 用户点过「稍后」，别每次启动都弹
+    pub dismissed: bool,
+    pub missing: Vec<PluginInfo>,
+    /// 缺的那些加起来要下载多少字节
+    pub total_size: u64,
+    /// 清单拿不到时的说明（首启离线很常见，让前端能「重试 / 稍后」而不是卡在错误页）
+    pub error: Option<String>,
+}
+
+/// 一次「补齐首启插件」的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupResult {
+    pub plugins: Vec<PluginInfo>,
+    pub installed: usize,
+    /// 形如「MobileGlues：下载失败：…」
+    pub failed: Vec<String>,
+}
+
+/// 首启还缺哪些插件。
+pub async fn setup_status(data_dir: &str) -> SetupStatus {
+    let dismissed = read_json::<PluginConfig>(&config_path(data_dir))
+        .map(|c| c.setup_dismissed)
+        .unwrap_or(false);
+
+    if let Err(e) = fetch_manifest(data_dir, false).await {
+        return SetupStatus {
+            needed: false,
+            dismissed,
+            missing: Vec::new(),
+            total_size: 0,
+            error: Some(e),
+        };
+    }
+
+    let missing: Vec<PluginInfo> = list(data_dir)
+        .into_iter()
+        .filter(|p| p.recommended && p.abi_supported && p.installed_version.is_none())
+        .collect();
+    let total_size = missing.iter().filter_map(|p| p.size).sum();
+    SetupStatus {
+        needed: !missing.is_empty(),
+        dismissed,
+        missing,
+        total_size,
+        error: None,
+    }
+}
+
+/// 逐个装首启要装的插件（每个都会通过 `plugin://progress` 报进度）。
+///
+/// 单个失败不中断：网络抖一下很常见，让用户看到「装好了几个、哪个没成」比整体报错有用；
+/// 没装成的下次启动还会出现在待装清单里，也能去「设置 → 插件」手动补。
+pub async fn install_recommended(data_dir: &str) -> Result<SetupResult, String> {
+    let status = setup_status(data_dir).await;
+    if let Some(err) = status.error {
+        return Err(err);
+    }
+
+    let mut failed: Vec<String> = Vec::new();
+    let mut installed = 0usize;
+    for item in &status.missing {
+        match install(data_dir, &item.id).await {
+            Ok(()) => installed += 1,
+            Err(e) => {
+                crate::util::log_line(&format!("首启安装插件「{}」失败：{e}", item.id));
+                failed.push(format!("{}：{e}", item.name));
+            }
+        }
+    }
+    crate::util::log_line(&format!(
+        "首启准备：装了 {installed} 个插件，{} 个失败",
+        failed.len()
+    ));
+    Ok(SetupResult {
+        plugins: list(data_dir),
+        installed,
+        failed,
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -338,6 +449,7 @@ pub fn list(data_dir: &str) -> Vec<PluginInfo> {
                 source: state.as_ref().map(|s| s.source.clone()),
                 error: None,
                 renderers: spec.renderers.clone(),
+                recommended: RECOMMENDED_KINDS.contains(&spec.kind.as_str()),
             });
         }
     }
@@ -371,6 +483,8 @@ pub fn list(data_dir: &str) -> Vec<PluginInfo> {
                 source: Some(state.source.clone()),
                 error: None,
                 renderers: Vec::new(),
+                // 清单里没有的（本地 zip 装的）谈不上「首启要装」
+                recommended: false,
             });
         }
     }

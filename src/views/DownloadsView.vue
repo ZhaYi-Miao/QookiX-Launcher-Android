@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
@@ -35,7 +36,7 @@ async function cancelTask(t: TaskEntry) {
   cancellingIds.value = [...cancellingIds.value, t.id];
   try {
     await api.cancelInstall(t.id);
-    message.info("已请求取消，当前文件会立即停下");
+    message.info($t("downloads.cancel-requested"));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -59,27 +60,27 @@ watch(activeTab, () => nextTick(() => refreshTabIndicator()));
 watch([() => activeTasks.value.length, () => finishedTasks.value.length], () => nextTick(() => snapTabIndicator()));
 
 const STAGE_LABELS: Record<string, string> = {
-  manifest: "获取版本信息",
-  client: "游戏客户端",
-  libraries: "依赖库",
-  natives: "解压运行库",
-  assets: "资源文件",
-  logging: "日志配置",
-  loader: "加载器",
-  content: "内容下载",
-  modpack: "整合包下载",
-  "modpack-install": "写入整合包",
-  runtime: "Java 运行时",
-  done: "完成",
-  prepare: "准备中",
-  download: "下载",
-  extract: "解压",
-  verify: "校验",
-  install: "安装",
-  fetch: "获取",
-  resolve: "解析依赖",
-  copy: "复制文件",
-  write: "写入文件",
+  manifest: $t("downloads.manifest"),
+  client: $t("downloads.client"),
+  libraries: $t("downloads.libraries"),
+  natives: $t("downloads.natives"),
+  assets: $t("downloads.assets"),
+  logging: $t("downloads.logging"),
+  loader: $t("browse.loader"),
+  content: $t("downloads.content-download"),
+  modpack: $t("downloads.modpack"),
+  "modpack-install": $t("downloads.modpack-install"),
+  runtime: $t("downloads.runtime"),
+  done: $t("common.done"),
+  prepare: $t("downloads.prepare"),
+  download: $t("downloads.download"),
+  extract: $t("downloads.extract"),
+  verify: $t("downloads.verify"),
+  install: $t("common.install"),
+  fetch: $t("downloads.fetch"),
+  resolve: $t("downloads.resolving-deps"),
+  copy: $t("create-instance.copy"),
+  write: $t("downloads.write"),
 };
 
 function stageLabel(t: TaskEntry) {
@@ -98,8 +99,8 @@ function downloadPct(t: TaskEntry) {
 }
 
 function statusText(t: TaskEntry) {
-  if (t.finished) return t.ok === false ? "失败" : "完成";
-  return "进行中";
+  if (t.finished) return t.ok === false ? $t("first-run-setup.failed") : $t("common.done");
+  return $t("downloads.in-progress");
 }
 
 function toggle(t: TaskEntry) {
@@ -285,17 +286,15 @@ function onExpandLeave(el: Element, done: () => void) {
   <div class="dl-view">
     <div ref="tabBox" class="tabs">
       <div class="indicator" :style="tabIndicatorStyle"></div>
-      <button :class="{ active: activeTab === 'active' }" @click="activeTab = 'active'">
-        进行中 <span v-if="activeTasks.length" class="tab-count">{{ activeTasks.length }}</span>
+      <button :class="{ active: activeTab === 'active' }" @click="activeTab = 'active'">{{ $t("downloads.in-progress") }}<span v-if="activeTasks.length" class="tab-count">{{ activeTasks.length }}</span>
       </button>
-      <button :class="{ active: activeTab === 'finished' }" @click="activeTab = 'finished'">
-        已完成 <span v-if="finishedTasks.length" class="tab-count">{{ finishedTasks.length }}</span>
+      <button :class="{ active: activeTab === 'finished' }" @click="activeTab = 'finished'">{{ $t("downloads.finished") }}<span v-if="finishedTasks.length" class="tab-count">{{ finishedTasks.length }}</span>
       </button>
     </div>
 
     <div v-if="!visibleTasks.length" class="empty glass">
       <div class="empty-icon"><IconDownload /></div>
-      <p>{{ activeTab === 'active' ? '暂无进行中的任务' : '没有已完成的任务' }}</p>
+      <p>{{ activeTab === 'active' ? $t('downloads.no-active') : $t('downloads.no-finished') }}</p>
     </div>
 
     <div v-else class="task-list">
@@ -315,12 +314,10 @@ function onExpandLeave(el: Element, done: () => void) {
                 v-if="t.instanceName && !isModpackTask(t)"
                 class="meta-item"
                 :class="instanceReady(t) ? 'link' : 'pending'"
-                :title="instanceReady(t) ? '跳转到该实例' : '实例正在创建/安装，完成后才能跳转'"
+                :title="instanceReady(t) ? $t('downloads.goto-instance') : $t('downloads.not-ready-hint')"
                 @click.stop="gotoInstance(t)"
-              >
-                目标实例：{{ t.instanceName }}
-                <IconChevronRight v-if="instanceReady(t)" />
-                <span v-else class="pending-tag">创建中</span>
+              >{{ $t("downloads.target-instance", { p1: t.instanceName }) }}<IconChevronRight v-if="instanceReady(t)" />
+                <span v-else class="pending-tag">{{ $t("downloads.creating") }}</span>
               </span>
               <span class="meta-item">{{ stageLabel(t) }}</span>
             </div>
@@ -329,10 +326,10 @@ function onExpandLeave(el: Element, done: () => void) {
             <template v-if="t.activity === 'download' && !t.finished">
               <div class="speed">{{ fmtSpeed(t.speed) }}</div>
               <div v-if="t.fraction != null" class="stage">{{ Math.round(t.fraction * 100) }}%</div>
-              <div v-else class="stage">{{ t.fileDone }} / {{ t.fileTotal }} 个文件</div>
+              <div v-else class="stage">{{ $t("downloads.files-progress", { p1: t.fileDone, p2: t.fileTotal }) }}</div>
             </template>
             <template v-else-if="!t.finished">
-              <div class="stage install">安装阶段</div>
+              <div class="stage install">{{ $t("downloads.install-stage") }}</div>
               <div v-if="t.stepTotal" class="stage">{{ t.stepDone }} / {{ t.stepTotal }}</div>
             </template>
             <!-- 取消：以前这里**没有任何取消入口**，进行中的任务只能等它自己跑完
@@ -343,7 +340,7 @@ function onExpandLeave(el: Element, done: () => void) {
               :disabled="cancellingIds.includes(t.id)"
               @click.stop="cancelTask(t)"
             >
-              <IconClose /> {{ cancellingIds.includes(t.id) ? "取消中" : "取消" }}
+              <IconClose /> {{ cancellingIds.includes(t.id) ? $t('downloads.cancelling') : $t('common.cancel') }}
             </button>
           </div>
         </div>
@@ -363,7 +360,7 @@ function onExpandLeave(el: Element, done: () => void) {
           </div>
           <div class="bar-info">
             <span v-if="t.fraction != null">{{ Math.round(t.fraction * 100) }}%</span>
-            <span v-else>{{ t.fileDone }} / {{ t.fileTotal }} 个文件</span>
+            <span v-else>{{ $t("downloads.files-progress", { p1: t.fileDone, p2: t.fileTotal }) }}</span>
             <span v-if="t.bytesTotal">
               {{ fmtBytes(t.bytesDone) }} / {{ fmtBytes(t.bytesTotal) }}
             </span>
@@ -394,15 +391,15 @@ function onExpandLeave(el: Element, done: () => void) {
           <div v-if="expanded.has(t.id)" class="task-detail-wrap">
             <div class="task-detail">
               <div class="detail-row">
-                <span class="dl-label">正在下载</span>
-                <span class="dl-value">{{ t.activeFiles.length }} 个文件</span>
+                <span class="dl-label">{{ $t("downloads.downloading") }}</span>
+                <span class="dl-value">{{ $t("downloads.files-count", { p1: t.activeFiles.length }) }}</span>
               </div>
               <div class="detail-row">
-                <span class="dl-label">平均速度</span>
+                <span class="dl-label">{{ $t("downloads.avg-speed") }}</span>
                 <span class="dl-value">{{ fmtSpeed(t.speed) }}</span>
               </div>
               <div v-if="t.files.length || t.activeFiles.length" class="detail-row files">
-                <span class="dl-label">文件明细</span>
+                <span class="dl-label">{{ $t("downloads.file-details") }}</span>
                 <div class="dl-files">
                   <div v-for="(f, i) in t.activeFiles" :key="'a'+i" class="file-current">
                     <div class="file-current-row">

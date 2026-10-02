@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { listen } from "@tauri-apps/api/event";
 
@@ -23,7 +24,7 @@ onMounted(async () => {
   unlistenLog = await listen<{ line: string }>("launch://log", () => {
     if (!visible.value || done.value) return;
     done.value = true;
-    step.value = "启动成功";
+    step.value = $t("launch-progress.listen");
     progress.value = 100;
     doneTimer = setTimeout(() => {
       visible.value = false;

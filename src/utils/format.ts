@@ -8,6 +8,7 @@
  *   `import { fmtBytes, fmtTimeMs as fmtTime } from "../utils/format";`
  */
 
+import { t as $t } from "../i18n";
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 // ---------------------------------------------------------------- 尺寸 ----
@@ -87,25 +88,25 @@ export function fmtRelative(s: string): string {
   if (isNaN(d.getTime())) return "";
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
-  if (diffMs < 0) return "刚刚";
+  if (diffMs < 0) return $t("instance-card.just-now");
   const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return "刚刚";
-  if (diffMin < 60) return `${diffMin} 分钟前`;
+  if (diffMin < 1) return $t("instance-card.just-now");
+  if (diffMin < 60) return $t("instance-card.minutes-ago", { p1: diffMin });
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const dayDiff = Math.floor((today.getTime() - target.getTime()) / 86400000);
   const diffHour = Math.floor(diffMs / 3600000);
-  if (dayDiff === 0) return `${diffHour} 小时前`;
-  if (dayDiff === 1) return "昨天";
-  if (dayDiff === 2) return "前天";
-  if (dayDiff < 7) return `${dayDiff} 天前`;
+  if (dayDiff === 0) return $t("instance-card.hours-ago", { p1: diffHour });
+  if (dayDiff === 1) return $t("instance-card.yesterday");
+  if (dayDiff === 2) return $t("instance-card.day-before-yesterday");
+  if (dayDiff < 7) return $t("instance-card.days-ago", { p1: dayDiff });
   const monthDiff = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
-  if (monthDiff <= 0) return `${dayDiff} 天前`;
-  if (monthDiff === 1) return "上个月";
-  if (monthDiff < 12) return `${monthDiff} 个月前`;
+  if (monthDiff <= 0) return $t("instance-card.days-ago", { p1: dayDiff });
+  if (monthDiff === 1) return $t("utils.format.last-month");
+  if (monthDiff < 12) return $t("utils.format.months-ago", { p1: monthDiff });
   const yearDiff = now.getFullYear() - d.getFullYear();
-  if (yearDiff === 1) return "去年";
-  return `${yearDiff} 年前`;
+  if (yearDiff === 1) return $t("utils.format.last-year");
+  return $t("utils.format.years-ago", { p1: yearDiff });
 }
 
 // ---------------------------------------------------------------- 网络 ----
@@ -133,9 +134,9 @@ export function fmtCount(n: number): string {
 
 /** 秒数 → "12.5 小时" / "45 分钟" / "30 秒"（游玩时长口径） */
 export function fmtDuration(sec: number): string {
-  if (sec >= 3600) return (sec / 3600).toFixed(1) + " 小时";
-  if (sec >= 60) return Math.round(sec / 60) + " 分钟";
-  return `${Math.round(sec)} 秒`;
+  if (sec >= 3600) return (sec / 3600).toFixed(1) + $t("utils.format.hours-unit");
+  if (sec >= 60) return Math.round(sec / 60) + $t("utils.format.minutes-unit");
+  return $t("utils.format.seconds", { p1: Math.round(sec) });
 }
 
 // ---------------------------------------------------------------- 实例 ----
@@ -153,6 +154,6 @@ export function instanceLabel(i: { name: string; mc_version: string; loader: str
 /** 加载器徽标文字：vanilla → 原版，其余首字母大写（Forge/Fabric/…） */
 export function loaderBadge(loader: string): string {
   return loader === "vanilla"
-    ? "原版"
+    ? $t("utils.categories.vanilla")
     : loader.charAt(0).toUpperCase() + loader.slice(1);
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { NButton, NDrawer, NDrawerContent, NInput, NSelect, useMessage, type SelectOption } from "naive-ui";
@@ -9,11 +10,14 @@ import SimplePagination from "../components/SimplePagination.vue";
 import {
   IconAlignJustify,
   IconClose,
+  IconGlobe,
   IconGrid,
   IconList,
   IconSearch,
   IconSliders,
 } from "../components/icons";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useSettingsStore } from "../stores/settings";
 import { cnCfName, CN_CATS } from "../utils/categories";
 import { cacheGet, cacheSet } from "../utils/cache";
 import { instanceLabel } from "../utils/format";
@@ -39,7 +43,7 @@ const loader = ref("");
 const showFilter = ref(false);
 const versionOptions = ref<{ label: string; value: string }[]>([]);
 const loaderOptions = [
-  { label: "全部加载器", value: "" },
+  { label: $t("browse.all-loaders"), value: "" },
   { label: "Fabric", value: "fabric" },
   { label: "Forge", value: "forge" },
   { label: "NeoForge", value: "neoforge" },
@@ -47,7 +51,7 @@ const loaderOptions = [
 ];
 // 来源 / 排序 / 每页数量 / 视图
 const providerOptions = [
-  { label: "全部来源", value: "all" },
+  { label: $t("browse.all"), value: "all" },
   { label: "Modrinth", value: "modrinth" },
   { label: "CurseForge", value: "curseforge" },
 ];
@@ -55,24 +59,24 @@ const sort = ref("downloads");
 const pageSize = ref(20);
 const view = ref<"grid" | "list" | "compact">("grid");
 const sortOptions = [
-  { label: "下载量", value: "downloads" },
-  { label: "相关度", value: "relevance" },
-  { label: "收藏数", value: "follows" },
-  { label: "最新发布", value: "newest" },
-  { label: "最近更新", value: "updated" },
+  { label: $t("browse.downloads"), value: "downloads" },
+  { label: $t("browse.relevance"), value: "relevance" },
+  { label: $t("browse.follows"), value: "follows" },
+  { label: $t("browse.newest"), value: "newest" },
+  { label: $t("browse.updated"), value: "updated" },
 ];
 const pageSizeOptions = [
-  { label: "20 条 / 页", value: 20 },
-  { label: "40 条 / 页", value: 40 },
-  { label: "60 条 / 页", value: 60 },
+  { label: $t("browse.page-size-20"), value: 20 },
+  { label: $t("browse.page-size-40"), value: 40 },
+  { label: $t("browse.page-size-60"), value: 60 },
 ];
 
 const types = [
-  { key: "mod", label: "模组" },
-  { key: "modpack", label: "整合包" },
-  { key: "resourcepack", label: "资源包" },
-  { key: "shader", label: "光影" },
-  { key: "datapack", label: "数据包" },
+  { key: "mod", label: $t("browse.mods") },
+  { key: "modpack", label: $t("instance-content.modpack") },
+  { key: "resourcepack", label: $t("browse.group") },
+  { key: "shader", label: $t("utils.categories.shader") },
+  { key: "datapack", label: $t("browse.datapack") },
 ];
 
 const modrinthCategories: Record<string, string[]> = {
@@ -87,11 +91,112 @@ const catOptions = ref<{ label: string; value: string }[]>([]);
 const installTarget = ref<ProjectHit | null>(null);
 const showInstall = ref(false);
 
+// ---- 描述翻译：整页一起翻 ----
+// 翻译服务有批量接口（一次最多 5 个、同一平台、按条数扣额度），所以这里按来源
+// 分组后 5 条一批地翻，而不是一张张点。译文只放内存：换搜索词/刷新就没了，
+// 免得和新一页的结果错位。
+const settingsStore = useSettingsStore();
+const showZh = ref(false); // 页面是否显示译文
+const translatingPage = ref(false); // 整页翻译进行中
+const pendingSlugs = ref<string[]>([]); // 本批还在翻的项目（卡片显示骨架）
+const translatedDescs = ref<Record<string, string>>({});
+
+function openBaiduByText(text: string) {
+  const q = encodeURIComponent(text);
+  openUrl(`https://fanyi.baidu.com/mtpe-individual/transText?query=${q}&lang=en2zh`).catch(() =>
+    message.error($t("install-dialog.open-browser-failed"))
+  );
+}
+
+async function translatePage() {
+  if (translatingPage.value) return;
+  const list = results.value;
+  if (!list.length) return;
+
+  // 百度网页模式没有批量接口，只能一条条开浏览器
+  const service = settingsStore.settings?.translate_provider ?? "default";
+  if (service === "baidu_web") {
+    const first = list[0];
+    openBaiduByText(first.description || first.title);
+    message.info($t("browse.baidu-page-hint"));
+    return;
+  }
+
+  // 按来源分组：批量接口一批只能带一个平台
+  const groups = new Map<string, string[]>();
+  for (const p of list) {
+    if (translatedDescs.value[p.id]) continue; // 已有译文的不用再翻
+    const ids = groups.get(p.provider) ?? [];
+    ids.push(p.id);
+    groups.set(p.provider, ids);
+  }
+  showZh.value = true;
+  if (!groups.size) return;
+
+  translatingPage.value = true;
+  pendingSlugs.value = [...groups.values()].flat();
+
+  let rateLimited = false;
+  let firstError = "";
+  for (const [provider, ids] of groups) {
+    if (rateLimited) break;
+    for (let i = 0; i < ids.length; i += 5) {
+      const chunk = ids.slice(i, i + 5);
+      try {
+        const r = await api.translateModDescriptions(provider, chunk);
+        translatedDescs.value = { ...translatedDescs.value, ...r.translations };
+        if (r.rateLimited) {
+          rateLimited = true;
+          firstError = firstError || $t("browse.translate-busy");
+        } else if (r.error) {
+          firstError = firstError || r.error;
+        }
+      } catch (e) {
+        firstError = firstError || String(e);
+      }
+      pendingSlugs.value = pendingSlugs.value.filter((s) => !chunk.includes(s));
+      // 限流是按 IP 算的，继续打只会更糟
+      if (rateLimited) break;
+    }
+  }
+
+  pendingSlugs.value = [];
+  translatingPage.value = false;
+
+  // 批量接口按条数扣额度（30 条/分），一页 20 条可能翻不完：
+  // 已翻过的会被跳过，所以让用户再点一次「翻译本页」就能接着补。
+  const total = list.length;
+  const got = list.filter((p) => translatedDescs.value[p.id]).length;
+  if (got === 0) {
+    showZh.value = false;
+    message.warning(firstError || $t("browse.no-translations"));
+    return;
+  }
+  if (got < total) {
+    message.warning(
+      $t("browse.translated-progress", { p1: got, p2: total, p3: rateLimited ? $t("browse.fu-wu-xian-liu") : "" })
+    );
+  }
+}
+
+function togglePageTranslate() {
+  if (showZh.value) {
+    showZh.value = false;
+    return;
+  }
+  void translatePage();
+}
+
+// 开着译文时翻页/换搜索词，新一页自动跟上（仍是每页一次批量）
+watch(results, () => {
+  if (showZh.value) void translatePage();
+});
+
 // 实例选择：非整合包类型下可选择实例，自动筛选游戏版本和加载器
 const instances = ref<Instance[]>([]);
 const selectedInstanceId = ref<string | null>(null);
 const instanceOptions = computed(() => [
-  { label: "不关联实例", value: "" },
+  { label: $t("browse.no-instance"), value: "" },
   ...instances.value.map((i) => ({
     label: instanceLabel(i),
     value: i.id,
@@ -231,24 +336,24 @@ async function loadVersions() {
       .map((v) => v.id)
       .slice(0, 40);
     versionOptions.value = [
-      { label: "全部版本", value: "" },
+      { label: $t("browse.all-versions"), value: "" },
       ...ids.map((id) => ({ label: id, value: id })),
     ];
     cacheSet(cacheKey, versionOptions.value, 10 * 60 * 1000);
   } catch {
-    versionOptions.value = [{ label: "全部版本", value: "" }];
+    versionOptions.value = [{ label: $t("browse.all-versions"), value: "" }];
   }
 }
 
 function rebuildOptions() {
   if (provider.value === "all" || provider.value === "modrinth") {
     catOptions.value = (modrinthCategories[type.value] ?? []).map((c) => ({
-      label: c ? CN_CATS[c] ?? c : "全部分类",
+      label: c ? CN_CATS[c] ?? c : $t("browse.all-categories"),
       value: c,
     }));
   } else {
     catOptions.value = [
-      { label: "全部分类", value: "" },
+      { label: $t("browse.all-categories"), value: "" },
       ...cfCategories.value.map((c) => ({ label: cnCfName(c.name), value: String(c.id) })),
     ];
   }
@@ -420,7 +525,7 @@ onMounted(async () => {
         <n-input
           v-model:value="query"
           class="search-box"
-          placeholder="搜索内容…（如 sodium / iris / 某整合包）"
+          :placeholder="$t('browse.search-placeholder')"
         >
           <template #prefix><IconSearch /></template>
         </n-input>
@@ -433,7 +538,7 @@ onMounted(async () => {
           :style="{ width: instanceSelectWidth + 'px' }"
           filterable
           :filter="filterInstance"
-          placeholder="搜索实例名 / 版本 / 加载器"
+          :placeholder="$t('browse.search-instances')"
         />
       </div>
       <div class="toolbar-row">
@@ -451,12 +556,19 @@ onMounted(async () => {
         />
         <div ref="viewBox" class="view-switch">
           <div class="indicator" :style="viewIndicatorStyle"></div>
-          <button :class="{ active: view === 'grid' }" title="网格" aria-label="网格" @click="view = 'grid'"><IconGrid /></button>
-          <button :class="{ active: view === 'list' }" title="列表" aria-label="列表" @click="view = 'list'"><IconList /></button>
-          <button :class="{ active: view === 'compact' }" title="紧凑列表" aria-label="紧凑列表" @click="view = 'compact'"><IconAlignJustify /></button>
+          <button :class="{ active: view === 'grid' }" :title="$t('browse.grid')" :aria-label="$t('browse.grid')" @click="view = 'grid'"><IconGrid /></button>
+          <button :class="{ active: view === 'list' }" :title="$t('browse.list')" :aria-label="$t('browse.list')" @click="view = 'list'"><IconList /></button>
+          <button :class="{ active: view === 'compact' }" :title="$t('browse.compact-list')" :aria-label="$t('browse.compact-list')" @click="view = 'compact'"><IconAlignJustify /></button>
         </div>
         <button class="filter-btn" :class="{ on: hasFilter }" @click="showFilter = true">
-          <IconSliders /> 筛选
+          <IconSliders />{{ $t("browse.filter") }}</button>
+        <button
+          class="filter-btn"
+          :class="{ on: showZh }"
+          :disabled="translatingPage"
+          @click="togglePageTranslate"
+        >
+          <IconGlobe /> {{ translatingPage ? $t('install-dialog.translating') : showZh ? $t('install-dialog.show-source') : $t('browse.translate-page') }}
         </button>
         <n-select
           v-model:value="provider"
@@ -468,43 +580,33 @@ onMounted(async () => {
     </div>
 
     <div v-if="hasFilter" class="filter-tags glass">
-      <span v-if="gameVersion" class="ftag">
-        版本 {{ gameVersion }}
-        <button class="ftag-x" title="移除" aria-label="移除" @click="gameVersion = ''"><IconClose /></button>
+      <span v-if="gameVersion" class="ftag">{{ $t("browse.version-filter", { p1: gameVersion }) }}<button class="ftag-x" :title="$t('account-chip.positive-text')" :aria-label="$t('account-chip.positive-text')" @click="gameVersion = ''"><IconClose /></button>
       </span>
-      <span v-if="loader" class="ftag">
-        加载器 {{ loaderLabel(loader) }}
-        <button class="ftag-x" title="移除" aria-label="移除" @click="loader = ''"><IconClose /></button>
+      <span v-if="loader" class="ftag">{{ $t("browse.loader-filter", { p1: loaderLabel(loader) }) }}<button class="ftag-x" :title="$t('account-chip.positive-text')" :aria-label="$t('account-chip.positive-text')" @click="loader = ''"><IconClose /></button>
       </span>
-      <span v-if="category" class="ftag">
-        分类 {{ catLabel(category) }}
-        <button class="ftag-x" title="移除" aria-label="移除" @click="category = ''"><IconClose /></button>
+      <span v-if="category" class="ftag">{{ $t("browse.category-filter", { p1: catLabel(category) }) }}<button class="ftag-x" :title="$t('account-chip.positive-text')" :aria-label="$t('account-chip.positive-text')" @click="category = ''"><IconClose /></button>
       </span>
-      <button class="ftag ftag-clear" @click="resetFilters">清除全部</button>
+      <button class="ftag ftag-clear" @click="resetFilters">{{ $t("browse.clear-all") }}</button>
     </div>
 
-    <div v-if="provider === 'curseforge' && !cfCategories.length && !loading" class="cf-hint glass">
-      CurseForge 需要 API Key。请前往
-      <a href="https://console.curseforge.com" target="_blank">console.curseforge.com</a>
-      免费申请，并在 <router-link to="/settings">设置</router-link> 中填写。
-    </div>
+    <div v-if="provider === 'curseforge' && !cfCategories.length && !loading" class="cf-hint glass">{{ $t("browse.cf-key-needed") }}<a href="https://console.curseforge.com" target="_blank">console.curseforge.com</a>{{ $t("browse.cf-get-key") }}<router-link to="/settings">{{ $t("router.settings") }}</router-link>{{ $t("browse.cf-fill-in") }}</div>
 
-    <div v-if="provider === 'all' && cfError && !loading" class="cf-hint glass">
-      CurseForge 来源加载失败：{{ cfError }}。请前往 <router-link to="/settings">设置</router-link> 检查 API Key。
-    </div>
+    <div v-if="provider === 'all' && cfError && !loading" class="cf-hint glass">{{ $t("browse.cf-load-failed", { p1: cfError }) }}<router-link to="/settings">{{ $t("router.settings") }}</router-link>{{ $t("browse.check-api-key") }}</div>
 
     <!-- 结果区自己滚：类型卡/工具栏/筛选/分页器保持固定，只有列表滑动 -->
 
     <div class="browse-body">
 
-    <div v-show="loading" class="center">搜索中…</div>
-    <div v-show="!loading && !results.length" class="center">没有找到相关内容</div>
+    <div v-show="loading" class="center">{{ $t("browse.searching") }}</div>
+    <div v-show="!loading && !results.length" class="center">{{ $t("browse.no-results") }}</div>
     <div v-show="!loading && results.length" class="grid" :class="`view-${view}`">
       <ProjectCard
         v-for="p in results"
         :key="p.provider + p.id"
         :project="p"
         :view="view"
+        :translating="pendingSlugs.includes(p.id)"
+        :translated-desc="showZh ? (translatedDescs[p.id] ?? null) : null"
         @install="openInstall"
       />
     </div>
@@ -512,7 +614,7 @@ onMounted(async () => {
     </div>
 
     <div v-if="total > 20" class="pager">
-      <span class="pager-total">共 {{ total }} 条</span>
+      <span class="pager-total">{{ $t("browse.total-count", { p1: total }) }}</span>
       <SimplePagination
         :page="page + 1"
         :page-count="pageCount"
@@ -522,13 +624,13 @@ onMounted(async () => {
     </div>
 
     <n-drawer v-model:show="showFilter" :width="330" placement="right">
-      <n-drawer-content title="筛选" closable>
+      <n-drawer-content :title="$t('browse.filter')" closable>
         <div class="filter-group">
-          <label>游戏版本</label>
+          <label>{{ $t("browse.game-version") }}</label>
           <n-select v-model:value="gameVersion" :options="displayVersionOptions" size="small" />
         </div>
         <div v-if="showLoaderFilter" class="filter-group">
-          <label>加载器</label>
+          <label>{{ $t("browse.loader") }}</label>
           <div class="filter-chips">
             <button
               v-for="opt in loaderOptions"
@@ -540,7 +642,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="filter-group">
-          <label>类别</label>
+          <label>{{ $t("browse.category") }}</label>
           <div class="filter-chips">
             <button
               v-for="opt in catOptions"
@@ -550,11 +652,11 @@ onMounted(async () => {
               @click="category = opt.value"
             >{{ opt.label }}</button>
           </div>
-          <p v-if="provider === 'all'" class="filter-hint">全部来源下分类按 Modrinth 筛选，CurseForge 结果不受分类影响</p>
+          <p v-if="provider === 'all'" class="filter-hint">{{ $t("browse.category-note") }}</p>
         </div>
         <div class="filter-actions">
-          <n-button size="small" @click="resetFilters">重置</n-button>
-          <n-button size="small" type="primary" @click="showFilter = false">完成</n-button>
+          <n-button size="small" @click="resetFilters">{{ $t("browse.reset") }}</n-button>
+          <n-button size="small" type="primary" @click="showFilter = false">{{ $t("common.done") }}</n-button>
         </div>
       </n-drawer-content>
     </n-drawer>
