@@ -505,6 +505,16 @@ textarea.text-input {
      就必须把高度放开，否则第二行会**压在下面内容上**（实测：窄卡片/高缩放时
      「自定义」折行叠在 2048 MB 那行字上）。 */
   height: auto;
+  /* 手机：三个档位等宽铺满一行，且按钮高度给到触控标准
+     （原来按内容宽度排、只有 ~28px 高，手指点不准） */
+  width: 100%;
+}
+.mem-modes :deep(.n-radio-button) {
+  flex: 1;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .mem-mode {
   display: inline-flex;
@@ -664,5 +674,9 @@ textarea.text-input {
   font-size: 12px;
   color: var(--text-3);
   margin-top: 4px;
+}
+/* 手机底线：这张卡里的所有 naive 按钮都抬到可点高度（别名增删、重命名等小按钮） */
+.set-card :deep(.n-button) {
+  min-height: 38px;
 }
 </style>

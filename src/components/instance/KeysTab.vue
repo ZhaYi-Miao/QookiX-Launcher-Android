@@ -6,6 +6,8 @@ import { api } from "../../api";
 import type { ControlLayoutInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
 import AppInput from "../../ui/AppInput.vue";
+import AppPopup from "../../ui/AppPopup.vue";
+import { IconCopy, IconEdit, IconMoreVertical, IconTrash } from "../icons";
 
 // 手机端的「按键」= 屏幕上的触控控制层。布局文件放在 <files>/controlmap/，
 // **全局共享、不区分实例**（所以这里不按实例过滤），当前生效的那份由 pojav 偏好
@@ -20,6 +22,16 @@ const dialog = useDialog();
 const layouts = ref<ControlLayoutInfo[]>([]);
 const loading = ref(false);
 const busy = ref("");
+/** 布局操作面板的目标（手机：行内只留主操作，其余进底部清单） */
+const kTarget = ref<string | null>(null);
+
+/** 面板动作统一包装：先收起面板再执行 */
+function runK(fn: () => unknown) {
+  const name = kTarget.value;
+  kTarget.value = null;
+  if (!name) return;
+  void fn();
+}
 
 const currentLayout = computed(() => layouts.value.find((l) => l.current) ?? null);
 
@@ -169,17 +181,15 @@ function fmtTime(sec: number): string {
             {{ $t("instance-keys.stats-b", { p1: l.buttons, p2: l.joysticks, p3: l.drawers, p4: fmtSize(l.size), p5: fmtTime(l.modified) }) }}
           </div>
         </div>
+        <!-- 手机：行内只留「设为当前」（主操作），复制/重命名/删除收进更多面板。
+             原来 4 个 tiny 按钮并排，在竖屏里每个只剩 ~30px 宽，手指根本点不准。 -->
         <div class="k-actions">
-          <n-button v-if="!l.current" size="tiny" :disabled="!!busy" @click="setCurrent(l.name)">{{ $t("instance-keys.set-current") }}</n-button>
-          <n-button size="tiny" :disabled="!!busy" @click="duplicate(l.name)">{{ $t("common.copy") }}</n-button>
-          <n-button size="tiny" :disabled="!!busy" @click="openRename(l.name)">{{ $t("common.rename") }}</n-button>
-          <n-button
-            size="tiny"
-            type="error"
-            ghost
-            :disabled="!!busy || l.name === 'default'"
-            @click="remove(l.name)"
-          >{{ $t("common.delete") }}</n-button>
+          <button v-if="!l.current" class="k-set" :disabled="!!busy" @click.stop="setCurrent(l.name)">
+            {{ $t("instance-keys.set-current") }}
+          </button>
+          <button class="k-more" :aria-label="$t('common.rename')" @click.stop="kTarget = l.name">
+            <IconMoreVertical />
+          </button>
         </div>
       </div>
     </div>
@@ -196,6 +206,31 @@ function fmtTime(sec: number): string {
         <n-button type="primary" @click="submitRename">{{ $t("file-manager.ok") }}</n-button>
       </div>
     </app-sheet>
+
+    <!-- 布局操作面板（手机形态） -->
+    <app-popup
+      :show="kTarget !== null"
+      position="bottom"
+      round
+      @update:show="(v: boolean) => { if (!v) kTarget = null; }"
+    >
+      <div v-if="kTarget" class="k-panel">
+        <div class="k-panel-title text-ellipsis">{{ kTarget }}</div>
+        <button class="k-act" :disabled="!!busy" @click="runK(() => duplicate(kTarget!))">
+          <IconCopy />{{ $t("common.copy") }}
+        </button>
+        <button class="k-act" :disabled="!!busy" @click="runK(() => openRename(kTarget!))">
+          <IconEdit />{{ $t("common.rename") }}
+        </button>
+        <button
+          class="k-act danger"
+          :disabled="!!busy || kTarget === 'default'"
+          @click="runK(() => remove(kTarget!))"
+        >
+          <IconTrash />{{ $t("common.delete") }}
+        </button>
+      </div>
+    </app-popup>
   </div>
 </template>
 
@@ -323,5 +358,71 @@ function fmtTime(sec: number): string {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 14px;
+}
+/* ── 手机形态：行内主操作 + 更多面板 ──────────────────────────── */
+.k-row {
+  min-height: 64px;
+}
+.k-set {
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+.k-more {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+.k-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.k-panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.k-act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+.k-act.danger {
+  color: #e5534b;
+  border-color: rgba(229, 83, 75, 0.4);
+}
+.k-act:disabled {
+  opacity: 0.45;
+}
+/* 重命名弹层的两个键：通栏平分 */
+.rename-actions :deep(.n-button) {
+  flex: 1;
+  min-height: 44px;
 }
 </style>
