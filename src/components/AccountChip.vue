@@ -1,568 +1,190 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, reactive, ref, watch } from "vue";
-import { NButton, NPopover, useDialog, useMessage } from "naive-ui";
+import { computed, ref } from "vue";
+import { useMessage } from "naive-ui";
+import { Button as VanButton } from "vant";
 import { useAccountsStore } from "../stores/accounts";
-import { loadOfflineSkin } from "../composables/useOfflineSkin";
-import { api } from "../api";
-import MsLoginDialog from "./MsLoginDialog.vue";
-import { IconCheck, IconChevronDown, IconTrash, IconUser, IconPlus } from "./icons";
-import type { Account } from "../types";
-import AppSheet from "../ui/AppSheet.vue";
+import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
+import MsLoginDialog from "./MsLoginDialog.vue";
 
-const props = defineProps<{ collapsed?: boolean }>();
-
+/** 顶栏的账号入口（手机形态）：一行头像+用户名，点开是**底部弹层**的账号列表
+ *  —— 桌面的下拉气泡（n-popover）在手机上既难点又贴不住指头。 */
 const accounts = useAccountsStore();
 const message = useMessage();
-const dialog = useDialog();
-
-const popoverShow = ref(false);
-const showOfflineDialog = ref(false);
+const show = ref(false);
 const offlineName = ref("");
-const addingOffline = ref(false);
+const adding = ref(false);
 
-const offlineAvatarCache = reactive<Record<string, string>>({});
-const onlineAvatarCache = reactive<Record<string, string>>({});
-
-const AVATAR_SOURCES: Array<(uuid: string) => string> = [
-  (u) => `https://mc-heads.net/avatar/${u}/96`,
-  (u) => `https://minotar.net/helm/${u}/96`,
-  (u) => `https://crafatar.com/avatars/${u}?size=96&overlay`,
-];
-
-function loadOnlineAvatarCache(uuid: string) {
-  const cached = localStorage.getItem(`qookix:avatar:${uuid}`);
-  if (cached) onlineAvatarCache[uuid] = cached;
-}
-
-async function refreshOnlineAvatar(uuid: string, url: string) {
-  try {
-    const dataUrl = await api.fetchImageDataURL(url);
-    if (dataUrl) {
-      onlineAvatarCache[uuid] = dataUrl;
-      localStorage.setItem(`qookix:avatar:${uuid}`, dataUrl);
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-function skinToAvatar(skinDataUrl: string): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 8;
-      canvas.height = 8;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return resolve("");
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8); // 头部基础层
-      if (img.height >= 64) {
-        ctx.drawImage(img, 40, 8, 8, 8, 0, 0, 8, 8); // 头部第二层（overlay）
-      }
-      resolve(canvas.toDataURL("image/png"));
-    };
-    img.onerror = () => resolve("");
-    img.src = skinDataUrl;
-  });
-}
-
-function getOfflineAvatar(uuid: string): string {
-  return offlineAvatarCache[uuid] ?? "";
-}
-
-watch(
-  () => accounts.accounts.map((a) => `${a.uuid}:${a.type}`).join(","),
-  async () => {
-    for (const acc of accounts.accounts) {
-      if (acc.type === "offline" && !offlineAvatarCache[acc.uuid]) {
-        const skin = await loadOfflineSkin(acc.uuid);
-        if (skin) {
-          const avatar = await skinToAvatar(skin.src);
-          if (avatar) offlineAvatarCache[acc.uuid] = avatar;
-        }
-      }
-      if (acc.type === "microsoft") {
-        if (!onlineAvatarCache[acc.uuid]) loadOnlineAvatarCache(acc.uuid);
-        refreshOnlineAvatar(acc.uuid, AVATAR_SOURCES[0](acc.uuid));
-      }
-    }
-  },
-  { immediate: true },
-);
-
-watch(
-  () => accounts.avatarVersion,
-  async () => {
-    const cur = accounts.current;
-    if (cur && cur.type === "offline") {
-      const skin = await loadOfflineSkin(cur.uuid);
-      if (skin) {
-        const avatar = await skinToAvatar(skin.src);
-        if (avatar) offlineAvatarCache[cur.uuid] = avatar;
-      }
-    }
-    if (cur && cur.type === "microsoft") {
-      refreshOnlineAvatar(cur.uuid, AVATAR_SOURCES[0](cur.uuid));
-    }
-  },
-);
-
-watch(
-  () => accounts.msSuccess,
-  (msg) => {
-    if (msg) {
-      message.success(msg);
-      accounts.msSuccess = "";
-      popoverShow.value = true;
-    }
-  }
-);
-
-watch(
-  () => accounts.msFailed,
-  (msg) => {
-    if (msg) {
-      message.error(msg, { duration: 8000 });
-      accounts.msFailed = "";
-    }
-  }
-);
-
-watch(
-  () => accounts.showManager,
-  (v) => {
-    if (v) popoverShow.value = true;
-  }
-);
-
-watch(popoverShow, (v) => {
-  if (!v) accounts.showManager = false;
-});
 
 const current = computed(() => accounts.current);
+const AVATAR_SOURCES = [
+  (u: string) => `https://mc-heads.net/avatar/${u}/64`,
+  (u: string) => `https://crafatar.com/avatars/${u}?size=64&overlay`,
+  (u: string) => `https://minotar.net/helm/${u}/64`,
+];
+const attempt = ref(0);
 
-/** Number of failed providers per account uuid (drives the fallback chain). */
-const avatarAttempt = reactive<Record<string, number>>({});
+/** 头像 URL：多源依次回退（@error 时 attempt++） */
+const avatarUrl = computed(() => {
+  const u = current.value?.uuid;
+  if (!u || current.value?.type !== "microsoft" || attempt.value >= AVATAR_SOURCES.length) return null;
+  return AVATAR_SOURCES[attempt.value](u);
+});
 
-function avatar(uuid: string): string {
-  const offline = getOfflineAvatar(uuid);
-  if (offline) return offline;
-  const cached = onlineAvatarCache[uuid];
-  if (cached) return cached;
-  const i = avatarAttempt[uuid] ?? 0;
-  if (i < AVATAR_SOURCES.length) {
-    const base = AVATAR_SOURCES[i](uuid);
-    const sep = base.includes("?") ? "&" : "?";
-    return `${base}${sep}v=${accounts.avatarVersion}`;
+/** 离线账号显示名字首字（没有正版头像） */
+const initial = computed(() => (current.value?.username ?? "").slice(0, 1).toUpperCase());
+
+/** 切号：手机上切完就关弹层，不要留一层遮罩让人再点一次 */
+async function pick(uuid: string) {
+  try {
+    await accounts.select(uuid);
+    show.value = false;
+  } catch (e) {
+    message.error(String(e));
   }
-  return "";
-}
-
-function onAvatarError(uuid: string) {
-  const next = (avatarAttempt[uuid] ?? 0) + 1;
-  if (next <= AVATAR_SOURCES.length) avatarAttempt[uuid] = next;
-}
-
-async function select(acc: Account) {
-  await accounts.select(acc.uuid);
-  message.success($t("account-chip.playing-as", { p1: acc.username }));
-  popoverShow.value = false;
-}
-
-function openOfflineDialog() {
-  offlineName.value = "";
-  showOfflineDialog.value = true;
 }
 
 async function addOffline() {
-  const name = offlineName.value.trim();
-  if (!name) {
-    message.warning($t("account-chip.username-required"));
-    return;
-  }
-  addingOffline.value = true;
+  if (!offlineName.value.trim()) return;
+  adding.value = true;
   try {
-    await accounts.addOffline(name);
-    showOfflineDialog.value = false;
-    message.success($t("account-chip.offline-added"));
+    await accounts.addOffline(offlineName.value.trim());
+    offlineName.value = "";
+    message.success($t("account-chip.add"));
   } catch (e) {
     message.error(String(e));
   } finally {
-    addingOffline.value = false;
+    adding.value = false;
   }
-}
-
-async function startMs() {
-  popoverShow.value = false;
-  try {
-    await accounts.startMs();
-    if (accounts.msError) {
-      message.error(accounts.msError);
-      accounts.msError = "";
-    }
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-function remove(acc: Account) {
-  // 必须二次确认：移除按钮在手机上是**常显**的（触屏没有 hover），
-  // 又紧贴「切换账号」的整行点击区，误触一次正版账号就得重走微软登录。
-  dialog.warning({
-    title: $t("account-chip.remove-account"),
-    content: $t("account-chip.remove-confirm", { p1: acc.username, p2: acc.type === "microsoft" ? $t("account-chip.relogin-needed") : "" }),
-    positiveText: $t("account-chip.positive-text"),
-    negativeText: $t("common.cancel"),
-    onPositiveClick: () => {
-      accounts
-        .remove(acc.uuid)
-        .then(() => message.success($t("account-chip.account-removed")))
-        .catch((e) => message.error(String(e)));
-    },
-  });
-}
-
-function typeLabel(a: Account) {
-  return a.type === "microsoft" ? $t("account-chip.premium") : $t("account-chip.offline");
 }
 </script>
 
 <template>
-  <n-popover
-    v-model:show="popoverShow"
-    trigger="click"
-    placement="top-start"
-    :width="320"
-    :show-arrow="false"
-    class="acctm-popover"
-  >
-    <template #trigger>
-      <div class="acct-chip clickable" :class="{ empty: !accounts.accounts.length, collapsed: props.collapsed }">
-        <div class="avatar">
-          <template v-if="current">
-            <img v-if="avatar(current.uuid)" :src="avatar(current.uuid)" alt="" @error="onAvatarError(current.uuid)" />
-            <IconUser v-else />
-          </template>
-          <IconUser v-else />
-        </div>
-        <template v-if="!props.collapsed">
-          <div class="acct-info">
-            <div class="acct-name text-ellipsis">{{ current?.username ?? $t('account-chip.not-logged-in') }}</div>
-            <div class="acct-type">
-              {{
-                current
-                  ? current.type === "microsoft"
-                    ? $t('account-chip.premium-account')
-                    : $t('account-chip.offline-account')
-                  : $t('account-chip.tap-to-add-account')
-              }}
-            </div>
-          </div>
-          <IconChevronDown v-if="accounts.accounts.length" class="chev" />
-          <IconUser v-else class="chev" />
-        </template>
+  <div class="chip" @click="show = true">
+    <span class="av">
+      <img v-if="avatarUrl" :src="avatarUrl" alt="" @error="attempt++" />
+      <span v-else class="ini">{{ initial }}</span>
+    </span>
+    <span class="nm">{{ current?.username ?? $t("account-chip.not-logged-in") }}</span>
+  </div>
+  <app-popup :show="show" position="bottom" round @update:show="(v: boolean) => (show = v)">
+    <div class="sheet">
+      <div class="stitle">{{ $t("account-chip.current-account") }}</div>
+      <button
+        v-for="a in accounts.accounts"
+        :key="a.uuid"
+        class="row"
+        :class="{ on: current?.uuid === a.uuid }"
+        @click="pick(a.uuid)"
+      >
+        <span class="rname">{{ a.username }}</span>
+        <span class="rtype">{{ a.type === "microsoft" ? "正版" : "离线" }}</span>
+      </button>
+      <p v-if="!accounts.accounts.length" class="empty">{{ $t("account-chip.no-accounts") }}</p>
+      <div class="add">
+        <app-input v-model:value="offlineName" :placeholder="$t('account-chip.game-username')" maxlength="16" />
+        <van-button type="primary" :loading="adding" @click="addOffline">{{ $t("account-chip.add") }}</van-button>
       </div>
-    </template>
-
-    <div class="acctm-body">
-      <div class="acctm-title">{{ $t("account-chip.current-account") }}</div>
-
-      <div v-if="!accounts.accounts.length" class="acctm-empty">{{ $t("account-chip.no-accounts") }}</div>
-      <div v-else class="acctm-list">
-        <div
-          v-for="acc in accounts.accounts"
-          :key="acc.uuid"
-          class="acctm-row"
-          :class="{ active: current?.uuid === acc.uuid }"
-          @click="select(acc)"
-        >
-          <img v-if="avatar(acc.uuid)" :src="avatar(acc.uuid)" class="acctm-avatar" alt="" @error="onAvatarError(acc.uuid)" />
-          <IconUser v-else class="acctm-avatar acctm-avatar-fallback" />
-          <div class="acctm-info">
-            <div class="acctm-name text-ellipsis">{{ acc.username }}</div>
-            <span class="acctm-type" :class="acc.type">{{ typeLabel(acc) }}</span>
-          </div>
-          <IconCheck v-if="current?.uuid === acc.uuid" class="acctm-check" />
-          <button class="acctm-remove" :title="$t('account-chip.remove-account')" :aria-label="$t('account-chip.remove-account')" @click.stop="remove(acc)">
-            <IconTrash />
-          </button>
-        </div>
-      </div>
-
-      <div class="acctm-divider"></div>
-
-      <div class="acctm-add">
-        <button class="acctm-btn ms" @click="startMs">
-          <IconPlus />{{ $t("account-chip.add-microsoft") }}</button>
-        <button class="acctm-btn" @click="openOfflineDialog">
-          <IconPlus />{{ $t("account-chip.add-offline") }}</button>
-      </div>
+      <van-button block @click="accounts.showManager = true; show = false">{{ $t("home.switch-account") }}</van-button>
     </div>
-  </n-popover>
-
-  <!-- offline account name dialog -->
-  <app-sheet
-    v-model:show="showOfflineDialog"
-    :title="$t('account-chip.add-offline')"
-  >
-    <div class="acctm-offline-box">
-      <app-input
-        v-model:value="offlineName"
-        :placeholder="$t('account-chip.game-username')"
-        :maxlength="16"
-        clearable
-        @keyup.enter="addOffline" />
-      <p class="acctm-offline-hint">{{ $t("account-chip.offline-uuid-hint") }}</p>
-    </div>
-    <template #footer>
-      <div class="acctm-offline-footer">
-        <n-button @click="showOfflineDialog = false">{{ $t("common.cancel") }}</n-button>
-        <n-button type="primary" :loading="addingOffline" @click="addOffline">{{ $t("account-chip.add") }}</n-button>
-      </div>
-    </template>
-  </app-sheet>
-
+  </app-popup>
   <MsLoginDialog />
 </template>
 
 <style scoped>
-/* chip (rendered in place, scoped styles are fine) */
-.acct-chip {
+.chip {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  height: 48px;
-  box-sizing: border-box;
-  border-radius: 12px;
-  background: var(--panel);
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 12px 4px 4px;
+  border-radius: 20px;
   border: 1px solid var(--border);
-}
-.acct-chip.empty {
-  opacity: 0.85;
-}
-.acct-chip.collapsed {
-  justify-content: center;
-  padding: 0;
-}
-.acct-chip.collapsed .avatar {
-  width: 48px;
-  height: 48px;
-  border-radius: 11px;
-}
-.avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.08);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: 17px;
-  flex-shrink: 0;
-  transition: width 0.2s ease, height 0.2s ease;
-}
-.avatar img {
-  width: 100%;
-  height: 100%;
-  image-rendering: pixelated;
-}
-.acct-info {
-  min-width: 0;
-  flex: 1;
-  animation: fade-in 0.2s ease;
-}
-.acct-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-1);
-}
-.acct-type {
-  font-size: 11px;
-  color: var(--text-3);
-}
-.chev {
-  color: var(--text-3);
-  font-size: 14px;
-  flex-shrink: 0;
-  animation: fade-in 0.2s ease;
-}
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-</style>
-
-<!-- Global styles: popover + modal content is teleported to <body> by naive-ui,
-     so scoped styles do not reliably apply there. -->
-<style>
-.acctm-popover {
-  padding: 14px;
-}
-.acctm-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.acctm-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: #8b8e9c;
-  letter-spacing: 0.5px;
-}
-.acctm-empty {
-  font-size: 12px;
-  color: #8b8e9c;
-  padding: 8px 0;
-}
-.acctm-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-.acctm-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border-radius: 9px;
+  background: var(--panel);
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.12s;
+  max-width: 190px;
 }
-.acctm-row:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-.acctm-row.active {
-  background: var(--accent-14);
-  border-color: var(--accent-35);
-}
-.acctm-avatar {
+.av {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  image-rendering: pixelated;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 50%;
+  overflow: hidden;
   flex-shrink: 0;
-}
-.acctm-avatar-fallback {
+  background: var(--accent-16);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8b8e9c;
-  font-size: 14px;
 }
-.acctm-info {
-  flex: 1;
-  min-width: 0;
+.av img {
+  width: 100%;
+  height: 100%;
 }
-.acctm-name {
+.ini {
+  color: var(--accent);
+  font-weight: 700;
   font-size: 13px;
-  font-weight: 600;
-  color: #f2f3f7;
 }
-.acctm-type {
-  font-size: 10px;
-  padding: 1px 7px;
-  border-radius: 6px;
-  font-weight: 600;
+.nm {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.acctm-type.microsoft {
-  background: rgba(90, 162, 240, 0.15);
-  color: #7cb8f5;
-}
-.acctm-type.offline {
-  background: rgba(255, 255, 255, 0.08);
-  color: #c6c8d2;
-}
-.acctm-check {
-  color: #e89a4b;
-  font-size: 14px;
-  flex-shrink: 0;
-}
-.acctm-remove {
-  /* 触屏命中区 ≥40px，并与行右缘留出间距，避免误触「切换账号」 */
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  margin-left: 8px;
-  border: none;
-  background: transparent;
-  color: #8b8e9c;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 12px;
-  opacity: 0;
-  transition: all 0.12s;
-}
-.acctm-row:hover .acctm-remove {
-  opacity: 1;
-}
-.acctm-remove:hover {
-  color: #e5534b;
-  background: rgba(229, 83, 75, 0.12);
-}
-.acctm-divider {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 2px 0;
-}
-.acctm-add {
+.sheet {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
-.acctm-btn {
-  display: inline-flex;
+.stitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.row {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
-  color: #f2f3f7;
-  border-radius: 9px;
-  padding: 9px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  white-space: nowrap;
-  transition: all 0.12s;
-}
-.acctm-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-.acctm-btn.ms {
-  background: var(--accent-14);
-  border-color: var(--accent-45);
-  color: #e89a4b;
-}
-.acctm-btn.ms:hover {
-  background: var(--accent-22);
-}
-.acctm-offline-box {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.acctm-offline-hint {
-  margin: 0;
-  font-size: 12px;
-  color: #8b8e9c;
-}
-.acctm-offline-footer {
-  display: flex;
-  justify-content: flex-end;
   gap: 10px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+.row.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rtype {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.empty {
+  text-align: center;
+  color: var(--text-3);
+  padding: 16px 0;
+}
+.add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.add > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 </style>
