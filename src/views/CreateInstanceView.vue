@@ -1,132 +1,57 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { fmtBytes } from "../utils/format";
-import { isAprilFools } from "../utils/versions";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
-// 必须走 filePicker：插件的 open() 在安卓上返回 SAF 的 content:// URI，
-// 后端拿它当真实路径喂给 File::open 必然 ENOENT（桌面返回真实路径，所以只有手机炸）。
-import { pickFile as open } from "../composables/filePicker";
-import { listen } from "@tauri-apps/api/event";
+import { Button as VanButton } from "vant";
 import { api } from "../api";
 import { useInstancesStore } from "../stores/instances";
-import AppIcon from "../components/AppIcon.vue";
-import IconPickerDialog from "../components/IconPickerDialog.vue";
-import { IconChevronLeft, IconFolder, IconPlus } from "../components/icons";
-import { useIsMobile } from "../composables/useMediaQuery";
-import type { Loader } from "../types";
+import { pickFile } from "../composables/filePicker";
 import AppInput from "../ui/AppInput.vue";
 import AppSelect from "../ui/AppSelect.vue";
 
 const router = useRouter();
-const instances = useInstancesStore();
 const message = useMessage();
-// 安卓没有「选目录并返回真实路径」的能力，且扫描/导入命令后端未实现，
-// 所以移动端直接隐藏「导入游戏文件夹」这个入口。
-const isMobile = useIsMobile();
+const instances = useInstancesStore();
 
-const mode = ref<"fresh" | "import" | "importmc">("fresh");
-
-// ---- fresh create ----
 const name = ref("");
-const iconStr = ref("");
-const showIconPicker = ref(false);
 const mcVersion = ref("");
-const loader = ref<Loader>("vanilla");
-const loaderVersion = ref<string | null>(null);
-
-// 新实例要加入的分组（null = 未分组）
-const newGroup = ref<string | null>(null);
-const groupOptions = computed(() =>
-  instances.groups.map((g) => ({ label: g.name, value: g.id }))
-);
-
-const versionCat = ref<string>("release");
-const versions = ref<{ id: string; type: string; releaseTime: string }[]>([]);
-const loaderVersions = ref<string[]>([]);
-const loadingLoader = ref(false);
-const creating = ref(false);
+const loader = ref("vanilla");
+const versionOptions = ref<{ label: string; value: string }[]>([]);
+const busy = ref(false);
 const importing = ref(false);
 
-const loaders: { value: Loader; label: string }[] = [
-  { value: "vanilla", label: "None" },
-  { value: "fabric", label: "Fabric" },
-  { value: "neoforge", label: "NeoForge" },
-  { value: "forge", label: "Forge" },
-  { value: "quilt", label: "Quilt" },
+const LOADERS = [
+  { label: "Vanilla", value: "vanilla" },
+  { label: "Fabric", value: "fabric" },
+  { label: "Forge", value: "forge" },
+  { label: "NeoForge", value: "neoforge" },
+  { label: "Quilt", value: "quilt" },
 ];
 
-const filteredVersions = computed(() => {
-  return versions.value.filter((v) => {
-    if (versionCat.value === "release") return v.type === "release" || v.type.startsWith("old_");
-    if (versionCat.value === "april") return isAprilFools(v);
-    return v.type === "snapshot" && !isAprilFools(v);
-  });
-});
+const canSubmit = computed(() => !!name.value.trim() && !!mcVersion.value);
 
-watch([mcVersion, loader], async ([mc, ld]) => {
-  // importmc mode auto-detects the loader per version; nothing to fetch here
-  if (mode.value === "importmc") return;
-  loaderVersion.value = null;
-  if (!mc || ld === "vanilla") {
-    loaderVersions.value = [];
-    return;
-  }
-  loadingLoader.value = true;
+async function submit() {
+  if (!canSubmit.value) return;
+  busy.value = true;
   try {
-    loaderVersions.value = await api.getLoaderVersions(ld, mc);
-  } catch {
-    loaderVersions.value = [];
-  } finally {
-    loadingLoader.value = false;
-  }
-});
-
-const loaderOptions = computed(() => [
-  { label: $t("create-instance.latest-stable"), value: "" },
-  ...loaderVersions.value.slice(0, 30).map((v) => ({ label: v, value: v })),
-]);
-
-async function create() {
-  if (!mcVersion.value) return message.warning($t("create-instance.select-version"));
-  const instName = name.value.trim() || mcVersion.value;
-  creating.value = true;
-  try {
-    const inst = await instances.create(
-      instName,
-      mcVersion.value,
-      loader.value,
-      loaderVersion.value || null
-    );
-    if (iconStr.value) {
-      await instances.patch({ id: inst.id, icon: iconStr.value });
-    }
-    if (newGroup.value) {
-      await instances.moveToGroup(inst.id, newGroup.value);
-    }
-    message.success($t("create-instance.created-installing"));
+    const inst = await instances.create(name.value.trim(), mcVersion.value, loader.value, null);
+    message.success($t("create-instance.created-installing", { p1: inst.name }));
+    instances.installGame(inst.id).catch(() => {});
     router.push(`/instance/${inst.id}`);
-    instances.installGame(inst.id).catch((e) => {
-      message.error($t("create-instance.install-failed", { p1: String(e) }));
-    });
   } catch (e) {
-    message.error(String(e));
+    message.error($t("create-instance.install-failed", { p1: String(e) }));
   } finally {
-    creating.value = false;
+    busy.value = false;
   }
 }
 
-// ---- import ----
 async function importPack() {
-  const file = await open({
-    multiple: false,
-    filters: [{ name: $t("instance-content.modpack"), extensions: ["zip", "mrpack"] }],
-  });
-  if (!file) return;
+  const f = await pickFile({ multiple: false, filters: [{ name: "modpack", extensions: ["zip", "mrpack"] }] });
+  if (!f) return;
   importing.value = true;
   try {
-    const inst = await api.importModpack(file as string);
+    const inst = await api.importModpack(f as string);
     message.success($t("create-instance.imported-next", { p1: inst.name }));
     router.push(`/instance/${inst.id}`);
   } catch (e) {
@@ -136,1017 +61,78 @@ async function importPack() {
   }
 }
 
-// ---- import existing .minecraft folder ----
-const importSrc = ref("");
-// base instance name is derived from the selected folder (no manual entry needed)
-const importMcBaseName = computed(() =>
-  importSrc.value ? pathBasename(importSrc.value) : ""
-);
-const migrateMode = ref<"copy" | "symlink">("copy");
-const scanning = ref(false);
-const showVersionDialog = ref(false);
-const importingMc = ref(false);
-const importStep = ref(1);
-const calcSize = ref(false);
-// live migration progress (one entry per selected version)
-const importProgress = ref<{ current: number; total: number; name: string; phase: string; done: boolean } | null>(null);
-const mcVersions = ref<{ id: string; raw_id: string; inherits_base: boolean; loader: string; loader_version: string | null; size_bytes: number }[]>([]);
-
-// Group detected versions by loader, sorted by loader then by id, so the long
-// list stays readable instead of one undifferentiated block.
-const loaderOrder = ["fabric", "forge", "neoforge", "quilt", "optifine", "vanilla"];
-const groupedVersions = computed(() => {
-  const map = new Map<string, typeof mcVersions.value>();
-  for (const v of mcVersions.value) {
-    if (!map.has(v.loader)) map.set(v.loader, []);
-    map.get(v.loader)!.push(v);
-  }
-  const groups: { loader: string; items: typeof mcVersions.value }[] = [];
-  for (const key of loaderOrder) {
-    if (map.has(key)) {
-      const items = map.get(key)!;
-      items.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
-      groups.push({ loader: key, items });
-      map.delete(key);
-    }
-  }
-  // any loader not in the known order (shouldn't happen) goes at the end
-  for (const [key, items] of map) {
-    items.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
-    groups.push({ loader: key, items });
-  }
-  return groups;
-});
-// multi-select: which detected versions to import (one instance each)
-const selectedVersions = ref<string[]>([]);
-// live statistics streamed from the backend as it walks the folder
-const scan = ref<{
-  import_files: number;
-  import_bytes: number;
-  download_files: number;
-  download_bytes: number;
-  assets_known: boolean;
-} | null>(null);
-
-async function pickMcFolder() {
-  // 安卓侧 dialog 插件对「选目录」是**显式 reject**（FolderPickerNotImplemented）：
-  // 不接这个 reject 就会表现为「点了什么都没发生，也没报错」。
-  try {
-    const dir = await open({ multiple: false, directory: true });
-    if (!dir) return;
-    importSrc.value = dir as string;
-    await runScan();
-  } catch (e) {
-    message.error(
-      isMobile.value
-        ? $t("create-instance.folder-unsupported")
-        : $t("create-instance.pick-folder-failed", { p1: String(e) })
-    );
-  }
-}
-
-async function runScan() {
-  if (!importSrc.value) {
-    scan.value = null;
-    mcVersions.value = [];
-    return;
-  }
-  scanning.value = true;
-  scan.value = { import_files: 0, import_bytes: 0, download_files: 0, download_bytes: 0, assets_known: false };
-  mcVersions.value = [];
-  selectedVersions.value = [];
-  try {
-    // fire-and-forget: versions + live file stats arrive via events
-    await api.scanMinecraftImport(importSrc.value);
-  } catch (e) {
-    message.error(String(e));
-  } finally {
-    // scanning stays until the `done` event resets it
-  }
-}
-
-// refresh estimates when the selected versions change:
-// now triggered explicitly in goStep2 instead of reactively
-async function calcImportSize() {
-  if (mode.value !== "importmc" || selectedVersions.value.length === 0 || !importSrc.value) return;
-  const list = selectedVersions.value;
-  const v = list[list.length - 1];
-  const rawIds = list
-    .map((id) => mcVersions.value.find((x) => x.id === id)?.raw_id ?? id)
-    .filter(Boolean);
-  calcSize.value = true;
-  try {
-    const dl = await api.estimateDownload(v);
-    const imp = await api.estimateImport(importSrc.value, rawIds);
-    scan.value = {
-      import_files: imp.import_files,
-      import_bytes: imp.import_bytes,
-      download_files: dl.download_files,
-      download_bytes: dl.download_bytes,
-      assets_known: dl.assets_known,
-    };
-  } catch {
-    /* ignore */
-  } finally {
-    calcSize.value = false;
-  }
-}
-
-async function goStep2() {
-  importStep.value = 2;
-  await calcImportSize();
-}
-
-function pathBasename(p: string): string {
-  const parts = p.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || $t("create-instance.imported");
-}
-
-function toggleVersion(id: string) {
-  const i = selectedVersions.value.indexOf(id);
-  if (i >= 0) {
-    selectedVersions.value.splice(i, 1);
-  } else {
-    selectedVersions.value.push(id);
-  }
-}
-
-async function importMc() {
-  if (!importSrc.value) return message.warning($t("create-instance.pick-minecraft-first"));
-  if (selectedVersions.value.length === 0) return message.warning($t("create-instance.version-required"));
-  // align loaders / loader versions with the selected versions, using the
-  // auto-detected loader for each version
-  const loaders: string[] = [];
-  const loaderVersions: (string | null)[] = [];
-  const rawIds: string[] = [];
-  for (const sel of selectedVersions.value) {
-    const v = mcVersions.value.find((x) => x.id === sel);
-    loaders.push(v?.loader ?? "vanilla");
-    loaderVersions.push(v?.loader_version ?? null);
-    rawIds.push(v?.raw_id ?? sel);
-  }
-  importingMc.value = true;
-  showVersionDialog.value = false;
-  importProgress.value = { current: 0, total: rawIds.length, name: "", phase: "migrate", done: false };
-  try {
-    const plans = await api.importMinecraftFolder(
-      importSrc.value,
-      importMcBaseName.value,
-      rawIds,
-      selectedVersions.value,
-      loaders,
-      loaderVersions,
-      migrateMode.value
-    );
-    // assign random game icon to each imported instance
-    for (const p of plans) {
-      try {
-        const icons = await api.extractGameIcons(p.instance_id);
-        if (icons.length > 0) {
-          const pick = icons[Math.floor(Math.random() * icons.length)];
-          const bgs = ["amber", "blue", "green", "purple", "red", "slate", "dark"];
-          const bg = bgs[Math.floor(Math.random() * bgs.length)];
-          await instances.patch({ id: p.instance_id, icon: `bg:${bg},img:${pick.path}` });
-        }
-      } catch { /* game not fully installed yet — bg-only is fine */ }
-    }
-    const fellBack = migrateMode.value === "symlink" && plans.some((p) => p.symlink_fallback);
-    if (plans.length === 1) {
-      if (fellBack) {
-        message.warning($t("create-instance.symlink-fallback"));
-      } else {
-        message.success($t("create-instance.import-done"));
-      }
-      router.push(`/instance/${plans[0].instance_id}`);
-    } else {
-      if (fellBack) {
-        message.warning($t("create-instance.imported-symlink-fallback", { p1: plans.length }));
-      } else {
-        message.success($t("create-instance.imported-count", { p1: plans.length }));
-      }
-      router.push("/instances");
-    }
-  } catch (e) {
-    message.error(String(e));
-  } finally {
-    importingMc.value = false;
-    importProgress.value = null;
-  }
-}
-
-function loaderLabel(ld: string): string {
-  switch (ld) {
-    case "forge":
-      return "Forge";
-    case "neoforge":
-      return "NeoForge";
-    case "fabric":
-      return "Fabric";
-    case "quilt":
-      return "Quilt";
-    case "optifine":
-      return "OptiFine";
-    default:
-      return $t("utils.categories.vanilla");
-  }
-}
-
-let unlisteners: Array<() => void> = [];
-
 onMounted(async () => {
-  const BGS = ["amber", "blue", "green", "purple", "red", "slate", "dark"];
-  const bg = BGS[Math.floor(Math.random() * BGS.length)];
-  iconStr.value = `bg:${bg}`;
-  try {
-    const icons = await api.extractGameIcons(undefined);
-    if (icons.length > 0) {
-      const pick = icons[Math.floor(Math.random() * icons.length)];
-      iconStr.value = `bg:${bg},img:${pick.path}`;
-    }
-  } catch { /* no jars yet — bg only is fine */ }
-  instances.load();
   try {
     const m = await api.getVersionManifest();
-    versions.value = m.versions;
+    versionOptions.value = m.versions
+      .filter((v) => v.type === "release")
+      .map((v) => ({ label: v.id, value: v.id }));
+    mcVersion.value = m.latest.release;
   } catch (e) {
     message.error(String(e));
   }
-  // live import-scan progress from the backend
-  const u1 = await listen<{
-    import_files: number;
-    import_bytes: number;
-    download_files?: number;
-    download_bytes?: number;
-    assets_known?: boolean;
-    done?: boolean;
-  }>("import://scan-progress", (ev) => {
-    const p = ev.payload;
-    scan.value = {
-      import_files: p.import_files,
-      import_bytes: p.import_bytes,
-      download_files: p.download_files ?? scan.value?.download_files ?? 0,
-      download_bytes: p.download_bytes ?? scan.value?.download_bytes ?? 0,
-      assets_known: p.assets_known ?? scan.value?.assets_known ?? false,
-    };
-    if (p.done) {
-      scanning.value = false;
-      if (mcVersions.value.length > 0) { importStep.value = 1; showVersionDialog.value = true; }
-    }
-  });
-  unlisteners.push(u1);
-  // versions arrive one-by-one; append and auto-select the first.
-  // Dedupe by id so a re-emit (or a second listener) never shows doubles.
-  const u2 = await listen<{ id: string; raw_id: string; inherits_base: boolean; loader: string; loader_version: string | null; size_bytes: number }>(
-    "import://scan-version",
-    (ev) => {
-      const v = ev.payload;
-      if (mcVersions.value.some((x) => x.id === v.id)) return;
-      mcVersions.value.push(v);
-      if (mcVersions.value.length === 1) {
-        selectedVersions.value = [v.id];
-      }
-    }
-  );
-  unlisteners.push(u2);
-  // migration progress as each selected version is processed
-  const u3 = await listen<{ current: number; total: number; name: string; phase: string; done: boolean }>(
-    "import://progress",
-    (ev) => {
-      importProgress.value = ev.payload;
-    }
-  );
-  unlisteners.push(u3);
-  const u4 = await listen<{ name: string; message: string }>("import://warning", (ev) => {
-    message.warning(`${ev.payload.name}：${ev.payload.message}`);
-  });
-  unlisteners.push(u4);
-});
-
-onUnmounted(() => {
-  for (const u of unlisteners) u();
-  unlisteners = [];
 });
 </script>
 
 <template>
-  <div class="create-view">
-    <button class="back" @click="router.push('/instances')">
-      <IconChevronLeft />{{ $t("create-instance.back-to-list") }}</button>
-
-    <div class="mode-tabs glass">
-      <button :class="{ active: mode === 'fresh' }" @click="mode = 'fresh'">{{ $t("create-instance.create-new") }}</button>
-      <button :class="{ active: mode === 'import' }" @click="mode = 'import'">{{ $t("create-instance.import-modpack") }}</button>
-      <button
-        v-if="!isMobile"
-        :class="{ active: mode === 'importmc' }"
-        @click="mode = 'importmc'"
-      >{{ $t("create-instance.import-folder") }}</button>
+  <div class="cv">
+    <div class="field">
+      <label>{{ $t("instances.name") }}</label>
+      <app-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
     </div>
-
-    <!-- fresh create -->
-    <div v-if="mode === 'fresh'" class="fresh glass">
-      <div class="fresh-head">
-        <button class="icon-box" :title="$t('instance-settings.pick-icon')" :aria-label="$t('instance-settings.pick-icon')" @click="showIconPicker = true">
-          <AppIcon :name="iconStr" />
+    <div class="field">
+      <label>{{ $t("create-instance.select-version") }}</label>
+      <app-select v-model:value="mcVersion" :options="versionOptions" :placeholder="$t('create-instance.select-version')" />
+    </div>
+    <div class="field">
+      <label>{{ $t("browse.loader") }}</label>
+      <div class="chips">
+        <button v-for="l in LOADERS" :key="l.value" class="chip" :class="{ on: loader === l.value }" @click="loader = l.value">
+          {{ l.label }}
         </button>
-        <div class="fresh-title">
-          <h2>{{ $t("create-instance.create-fresh") }}</h2>
-          <p>{{ $t("create-instance.setup-hint") }}</p>
-        </div>
-      </div>
-
-      <!-- 左列：实例配置 -->
-      <div class="fresh-left">
-        <div class="field">
-          <label>{{ $t("create-instance.instance-name") }}</label>
-          <app-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
-        </div>
-
-        <div v-if="instances.groups.length" class="field">
-          <label>{{ $t("create-instance.group") }}</label>
-          <app-select
-            v-model:value="newGroup"
-            :options="groupOptions"
-            :placeholder="$t('create-instance.ungrouped')"
-            clearable />
-        </div>
-
-        <div class="field">
-          <label>{{ $t("browse.loader") }}</label>
-          <div class="loader-row">
-            <button
-              v-for="l in loaders"
-              :key="l.value"
-              class="loader-btn"
-              :class="{ active: loader === l.value }"
-              @click="loader = l.value"
-            >
-              {{ l.label }}
-            </button>
-          </div>
-          <app-select
-            v-if="loader !== 'vanilla'"
-            v-model:value="loaderVersion"
-            :options="loaderOptions"
-            :loading="loadingLoader"
-            :disabled="!mcVersion"
-            :placeholder="mcVersion ? $t('create-instance.loader-version') : $t('create-instance.pick-version-first')"
-            class="loader-select" />
-        </div>
-
-        <!-- 配置摘要：宽屏贴左列底部，也是创建前的最后确认 -->
-        <div class="fresh-summary">
-          <div class="sum-icon">
-            <AppIcon :name="iconStr" />
-          </div>
-          <div class="sum-text">
-            <div class="sum-name">
-              {{ name.trim() || (mcVersion ? `${mcVersion} ${loaderLabel(loader)}` : $t('create-instance.unnamed')) }}
-            </div>
-            <div class="sum-meta">
-              {{ mcVersion || $t('create-instance.no-version') }} · {{ loaderLabel(loader) }}<template v-if="loader !== 'vanilla'"> · {{ loaderVersion || $t('create-instance.latest-stable') }}</template>
-            </div>
-          </div>
-          <button class="btn primary" :disabled="creating || !mcVersion" @click="create">
-            <IconPlus /> {{ creating ? $t('create-instance.creating') : $t('router.chuang-jian-shi-li') }}
-          </button>
-        </div>
-      </div>
-
-      <!-- 右列：游戏版本选择 -->
-      <div class="fresh-right">
-        <div class="field">
-          <label>{{ $t("browse.game-version") }}</label>
-          <div class="ver-cats">
-            <button
-              v-for="c in [
-                { key: 'release', label: $t('install-dialog.release') },
-                { key: 'snapshot', label: $t('create-instance.snapshots') },
-                { key: 'april', label: $t('create-instance.april-fools') },
-              ]"
-              :key="c.key"
-              :class="{ active: versionCat === c.key }"
-              @click="versionCat = c.key"
-            >
-              {{ c.label }}
-            </button>
-          </div>
-          <div class="ver-list">
-            <button
-              v-for="v in filteredVersions"
-              :key="v.id"
-              class="ver-item"
-              :class="{ active: mcVersion === v.id }"
-              @click="mcVersion = v.id"
-            >
-              <span class="ver-id mono">{{ v.id }}</span>
-              <span class="ver-type">{{ v.type === 'release' || v.type.startsWith('old_') ? $t('create-instance.release') : $t('create-instance.snapshot') }}</span>
-            </button>
-            <div v-if="!filteredVersions.length" class="ver-empty">{{ $t("create-instance.no-versions-in-category") }}</div>
-          </div>
-        </div>
       </div>
     </div>
-
-    <!-- import -->
-    <div v-else-if="mode === 'import'" class="import glass">
-      <div class="import-icon"><IconFolder /></div>
-      <h2>{{ $t("create-instance.import-modpack") }}</h2>
-      <p>{{ $t("create-instance.modpack-support-hint") }}</p>
-      <p class="sub-p">{{ $t("create-instance.import-auto-hint") }}</p>
-      <button class="btn primary big" :disabled="importing" @click="importPack">
-        <IconFolder /> {{ importing ? $t('icon-picker-dialog.importing') : $t('create-instance.pick-modpack') }}
-      </button>
-    </div>
-
-    <!-- import existing .minecraft folder -->
-    <div v-else class="importmc glass">
-      <div class="fresh-head">
-        <div class="fresh-title">
-          <h2>{{ $t("create-instance.import-minecraft") }}</h2>
-          <p>{{ $t("create-instance.import-folder-hint") }}</p>
-        </div>
-      </div>
-
-      <div class="field">
-        <label>{{ $t("create-instance.game-folder") }}</label>
-        <button class="folder-btn" @click="pickMcFolder">
-          <IconFolder /> {{ importSrc || $t('create-instance.pick-minecraft') }}
-        </button>
-        <div v-if="importSrc && !scanning && mcVersions.length === 0" class="detected-hint warn">{{ $t("create-instance.no-versions-found") }}</div>
-      </div>
-
-      <div v-if="importProgress" class="import-progress">
-        <div class="ip-row">
-          <span class="ip-label">
-            {{ importProgress.phase === "done" ? $t('install-dialog.computed') : $t('create-instance.migrating') }}：{{ importProgress.name }}
-          </span>
-          <span class="ip-count">{{ importProgress.current }} / {{ importProgress.total }}</span>
-        </div>
-        <div class="ip-bar">
-          <div
-            class="ip-fill"
-            :class="{ done: importProgress.phase === 'done' }"
-            :style="{ width: (importProgress.total ? (importProgress.current / importProgress.total) * 100 : 0) + '%' }"
-          ></div>
-        </div>
-      </div>
-
-      <NModal v-model:show="showVersionDialog" preset="card" :title="importStep === 1 ? $t('create-instance.pick-migrate') : $t('create-instance.confirm-migrate')" style="max-width: 640px;" @update:show="(v: boolean) => { if (!v) importStep = 1; }">
-        <div class="ver-dialog-body">
-          <!-- Step 1: select versions -->
-          <template v-if="importStep === 1">
-            <div class="detected-hint">{{ $t("create-instance.detected-versions", { p1: mcVersions.length, p2: selectedVersions.length }) }}</div>
-            <div class="ver-list">
-              <template v-for="g in groupedVersions" :key="g.loader">
-                <div class="ver-group-title">
-                  {{ loaderLabel(g.loader) }} <span class="ver-group-count">{{ g.items.length }}</span>
-                </div>
-                <button
-                  v-for="v in g.items"
-                  :key="v.id"
-                  class="ver-item"
-                  :class="{ active: selectedVersions.includes(v.id) }"
-                  @click="toggleVersion(v.id)"
-                >
-                  <span class="ver-id mono">{{ v.id }}</span>
-                  <span class="ver-loader" :class="'ld-' + v.loader">
-                    {{ loaderLabel(v.loader) }}{{ v.loader_version ? " " + v.loader_version : "" }}
-                  </span>
-                </button>
-              </template>
-            </div>
-          </template>
-          <!-- Step 2: size info + migration method -->
-          <template v-else>
-            <div class="detected-hint">{{ $t("create-instance.selected-versions", { p1: selectedVersions.length, p2: selectedVersions.join("、") }) }}
-            </div>
-            <div v-if="calcSize" class="scan-hint">{{ $t("create-instance.calculating-size") }}</div>
-            <div v-else-if="scan" class="scan-panel">
-              <div class="scan-row">
-                <span class="scan-label">{{ $t("create-instance.will-migrate", { p1: migrateMode === 'symlink' ? $t("create-instance.fu-hao-lian-jie") : $t("common.copy") }) }}</span>
-                <span class="scan-val">{{ $t("create-instance.files-size", { p1: scan.import_files, p2: fmtBytes(scan.import_bytes) }) }}</span>
-              </div>
-              <div class="scan-row">
-                <span class="scan-label">{{ $t("create-instance.need-download") }}</span>
-                <span class="scan-val">
-                  {{ $t("create-instance.files-size", { p1: scan.download_files, p2: fmtBytes(scan.download_bytes) }) }}<em v-if="!scan.assets_known">{{ $t("create-instance.assets-size-hint") }}</em>
-                </span>
-              </div>
-            </div>
-            <div class="field">
-              <label>{{ $t("create-instance.migrate-method") }}</label>
-              <div class="loader-row">
-                <button class="loader-btn" :class="{ active: migrateMode === 'copy' }" @click="migrateMode = 'copy'">{{ $t("create-instance.copy") }}</button>
-                <button class="loader-btn" :class="{ active: migrateMode === 'symlink' }" @click="migrateMode = 'symlink'">{{ $t("create-instance.fu-hao-lian-jie") }}</button>
-              </div>
-              <p class="sub-p">{{ $t("create-instance.copy-vs-symlink") }}</p>
-            </div>
-          </template>
-        </div>
-        <template #footer>
-          <div class="dialog-actions">
-            <button v-if="importStep === 2" class="btn ghost" @click="importStep = 1">{{ $t("create-instance.prev-step") }}</button>
-            <button v-if="importStep === 1" class="btn ghost" @click="showVersionDialog = false">{{ $t("common.cancel") }}</button>
-            <button v-if="importStep === 1" class="btn primary" :disabled="selectedVersions.length === 0" @click="goStep2">{{ $t("create-instance.next-step") }}</button>
-            <button v-if="importStep === 2" class="btn primary" :disabled="importingMc || calcSize || !scan" @click="importMc">
-              <IconPlus /> {{ importingMc ? $t('icon-picker-dialog.importing') : $t('create-instance.migrate-count', { p1: selectedVersions.length }) }}
-            </button>
-          </div>
-        </template>
-      </NModal>
-    </div>
-
-    <IconPickerDialog v-model:show="showIconPicker" :value="iconStr" @save="iconStr = $event" />
+    <van-button block type="primary" :disabled="!canSubmit" :loading="busy" class="go" @click="submit">
+      {{ $t("multiplayer.create") }}
+    </van-button>
+    <van-button block :loading="importing" @click="importPack">{{ $t("create-instance.import-modpack") }}</van-button>
   </div>
 </template>
 
 <style scoped>
-.create-view {
+.cv {
+  padding: 8px 16px 16px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  align-self: flex-start;
-  background: none;
-  border: none;
-  color: var(--text-3);
-  font-size: 13px;
-  cursor: pointer;
-  font-family: inherit;
-  padding: 6px 10px;
-  border-radius: 8px;
-}
-.back:hover {
-  color: var(--text-1);
-  background: rgba(255, 255, 255, 0.06);
-}
-.mode-tabs {
-  display: inline-flex;
-  gap: 4px;
-  padding: 5px;
-  align-self: flex-start;
-}
-.mode-tabs button {
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  padding: 8px 20px;
-  border-radius: 9px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-}
-.mode-tabs button.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.fresh,
-.import {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-/* 窄屏：单列流式。
-   列容器用 display:contents 让子项直接参与父级 flex 排序，
-   顺序为「名称 → 分组 → 加载器 → 版本 → 摘要」；版本列 order:1、摘要 order:2，
-   避免版本选择被挤到创建按钮之后。 */
-.fresh-left {
-  display: contents;
-}
-.fresh-right {
-  order: 1;
-}
-.fresh-summary {
-  order: 2;
-}
-
-/* 宽屏：左右两列。
-   关键：两列是「列容器」而非跨行网格区域——列容器内部自己控制间距，
-   不会像跨行 grid 那样把版本列表的多余高度摊进左列各字段之间。
-   左列与右列同高（align-items 默认 stretch），摘要卡用 margin-top:auto
-   贴左列底部，正好吃掉原先的空白。 */
-@media (min-width: 1100px) {
-  .fresh {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-    column-gap: 28px;
-  }
-  .fresh-head {
-    grid-column: 1 / -1;
-  }
-  .fresh-left,
-  .fresh-right {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    order: 0;
-  }
-  .fresh-summary {
-    margin-top: auto;
-  }
-  /* 右列版本列表拉高，让两列高度相当、视觉重量平衡；
-     高度随视口自适应：默认 1200×780 窗口下整页正好无滚动条，
-     更矮的窗口继续收缩（下限 260px），大屏上限 560px */
-  .fresh-right .ver-list {
-    max-height: clamp(200px, calc((100vh / var(--ui-scale, 1)) - 240px), 560px);
-  }
-}
-.fresh-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.icon-box {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  background: transparent;
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  overflow: hidden;
-  cursor: pointer;
-  font-size: 30px;
-  transition: all 0.12s;
-  box-sizing: border-box;
-  padding: 0;
-  position: relative;
-}
-.icon-box :deep(.app-icon) {
-  position: absolute;
-  inset: 0;
-}
-.icon-box:hover {
-  border-color: var(--accent-06);
-}
-.fresh-title h2 {
-  margin: 0 0 4px;
-  font-size: 18px;
-}
-.fresh-title p {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-3);
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 .field label {
+  display: block;
+  margin-bottom: 6px;
   font-size: 13px;
-  font-weight: 600;
   color: var(--text-2);
 }
-.ver-cats {
+.chips {
   display: flex;
-  gap: 4px;
-}
-.ver-cats button {
-  border: none;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-2);
-  padding: 7px 16px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-}
-.ver-cats button.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.ver-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 340px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.ver-dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-.ver-group-title {
-  margin: 10px 2px 2px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding-bottom: 3px;
-}
-.ver-group-title:first-child {
-  margin-top: 2px;
-}
-.ver-group-count {
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--text-3);
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  padding: 0 6px;
-  margin-left: 4px;
-}
-.ver-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-2);
-  padding: 7px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-family: inherit;
-  text-align: left;
-}
-.ver-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-.ver-item.active {
-  border-color: var(--accent-05);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.ver-id {
-  font-size: 12px;
-  font-weight: 600;
-}
-.ver-type {
-  font-size: 10px;
-  color: var(--text-3);
-}
-.ver-loader {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-2);
-  margin-top: 2px;
-}
-.ver-loader.ld-forge { color: #e8a04b; }
-.ver-loader.ld-neoforge { color: #7aa2f7; }
-.ver-loader.ld-fabric { color: #b48ead; }
-.ver-loader.ld-quilt { color: #9ece6a; }
-.ver-loader.ld-vanilla { color: var(--text-3); }
-.ver-empty {
-  grid-column: 1 / -1;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-  padding: 20px 0;
-}
-.loader-row {
-  display: flex;
-  gap: 8px;
   flex-wrap: wrap;
-}
-.loader-btn {
-  padding: 8px 16px;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-2);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.13s;
-  font-family: inherit;
-}
-.loader-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-.loader-btn.active {
-  background: var(--accent-soft);
-  border-color: var(--accent-45);
-  color: var(--accent);
-}
-.loader-select {
-  max-width: 320px;
-}
-/* 配置摘要卡：创建前的最后确认，宽屏下贴左列底部 */
-.fresh-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-}
-.sum-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
-  position: relative;
-  background: rgba(255, 255, 255, 0.05);
-}
-.sum-icon :deep(.app-icon) {
-  position: absolute;
-  inset: 0;
-}
-.sum-text {
-  flex: 1;
-  min-width: 0;
-}
-.sum-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sum-meta {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-top: 2px;
-}
-.fresh-summary .btn {
-  flex-shrink: 0;
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 22px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.15s;
-}
-.btn.primary {
-  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
-  color: #1a1208;
-}
-.btn.primary:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-.btn:disabled {
-  opacity: 0.6;
-}
-.btn.big {
-  padding: 13px 26px;
-  font-size: 15px;
-}
-.import {
-  align-items: center;
-  text-align: center;
-  padding: 50px 30px;
-}
-.import-icon {
-  font-size: 40px;
-  color: var(--accent);
-  opacity: 0.8;
-}
-.import h2 {
-  margin: 0;
-  font-size: 20px;
-}
-.import p {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text-2);
-  max-width: 420px;
-}
-.import .sub-p {
-  font-size: 12px;
-  color: var(--text-3);
-}
-.folder-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  align-self: flex-start;
-  border: 1px dashed var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-2);
-  padding: 9px 16px;
-  border-radius: 9px;
-  font-size: 13px;
-  cursor: pointer;
-  font-family: inherit;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.folder-btn:hover {
-  border-color: var(--accent-05);
-  color: var(--accent);
-}
-.scan-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px 18px;
-  background: rgba(255, 255, 255, 0.03);
-}
-.scan-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.scan-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-.scan-val {
-  font-size: 13px;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-.scan-val em {
-  color: var(--text-3);
-  font-style: normal;
-  font-size: 11px;
-}
-.scan-hint {
-  font-size: 13px;
-  color: var(--text-3);
-}
-.importmc {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.import-progress {
-  background: var(--glass-2, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: 12px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
   gap: 8px;
 }
-.ip-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-}
-.ip-label {
-  font-size: 13px;
-  font-weight: 600;
+.chip {
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 19px;
+  border: 1px solid var(--border);
+  background: var(--panel);
   color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ip-count {
+  font-family: inherit;
   font-size: 13px;
+}
+.chip.on {
+  border-color: var(--accent);
   color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  flex: none;
+  background: var(--accent-08);
 }
-.ip-bar {
-  height: 6px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-.ip-fill {
-  height: 100%;
-  border-radius: 99px;
-  background: var(--accent);
-  transition: width 0.25s ease;
-}
-.ip-fill.done {
-  background: #57c98a;
-}
-.detected-hint {
-  font-size: 12px;
-  color: var(--text-2);
-  margin-top: 4px;
-}
-.detected-hint.warn {
-  color: #e0a85a;
+.go {
+  margin-top: 8px;
 }
 </style>
