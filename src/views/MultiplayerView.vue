@@ -22,7 +22,7 @@ async function createServer() {
   try {
     const s = await servers.create(form.value.name.trim(), form.value.core, form.value.mcVersion);
     showCreate.value = false;
-    message.success($t("multiplayer.created") || s.name);
+    message.success($t("downloads.finished"));
     void servers.installCore(s.id);
   } catch (e) {
     message.error(String(e));
@@ -82,7 +82,7 @@ onMounted(() => { void servers.load(); });
       <div class="sheet">
         <div class="sheet-title">{{ $t("title-bar.new-server") }}</div>
         <app-input v-model:value="form.name" :placeholder="$t('multiplayer.server-name-hint')" maxlength="40" />
-        <app-input v-model:value="form.mcVersion" :placeholder="$t('create-instance.version-hint')" maxlength="16" />
+        <app-input v-model:value="form.mcVersion" :placeholder="$t('create-instance.select-version')" maxlength="16" />
         <van-button block type="primary" :loading="saving" @click="createServer">{{ $t("multiplayer.create") }}</van-button>
       </div>
     </app-popup>
