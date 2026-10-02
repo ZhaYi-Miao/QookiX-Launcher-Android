@@ -4,7 +4,11 @@ import { computed, onMounted, ref, watch, inject } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import InstanceCard from "../components/InstanceCard.vue";
-import { useMessage, NModal, NButton, NInput } from "naive-ui";
+import { useMessage } from "naive-ui";
+// 弹层统一走 ui/：AppPopup 默认 teleport 到 #van-layer（跳出 .content 的层叠
+// 上下文并跟 zoom 同步），confirmDialog 等 命令式 API 由 ui/vant 包好了 teleport
+import AppPopup from "../ui/AppPopup.vue";
+import { Field as VanField, Button as VanButton, confirmDialog } from "../ui/vant";
 // 必须走 filePicker：插件的 open() 在安卓上返回 SAF 的 content:// URI，
 // 后端拿它当真实路径必然失败（桌面正常，所以只有手机炸）。
 import { pickFile as dialogOpen } from "../composables/filePicker";
@@ -50,13 +54,25 @@ type GroupDialog = {
 const groupDialog = ref<GroupDialog | null>(null);
 const groupSaving = ref(false);
 
-const confirmState = ref<{
+/**
+ * 危险操作确认：Vant 命令式对话框（替代桌面式居中卡片弹窗）。
+ * 返回 true = 用户点了确认；取消 / 点遮罩 / 按返回走 reject，这里吞掉返回 false。
+ */
+function askConfirm(o: {
   title: string;
   content: string;
   positiveText: string;
-  onOk: () => void | Promise<void>;
-} | null>(null);
-const confirmLoading = ref(false);
+}): Promise<boolean> {
+  return confirmDialog({
+    title: o.title,
+    message: o.content,
+    confirmButtonText: o.positiveText,
+    cancelButtonText: $t("common.cancel"),
+    confirmButtonColor: "#e5534b",
+  })
+    .then(() => true)
+    .catch(() => false);
+}
 
 // ---- 导入实例分享包 ----
 const importingPack = ref(false);
@@ -88,17 +104,6 @@ async function importPack() {
     message.error(String(e));
   } finally {
     importingPack.value = false;
-  }
-}
-
-async function handleConfirm() {
-  if (!confirmState.value) return;
-  confirmLoading.value = true;
-  try {
-    await confirmState.value.onOk();
-    confirmState.value = null;
-  } finally {
-    confirmLoading.value = false;
   }
 }
 
@@ -214,23 +219,22 @@ async function saveGroupDialog() {
   }
 }
 
-function confirmDeleteGroup(g: InstanceGroup) {
+async function confirmDeleteGroup(g: InstanceGroup) {
   const count = instances.inGroup(g.id).length;
-  confirmState.value = {
+  const ok = await askConfirm({
     title: $t("instances.positive-text"),
     content: count
       ? $t("instances.delete-group-hint", { p1: g.name, p2: count })
       : $t("instances.delete-group-confirm", { p1: g.name }),
     positiveText: $t("instances.positive-text"),
-    onOk: async () => {
-      try {
-        await instances.deleteGroup(g.id);
-        message.success($t("instances.on-ok"));
-      } catch (e) {
-        message.error(String(e));
-      }
-    },
-  };
+  });
+  if (!ok) return;
+  try {
+    await instances.deleteGroup(g.id);
+    message.success($t("instances.on-ok"));
+  } catch (e) {
+    message.error(String(e));
+  }
 }
 
 async function moveTo(groupId: string | null) {
@@ -336,98 +340,85 @@ async function moveTo(groupId: string | null) {
       <button class="btn primary" @click="router.push('/create')">{{ $t("home.create-first") }}</button>
     </div>
 
-    <!-- 新建 / 重命名分组 -->
-    <n-modal
-      :auto-focus="false"
+    <!-- 新建 / 重命名分组：底部弹层（拇指区，表单在竖屏上比居中小窗更顺手） -->
+    <app-popup
       :show="groupDialog !== null"
-      preset="card"
-      :title="groupDialog?.mode === 'create' ? $t('title-bar.new-group') : $t('instances.rename-group')"
-      style="width: 420px; max-width: 92vw"
+      position="bottom"
+      round
       @update:show="(v: boolean) => { if (!v) groupDialog = null; }"
     >
-      <div v-if="groupDialog" class="dialog-body">
-        <label class="field">
-          <span>{{ $t("instances.name") }}</span>
-          <n-input
-            v-model:value="groupDialog.name"
-            :placeholder="$t('instances.name-hint')"
-            maxlength="40"
-            @keydown.enter="saveGroupDialog"
-          />
-        </label>
-        <div class="field">
-          <span>{{ $t("instances.color") }}</span>
-          <div class="palette">
-            <button
-              v-for="c in PALETTE"
-              :key="c"
-              class="swatch"
-              :class="{ on: groupDialog.color === c }"
-              :style="{ background: c }"
-              :title="c" :aria-label="c"
-              @click="groupDialog.color = c"
-            ></button>
+      <div v-if="groupDialog" class="sheet">
+        <div class="sheet-title">
+          {{ groupDialog.mode === "create" ? $t("title-bar.new-group") : $t("instances.rename-group") }}
+        </div>
+        <div class="dialog-body">
+          <div class="field">
+            <span>{{ $t("instances.name") }}</span>
+            <van-field
+              v-model="groupDialog.name"
+              :placeholder="$t('instances.name-hint')"
+              maxlength="40"
+              @keydown.enter="saveGroupDialog"
+            />
+          </div>
+          <div class="field">
+            <span>{{ $t("instances.color") }}</span>
+            <div class="palette">
+              <button
+                v-for="c in PALETTE"
+                :key="c"
+                class="swatch"
+                :class="{ on: groupDialog.color === c }"
+                :style="{ background: c }"
+                :title="c" :aria-label="c"
+                @click="groupDialog.color = c"
+              ></button>
+            </div>
           </div>
         </div>
         <div class="dialog-foot">
-          <n-button @click="groupDialog = null">{{ $t("common.cancel") }}</n-button>
-          <n-button type="primary" :loading="groupSaving" @click="saveGroupDialog">{{ $t("common.save") }}</n-button>
+          <van-button block @click="groupDialog = null">{{ $t("common.cancel") }}</van-button>
+          <van-button block type="primary" :loading="groupSaving" @click="saveGroupDialog">
+            {{ $t("common.save") }}
+          </van-button>
         </div>
       </div>
-    </n-modal>
+    </app-popup>
 
-    <!-- 移动实例到分组 -->
-    <n-modal
-      :auto-focus="false"
+    <!-- 移动实例到分组：底部弹层 + 列表选择 -->
+    <app-popup
       :show="movingInstance !== null"
-      preset="card"
-      :title="$t('instance-card.move-to-group')"
-      style="width: 380px; max-width: 92vw"
+      position="bottom"
+      round
       @update:show="(v: boolean) => { if (!v) movingInstance = null; }"
     >
-      <div v-if="movingInstance" class="move-list">
-        <p class="move-hint">{{ movingInstance.name }}</p>
-        <button
-          class="move-item"
-          :class="{ current: !movingInstance.group }"
-          @click="moveTo(null)"
-        >
-          <i class="dot" style="background: var(--text-3)"></i>
-          <span>{{ $t("create-instance.ungrouped") }}</span>
-        </button>
-        <button
-          v-for="g in instances.groups"
-          :key="g.id"
-          class="move-item"
-          :class="{ current: movingInstance.group === g.id }"
-          @click="moveTo(g.id)"
-        >
-          <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>
-          <span>{{ g.name }}</span>
-        </button>
-        <button class="move-item add" @click="openCreateGroup">
-          <IconPlus />{{ $t("title-bar.new-group") }}</button>
-      </div>
-    </n-modal>
-
-    <n-modal
-      :auto-focus="false"
-      :show="confirmState !== null"
-      preset="card"
-      :title="confirmState?.title ?? ''"
-      style="width: 420px; max-width: 92vw"
-      @update:show="(v: boolean) => { if (!v) confirmState = null; }"
-    >
-      <div v-if="confirmState" class="dialog-body">
-        <div class="confirm-text">{{ confirmState.content }}</div>
-        <div class="dialog-foot">
-          <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
-          <n-button type="error" :loading="confirmLoading" @click="handleConfirm">
-            {{ confirmState.positiveText }}
-          </n-button>
+      <div v-if="movingInstance" class="sheet">
+        <div class="sheet-title">{{ $t("instance-card.move-to-group") }}</div>
+        <div class="move-list">
+          <p class="move-hint">{{ movingInstance.name }}</p>
+          <button
+            class="move-item"
+            :class="{ current: !movingInstance.group }"
+            @click="moveTo(null)"
+          >
+            <i class="dot" style="background: var(--text-3)"></i>
+            <span>{{ $t("create-instance.ungrouped") }}</span>
+          </button>
+          <button
+            v-for="g in instances.groups"
+            :key="g.id"
+            class="move-item"
+            :class="{ current: movingInstance.group === g.id }"
+            @click="moveTo(g.id)"
+          >
+            <i class="dot" :style="{ background: g.color || 'var(--accent)' }"></i>
+            <span>{{ g.name }}</span>
+          </button>
+          <button class="move-item add" @click="openCreateGroup">
+            <IconPlus />{{ $t("title-bar.new-group") }}</button>
         </div>
       </div>
-    </n-modal>
+    </app-popup>
   </div>
 </template>
 
@@ -612,6 +603,28 @@ async function moveTo(groupId: string | null) {
   font-size: 34px;
   opacity: 0.6;
 }
+/* ── 底部弹层（Vant Popup）通用壳：标题 + 内容 + 通栏按钮 ────────────── */
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.sheet-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+/* 弹层里的按钮是拇指主操作：等宽通栏、触控高度 */
+.sheet .dialog-foot {
+  gap: 10px;
+}
+.sheet .dialog-foot :deep(.van-button) {
+  flex: 1;
+  min-height: 44px;
+}
 .dialog-body {
   display: flex;
   flex-direction: column;
@@ -655,6 +668,11 @@ async function moveTo(groupId: string | null) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
+}
+/* 分组多的时候列表自己滚（弹层 maxHeight 已兜底） */
+.move-item {
+  min-height: 44px;
 }
 .move-hint {
   margin: 0 0 6px;

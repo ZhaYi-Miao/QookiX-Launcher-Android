@@ -132,7 +132,8 @@ pub async fn get_settings() -> Result<Settings> {
             dismissed_update_version: raw_str(&settings, &["dismissed_update_version", "dismissedUpdateVersion"]),
             auto_update: raw_bool(&settings, &["auto_update", "autoUpdate"], true),
             update_source: raw_str(&settings, &["update_source", "updateSource"]).unwrap_or_else(|| "bucket".into()),
-            orientation: raw_str(&settings, &["orientation"]).unwrap_or_else(|| "landscape".into()),
+            // 手机上启动器是「清单+操作」型界面，竖屏单列信息密度最合适（游戏自己会转横屏）
+            orientation: raw_str(&settings, &["orientation"]).unwrap_or_else(|| "portrait".into()),
             // 归一化：只认 "left"，其余（含写坏的值）都当 "bottom"，
             // 免得前端拿到一个不认识的值后两套布局都不生效。
             nav_position: match raw_str(&settings, &["nav_position", "navPosition"])
@@ -205,7 +206,7 @@ pub async fn get_settings() -> Result<Settings> {
             dismissed_update_version: None,
             auto_update: true,
             update_source: "bucket".to_string(),
-            orientation: "landscape".to_string(),
+            orientation: "portrait".to_string(),
             nav_position: "bottom".to_string(),
             nav_offset: 0,
             nav_gap_top: 0,

@@ -10,8 +10,9 @@ import { useSettingsStore } from "../stores/settings";
 import { latencyInfo, loaderBadge } from "../utils/format";
 import { api } from "../api";
 import { supportsQuickPlay } from "../version";
-import { useMessage, NDrawer, NDrawerContent, NModal } from "naive-ui";
-import { useIsMobile } from "../composables/useMediaQuery";
+import { useMessage, NModal } from "naive-ui";
+// 底部弹层走 AppPopup（默认 teleport 到 #van-layer：跳出 .content 的层叠上下文 + 跟 zoom 同步）
+import AppPopup from "../ui/AppPopup.vue";
 import AppIcon from "../components/AppIcon.vue";
 import PlaytimeCard from "../components/PlaytimeCard.vue";
 import type { ServerStatus } from "../types";
@@ -21,8 +22,6 @@ const router = useRouter();
 const instances = useInstancesStore();
 const accounts = useAccountsStore();
 const message = useMessage();
-/** 手机（含横屏）：选实例用底部抽屉，而不是桌面式居中弹窗。 */
-const isMobile = useIsMobile();
 const pinsStore = usePinsStore();
 const settingsStore = useSettingsStore();
 const launching = ref(false);
@@ -317,47 +316,48 @@ onMounted(() => {
       </div>
     </section>
 
-    <!-- 手机用**底部抽屉**（拇指区、可下滑关闭），桌面仍是右侧抽屉 —— 居中弹窗在
-         手机上很「电脑」，而且 853×384 的横屏里它挡住大半个屏幕。 -->
-    <n-drawer
-      :auto-focus="false"
+    <!-- 选实例：Vant 底部弹层（拇指区、右上角可关）。本应用只有安卓端，
+         原先「桌面右侧抽屉 / 手机底部抽屉」的双形态不再需要。 -->
+    <app-popup
       :show="showPicker"
-      :placement="isMobile ? 'bottom' : 'right'"
-      :width="isMobile ? undefined : 460"
-      :height="isMobile ? '76%' : undefined"
+      position="bottom"
+      round
+      closeable
+      :style="{ height: '78%' }"
       @update:show="(v: boolean) => (showPicker = v)"
     >
-      <n-drawer-content :title="$t('home.switch-instance')" closable>
+      <div class="picker-sheet">
+        <div class="picker-head">{{ $t("home.switch-instance") }}</div>
         <div class="pick-scroll">
-        <section v-for="s in pickerSections" :key="s.key" class="pick-section">
-          <div class="pick-group">
-            <i class="dot" :style="{ background: s.color || 'var(--text-3)' }"></i>
-            <span>{{ s.name }}</span>
-            <span class="pick-group-count">{{ s.items.length }}</span>
-          </div>
-          <div class="pick-grid">
-            <div
-              v-for="inst in s.items"
-              :key="inst.id"
-              class="pick-card"
-              :class="{ active: selected?.id === inst.id }"
-              @click="pick(inst)"
-            >
-              <div class="pick-icon"><AppIcon :name="inst.icon" /></div>
-              <div class="pick-info">
-                <div class="pick-name text-ellipsis">{{ inst.name }}</div>
-                <div class="pick-meta">
-                  <span class="badge">{{ loaderBadge(inst.loader) }}</span>
-                  <span class="ver-text">{{ inst.mc_version }}</span>
-                </div>
-              </div>
-              <div v-if="selected?.id === inst.id" class="pick-current">{{ $t("home.current") }}</div>
+          <section v-for="s in pickerSections" :key="s.key" class="pick-section">
+            <div class="pick-group">
+              <i class="dot" :style="{ background: s.color || 'var(--text-3)' }"></i>
+              <span>{{ s.name }}</span>
+              <span class="pick-group-count">{{ s.items.length }}</span>
             </div>
-          </div>
-        </section>
+            <div class="pick-grid">
+              <div
+                v-for="inst in s.items"
+                :key="inst.id"
+                class="pick-card"
+                :class="{ active: selected?.id === inst.id }"
+                @click="pick(inst)"
+              >
+                <div class="pick-icon"><AppIcon :name="inst.icon" /></div>
+                <div class="pick-info">
+                  <div class="pick-name text-ellipsis">{{ inst.name }}</div>
+                  <div class="pick-meta">
+                    <span class="badge">{{ loaderBadge(inst.loader) }}</span>
+                    <span class="ver-text">{{ inst.mc_version }}</span>
+                  </div>
+                </div>
+                <div v-if="selected?.id === inst.id" class="pick-current">{{ $t("home.current") }}</div>
+              </div>
+            </div>
+          </section>
         </div>
-      </n-drawer-content>
-    </n-drawer>
+      </div>
+    </app-popup>
 
     <!-- 完整游戏统计：柱状图 + 每实例时长（首页左下角统计卡的详情）。
          n-modal Teleport 到 body，不参与 #app 的 zoom，宽高用固定上限。 -->
@@ -753,15 +753,32 @@ onMounted(() => {
   }
 }
 
-/* 切换弹窗 */
+/* 切换弹窗（Vant 底部弹层）：头固定、列表自己滚。
+   弹层挂在 #van-layer（在 .app 内），zoom 缩放对它生效 —— 不再需要 vh 兜底。 */
+.picker-sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.picker-head {
+  flex-shrink: 0;
+  padding: 16px 48px 8px 18px; /* 右侧给关闭按钮让位 */
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
 .pick-scroll {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  /* 这个列表在 n-modal 里（Teleport 到 body），不参与 #app 的 zoom */
-  max-height: 56vh;
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+/* 弹层里的实例卡是点选目标：触控高度兜底（原来按网格排版没考虑行高下限） */
+.pick-card {
+  min-height: 52px;
 }
 .pick-group {
   display: flex;
@@ -1084,16 +1101,20 @@ onMounted(() => {
   .home > section {
     margin-top: 0;
   }
-  /* 选实例的底部抽屉：内容区自己滚，标题栏固定 */
-  .pick-scroll {
-    max-height: 62vh;
-  }
   /* 内容不足一屏时居中，别全堆在顶上（safe 保证溢出时不裁掉顶部）。
      注意**不要**在这里按 vh 放大卡片/字号 —— 界面缩放调小时布局视口高度会变大，
      那样写会让首页文字在低缩放下反而更大（其它页面都跟着缩小，只有首页不变，
      非常突兀）。项目的其它尺寸都是固定 px、统一跟随 zoom，首页也照此办理。 */
   .home {
     justify-content: safe center;
+  }
+  /* 竖屏改顶对齐：竖屏高度充裕，居中会在标题栏和首卡之间留出一大段空白，
+     看起来像没加载完；顶对齐才是常规手机应用的排布。
+     用 orientation 判断是安全的 —— 它按视口**宽高比**判定，与 zoom 无关。 */
+  @media (orientation: portrait) {
+    .home {
+      justify-content: flex-start;
+    }
   }
 }
 
