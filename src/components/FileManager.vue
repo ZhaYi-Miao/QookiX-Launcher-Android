@@ -17,6 +17,7 @@ import {
   IconEdit,
   IconFile,
   IconFolder,
+  IconMoreVertical,
   IconPlus,
   IconRefresh,
   IconSave,
@@ -436,6 +437,12 @@ function entryMenu(e: FsEntry): ContextMenuItem[] {
   return items;
 }
 
+/** 「更多」按钮：打开该行的操作面板（复用长按/右键那套菜单项） */
+function openRowMenu(e: FsEntry) {
+  selected.value = e.rel;
+  openMenu(0, 0, entryMenu(e));
+}
+
 function onRowContext(ev: MouseEvent, e: FsEntry) {
   selected.value = e.rel;
   openMenu(ev.clientX, ev.clientY, entryMenu(e));
@@ -740,22 +747,15 @@ onBeforeUnmount(() => {
                   }}<template v-if="e.modified"> · {{ fmtDate(e.modified) }}</template>
                 </div>
               </div>
-              <div class="fm-acts">
-                <button
-                  v-if="isEditable(e)"
-                  class="act"
-                  :title="$t('file-manager.open')" :aria-label="$t('file-manager.open')"
-                  @click.stop="openEntry(e)"
-                >
-                  <IconEdit />
-                </button>
-                <button class="act" :title="$t('common.rename')" :aria-label="$t('common.rename')" @click.stop="startRename(e)">
-                  <IconType />
-                </button>
-                <button class="act danger" :title="$t('common.delete')" :aria-label="$t('common.delete')" @click.stop="askDelete(e)">
-                  <IconTrash />
-                </button>
-              </div>
+              <!-- 手机：行内不再并排三个小图标（每个只有 ~30px 宽），
+                   统一收进「更多」→ ContextMenu（已是底部面板）。 -->
+              <button
+                class="act"
+                :aria-label="$t('common.rename')"
+                @click.stop="openRowMenu(e)"
+              >
+                <IconMoreVertical />
+              </button>
             </template>
           </div>
         </template>

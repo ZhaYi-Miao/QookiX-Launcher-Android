@@ -15,7 +15,8 @@
     "icons": "tauri icon",
     "version": "node scripts/update-version.mjs",
     "i18n:extract": "node scripts/extract-i18n.mjs",
-    "i18n:audit": "node scripts/audit-i18n.mjs"
+    "i18n:audit": "node scripts/audit-i18n.mjs",
+    "imports:audit": "node scripts/audit-missing-imports.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -6,6 +6,8 @@ import { useInstancesStore } from "../stores/instances";
 import { useMessage } from "naive-ui";
 import { Button as VanButton } from "vant";
 import InstanceCard from "../components/InstanceCard.vue";
+import AppPopup from "../ui/AppPopup.vue";
+import AppInput from "../ui/AppInput.vue";
 import { IconPlus } from "../components/icons";
 import type { Instance, InstanceGroup } from "../types";
 import type { Ref } from "vue";

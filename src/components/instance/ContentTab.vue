@@ -18,6 +18,7 @@ import { useInstancesStore } from "../../stores/instances";
 import {
   IconCheck,
   IconClose,
+  IconMoreVertical,
   IconDownload,
   IconFile,
   IconImage,
