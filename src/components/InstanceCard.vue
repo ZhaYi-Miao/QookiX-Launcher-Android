@@ -1,475 +1,185 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, nextTick, ref } from "vue";
-import { openMenuId, bindMenuOutside } from "../composables/instanceMenu";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useMessage } from "naive-ui";
+import { Button as VanButton } from "vant";
 import { useInstancesStore } from "../stores/instances";
-import { usePinsStore, type PinTarget } from "../stores/pins";
-import { useMessage, NButton } from "naive-ui";
+import { useAccountsStore } from "../stores/accounts";
 import { loaderBadge } from "../utils/format";
 import AppIcon from "./AppIcon.vue";
-import {
-  IconFolder,
-  IconLayout,
-  IconLayers,
-  IconMapPin,
-  IconMoreVertical,
-  IconPlay,
-  IconTrash,
-} from "./icons";
+import AppPopup from "../ui/AppPopup.vue";
+import { IconPlay, IconMoreVertical } from "./icons";
 import type { Instance } from "../types";
-import AppSheet from "../ui/AppSheet.vue";
 
+/** 手机形态的实例卡：竖版（图标/名称/版本在上，启动键通栏在下），
+ *  其余操作收进「更多」底部弹层 —— 桌面的悬停菜单、右键菜单在手机上都没法用。 */
 const props = defineProps<{ instance: Instance }>();
 const emit = defineEmits<{ move: [instance: Instance] }>();
-const instances = useInstancesStore();
-const pins = usePinsStore();
+
 const router = useRouter();
 const message = useMessage();
+const instances = useInstancesStore();
+const accounts = useAccountsStore();
+const launching = ref(false);
+const showMore = ref(false);
 
-const confirmState = ref<{ title: string; content: string; positiveText: string; onOk: () => void | Promise<void> } | null>(null);
-const confirmLoading = ref(false);
-async function handleConfirm() {
-  if (!confirmState.value) return;
-  confirmLoading.value = true;
+const lastPlayed = computed(() =>
+  props.instance.last_played ? new Date(props.instance.last_played * 1000).toLocaleDateString() : ""
+);
+
+async function launch() {
+  if (!accounts.accounts.length) {
+    message.warning($t("home.add-account-hint"));
+    accounts.showManager = true;
+    return;
+  }
+  launching.value = true;
   try {
-    await confirmState.value.onOk();
-    confirmState.value = null;
+    const res = await instances.launch(props.instance.id);
+    if (res) message.success($t("home.launched", { p1: props.instance.name }));
+  } catch (e) {
+    message.error(String(e));
   } finally {
-    confirmLoading.value = false;
+    launching.value = false;
   }
 }
 
-/** 上次游玩的相对时间（unix 秒）：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 日期 */
-function relTime(ts: number): string {
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return $t("instance-card.just-now");
-  if (diff < 3600) return $t("instance-card.minutes-ago", { p1: Math.floor(diff / 60) });
-  if (diff < 86400) return $t("instance-card.hours-ago", { p1: Math.floor(diff / 3600) });
-  if (diff < 172800) return $t("instance-card.yesterday");
-  if (diff < 259200) return $t("instance-card.day-before-yesterday");
-  if (diff < 86400 * 30) return $t("instance-card.days-ago", { p1: Math.floor(diff / 86400) });
-  return new Date(ts * 1000).toLocaleDateString();
+function openDetail() {
+  showMore.value = false;
+  router.push(`/instance/${props.instance.id}`);
 }
 
-/** 累计游玩时长（秒）的简短人类可读格式 */
-function fmtDuration(secs: number): string {
-  if (secs < 60) return $t("instance-card.under-a-minute");
-  const totalMin = Math.floor(secs / 60);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h >= 24) return $t("instance-card.days-hours", { p1: Math.floor(h / 24), p2: h % 24 });
-  if (h > 0) return m > 0 ? $t("instance-card.hours-minutes", { p1: h, p2: m }) : $t("instance-card.hours", { p1: h });
-  return $t("instance-card.minutes", { p1: m });
+function move() {
+  showMore.value = false;
+  emit("move", props.instance);
 }
 
-async function launch() {
+async function remove() {
+  showMore.value = false;
   try {
-    // launch 可能返回 null（渲染器确认弹窗拦下了，等用户决定）—— 那时别提示「已启动」
-    const res = await instances.launch(props.instance.id);
-    if (res) message.success($t("instance-card.game-running"));
+    await instances.remove(props.instance.id);
+    message.success($t("instance-card.delete-instance"));
   } catch (e) {
     message.error(String(e));
   }
 }
-
-// 首页与侧边栏的固定互相独立，各自维护一条记录
-const homePinId = computed(() =>
-  pins.makeId("instance", props.instance.id, props.instance.id, "home")
-);
-const sidebarPinId = computed(() =>
-  pins.makeId("instance", props.instance.id, props.instance.id, "sidebar")
-);
-function togglePin(target: PinTarget) {
-  const i = props.instance;
-  pins.toggle({
-    id: pins.makeId("instance", i.id, i.id, target),
-    type: "instance",
-    target,
-    instanceId: i.id,
-    instanceName: i.name,
-    instanceIcon: i.icon,
-    mcVersion: i.mc_version,
-    loader: i.loader,
-    name: i.name,
-    icon: null,
-  });
-}
-
-// ——「更多」下拉菜单（全局单例：同一时刻只开一个）——
-const menuOpen = computed(() => openMenuId.value === props.instance.id);
-// 按钮离视口底部太近时改为向上弹出，避免菜单被截掉
-const menuUp = ref(false);
-const moreBtn = ref<HTMLElement | null>(null);
-
-async function toggleMenu() {
-  if (menuOpen.value) {
-    openMenuId.value = null;
-    return;
-  }
-  openMenuId.value = props.instance.id;
-  bindMenuOutside();
-  await nextTick();
-  const r = moreBtn.value?.getBoundingClientRect();
-  if (r) menuUp.value = r.bottom + 220 > window.innerHeight;
-}
-/** 菜单项：先收起菜单再执行动作 */
-function runMenu(fn: () => void) {
-  openMenuId.value = null;
-  fn();
-}
-
-/**
- * 「打开游戏目录」。
- *
- * 以前调后端 `open_instance_folder`（交给系统文件管理器打开应用私有目录）——
- * 安卓上这个操作必然失败，用户只会看到一个报错弹窗。
- * 现在直接跳到本实例的「文件」标签页，也就是应用内置的文件管理器（可用且一致）。
- */
-function openFiles() {
-  router.push(`/instance/${props.instance.id}?tab=files`);
-}
-
-function confirmDelete() {
-  confirmState.value = {
-    title: $t("instance-card.delete-instance"),
-    content: $t("instance-card.delete-confirm", { p1: props.instance.name }),
-    positiveText: $t("common.delete"),
-    onOk: async () => {
-      try {
-        await instances.remove(props.instance.id);
-        message.success($t("instance-card.on-ok"));
-      } catch (e) {
-        message.error(String(e));
-      }
-    },
-  };
-}
 </script>
 
 <template>
-  <div class="inst-card glass clickable" :class="{ 'menu-open': menuOpen }" @click="router.push(`/instance/${instance.id}`)">
-    <div class="card-top">
-      <div class="icon"><AppIcon :name="instance.icon" /></div>
-      <div class="title-wrap">
-        <div class="name text-ellipsis">{{ instance.name }}</div>
-        <div class="meta">
-          <span class="badge">{{ loaderBadge(instance.loader) }}</span>
-          <span class="mc">{{ instance.mc_version }}</span>
-          <span v-if="instance.loader_version" class="lv">{{ instance.loader_version }}</span>
-        </div>
-      </div>
+  <div class="card glass" @click="openDetail">
+    <button class="more" :aria-label="$t('common.delete')" @click.stop="showMore = true"><IconMoreVertical /></button>
+    <div class="ic"><AppIcon :name="instance.icon" /></div>
+    <div class="nm">{{ instance.name }}</div>
+    <div class="mt">
+      <span class="badge">{{ loaderBadge(instance.loader) }}</span>
+      <span class="ver">{{ instance.mc_version }}</span>
     </div>
-    <div class="card-foot">
-      <div class="foot-info">
-        <span v-if="instance.last_played" :title="$t('instance-card.last-played', { p1: new Date(instance.last_played * 1000).toLocaleString() })">{{ $t("instance-card.last", { p1: relTime(instance.last_played) }) }}
-        </span>
-        <span v-if="instance.last_played && instance.total_play_time > 0">·</span>
-        <span v-if="instance.total_play_time > 0" :title="$t('instance-card.total-playtime')">{{ $t("instance-card.played", { p1: fmtDuration(instance.total_play_time) }) }}
-        </span>
+    <div v-if="lastPlayed" class="lp">{{ lastPlayed }}</div>
+    <van-button class="go" block type="primary" :loading="launching" @click.stop="launch">
+      <IconPlay /> {{ $t("instance-card.launch") }}
+    </van-button>
+    <app-popup :show="showMore" position="bottom" round @update:show="(v: boolean) => (showMore = v)">
+      <div class="sheet">
+        <div class="stitle">{{ instance.name }}</div>
+        <button class="act" @click="openDetail">{{ $t("instance-detail.files") }}</button>
+        <button class="act" @click="move">{{ $t("instance-card.move-to-group") }}</button>
+        <button class="act danger" @click="remove">{{ $t("instance-card.delete-instance") }}</button>
       </div>
-      <div class="actions" @click.stop>
-        <button
-          class="icon-btn play"
-          :title="$t('instance-card.launch')" :aria-label="$t('instance-card.launch')"
-          @click="launch"
-        >
-          <IconPlay />
-        </button>
-        <button class="icon-btn" :title="$t('instance-card.open-files')" :aria-label="$t('instance-card.open-files')" @click="openFiles">
-          <IconFolder />
-        </button>
-        <div class="more-wrap">
-          <button
-            ref="moreBtn"
-            class="icon-btn"
-            :class="{ active: menuOpen }"
-            :title="$t('instance-card.more')" :aria-label="$t('instance-card.more')"
-            @click="toggleMenu"
-          >
-            <IconMoreVertical />
-          </button>
-          <Transition name="menu-pop">
-            <div v-if="menuOpen" class="more-menu" :class="{ up: menuUp }">
-              <button
-                class="more-item"
-                :class="{ active: pins.isPinned(homePinId) }"
-                @click="runMenu(() => togglePin('home'))"
-              >
-                <IconMapPin />
-                <span>{{ pins.isPinned(homePinId) ? $t('instance-card.unpin-home') : $t('instance-saves.pin-home') }}</span>
-              </button>
-              <button
-                class="more-item"
-                :class="{ active: pins.isPinned(sidebarPinId) }"
-                @click="runMenu(() => togglePin('sidebar'))"
-              >
-                <IconLayout />
-                <span>{{ pins.isPinned(sidebarPinId) ? $t('instance-card.unpin-sidebar') : $t('instance-card.pin-sidebar') }}</span>
-              </button>
-              <button class="more-item" @click="runMenu(() => emit('move', instance))">
-                <IconLayers />
-                <span>{{ $t("instance-card.move-to-group") }}</span>
-              </button>
-              <div class="more-divider"></div>
-              <button class="more-item danger" @click="runMenu(confirmDelete)">
-                <IconTrash />
-                <span>{{ $t("instance-card.delete-instance") }}</span>
-              </button>
-            </div>
-          </Transition>
-        </div>
-      </div>
-    </div>
+    </app-popup>
   </div>
-  <app-sheet
-    :show="confirmState !== null"
-    :title="confirmState?.title ?? ''"
-    @update:show="(v: boolean) => { if (!v) confirmState = null; }"
-  >
-    <div v-if="confirmState" style="display: flex; flex-direction: column; gap: 16px;">
-      <div style="font-size: 14px; color: var(--text-2); line-height: 1.6;">{{ confirmState.content }}</div>
-      <div style="display: flex; justify-content: flex-end; gap: 10px;">
-        <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
-        <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
-      </div>
-    </div>
-  </app-sheet>
 </template>
 
 <style scoped>
-.inst-card {
-  padding: 18px;
+.card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  position: relative;
-}
-/* 菜单弹出时把整张卡片抬到最上层，避免被相邻卡片遮挡 */
-.inst-card.menu-open {
-  z-index: 50;
-}
-.card-top {
-  display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 6px;
+  padding: 12px 10px 10px;
+  cursor: pointer;
 }
-.icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: transparent;
-  position: relative;
-  font-size: 21px;
-  color: var(--accent);
-  flex-shrink: 0;
-  box-sizing: border-box;
-}
-.icon :deep(.app-icon) {
+.more {
   position: absolute;
-  inset: 0;
-}
-.title-wrap {
-  flex: 1;
-  min-width: 0;
-}
-.name {
-  font-weight: 600;
-  font-size: 15px;
-  margin-bottom: 5px;
-}
-.meta {
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+.ic {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--accent-25), var(--accent-08));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.nm {
+  font-size: 14px;
+  font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-3);
 }
 .badge {
   background: var(--accent-16);
   color: var(--accent);
-  border-radius: 6px;
-  padding: 1px 7px;
+  border-radius: 5px;
+  padding: 1px 6px;
   font-weight: 600;
 }
-.mc {
-  color: var(--text-2);
-  font-weight: 600;
-}
-.lv {
+.lp {
+  font-size: 10px;
   color: var(--text-3);
 }
-.state {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 8px;
-  flex-shrink: 0;
+.go {
+  margin-top: 4px;
+  min-height: 38px;
 }
-.state.ok {
-  color: #4ec9a0;
-  background: rgba(78, 201, 160, 0.12);
-}
-.state.warn {
-  color: #e0a030;
-  background: rgba(224, 160, 48, 0.12);
-}
-.card-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-top: 1px solid var(--border);
-  padding-top: 11px;
-}
-.foot-info {
-  font-size: 12px;
-  color: var(--text-3);
-}
-.actions {
-  display: flex;
-  gap: 6px;
-}
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.12s;
-}
-.icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-1);
-}
-.icon-btn.play {
-  color: var(--accent);
-  border-color: var(--accent-04);
-  background: var(--accent-soft);
-}
-.icon-btn.active {
-  color: var(--accent);
-  border-color: var(--accent-04);
-  background: var(--accent-soft);
-}
-.icon-btn.danger:hover {
-  color: #e5534b;
-  border-color: rgba(229, 83, 75, 0.5);
-}
-.icon-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* ——「更多」下拉菜单 —— */
-.more-wrap {
-  position: relative;
-}
-.more-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
-  z-index: 60;
-  min-width: 176px;
-  padding: 6px;
+.sheet {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  /* 明确背景：菜单嵌在卡片内，backdrop-filter 只能模糊卡片内部（近乎空白），
-     故采用不依赖 backdrop-filter 的 var(--bg-2) 背景，保证任意主题下都可见、跟随主题 */
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.55);
-  -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
-  backdrop-filter: blur(var(--glass-blur, 8px));
+  gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
-/* 按钮离视口底部太近时向上弹 */
-.more-menu.up {
-  top: auto;
-  bottom: calc(100% + 8px);
+.stitle {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
 }
-.more-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 13px;
-  font-family: inherit;
+.act {
+  min-height: 46px;
+  padding: 0 14px;
   text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.more-item svg {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-}
-.more-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
   color: var(--text-1);
+  font-family: inherit;
+  font-size: 15px;
 }
-.more-item.active {
-  color: var(--accent);
-}
-.more-item.danger:hover {
+.act.danger {
   color: #e5534b;
-  background: rgba(229, 83, 75, 0.12);
-}
-.more-divider {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--border);
-}
-.menu-pop-enter-active,
-.menu-pop-leave-active {
-  transition: opacity 0.12s ease, transform 0.12s ease;
-}
-.menu-pop-enter-from,
-.menu-pop-leave-to {
-  opacity: 0;
-  transform: translateY(-4px) scale(0.97);
-}
-.menu-pop-enter-to,
-.menu-pop-leave-from {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-/* 横屏手机上实例卡要压扁：首页可用高度只有 263px，桌面尺寸的卡片（18px 内边距 +
-   46px 图标 + 14px 间距 ≈ 150px）会把「启动游戏」挤到折线以下。压到约 115px 后
-   主按钮完整可见。 */
-@media (max-width: 1100px), (pointer: coarse) {
-  .inst-card {
-    padding: 10px 12px;
-    gap: 10px;
-  }
-  .card-top {
-    gap: 10px;
-  }
-  .icon {
-    width: 36px;
-    height: 36px;
-    font-size: 17px;
-  }
-  .name {
-    font-size: 14px;
-    margin-bottom: 2px;
-  }
-  .icon-btn {
-    width: 30px;
-    height: 30px;
-  }
+  border-color: rgba(229, 83, 75, 0.4);
 }
 </style>
