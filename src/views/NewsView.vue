@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { onMounted } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNewsStore } from "../stores/news";
 import { fmtDateShort as fmtDate } from "../utils/format";

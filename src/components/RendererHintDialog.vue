@@ -14,7 +14,8 @@
  */
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { NButton, NModal } from "naive-ui";
+import { Button as VanButton } from "vant";
+import AppSheet from "../ui/AppSheet.vue";
 import { api } from "../api";
 import type { RendererIssue } from "../types";
 import { useTasksStore } from "../stores/tasks";
@@ -170,22 +171,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 启动前确认：秒级判断，不用等游戏跑起来 -->
-  <NModal
+  <!-- 启动前确认：秒级判断，不用等游戏跑起来。
+       手机形态：底部弹层（这是最后一个 naive 居中卡片弹窗）。 -->
+  <app-sheet
     :show="!!guard"
-    preset="card"
-    :style="{ width: 'min(560px, 92vw)' }"
-    :closable="true"
+    :title="$t('renderer-hint-dialog.incompatible-title')"
+    :mask-closable="true"
     @update:show="(v: boolean) => (v ? null : launchAnyway())"
   >
-    <template #header>
+    <div v-if="guard" class="rh-body">
       <div class="rh-header">
         <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-hint") }}</span>
-        <span class="rh-title">{{ $t("renderer-hint-dialog.incompatible-title") }}</span>
       </div>
-    </template>
-
-    <div v-if="guard" class="rh-body">
       <div class="rh-switch">
         <span class="rh-chip rh-chip-used">{{ $t("renderer-hint-dialog.current-option", { p1: guard.usedName }) }}</span>
         <span class="rh-arrow">→</span>
@@ -202,28 +199,23 @@ onBeforeUnmount(() => {
 
     <template #footer>
       <div class="rh-footer">
-        <NButton size="small" quaternary @click="launchAnyway">{{ $t("renderer-hint-dialog.keep-and-launch", { p1: guard?.usedName }) }}</NButton>
-        <NButton size="small" type="primary" :loading="switching" @click="switchAndLaunch">{{ $t("renderer-hint-dialog.switch-and-launch", { p1: guard?.recommendedName }) }}</NButton>
+        <van-button block @click="launchAnyway">{{ $t("renderer-hint-dialog.keep-and-launch", { p1: guard?.usedName }) }}</van-button>
+        <van-button block type="primary" :loading="switching" @click="switchAndLaunch">{{ $t("renderer-hint-dialog.switch-and-launch", { p1: guard?.recommendedName }) }}</van-button>
       </div>
     </template>
-  </NModal>
+  </app-sheet>
 
   <!-- 启动后：日志里发现了渲染器失败证据 -->
-  <NModal
+  <app-sheet
     :show="show"
-    preset="card"
-    :style="{ width: 'min(560px, 92vw)' }"
-    :closable="true"
+    :title="$t('renderer-hint-dialog.suggestion-text')"
+    :mask-closable="true"
     @update:show="(v: boolean) => (v ? (show = v) : dismiss())"
   >
-    <template #header>
+    <div v-if="issue" class="rh-body">
       <div class="rh-header">
         <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-suggestion") }}</span>
-        <span class="rh-title">{{ $t("renderer-hint-dialog.suggestion-text") }}</span>
       </div>
-    </template>
-
-    <div v-if="issue" class="rh-body">
       <p class="rh-reason">{{ issue.reason }}</p>
 
       <div class="rh-switch">
@@ -243,12 +235,13 @@ onBeforeUnmount(() => {
 
     <template #footer>
       <div class="rh-footer">
-        <NButton size="small" quaternary @click="dismiss">{{ $t("renderer-hint-dialog.keep-current") }}</NButton>
-        <NButton size="small" type="primary" :loading="switching" @click="doSwitch">{{ $t("renderer-hint-dialog.switch-to", { p1: issue?.recommended_name }) }}
-        </NButton>
+        <van-button block @click="dismiss">{{ $t("renderer-hint-dialog.keep-current") }}</van-button>
+        <van-button block type="primary" :loading="switching" @click="doSwitch">
+          {{ $t("renderer-hint-dialog.switch-to", { p1: issue?.recommended_name }) }}
+        </van-button>
       </div>
     </template>
-  </NModal>
+  </app-sheet>
 </template>
 
 <style scoped>
@@ -332,5 +325,14 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+/* 手机：两个操作键通栏平分（原来是右上角并排的小按钮） */
+.rh-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rh-footer :deep(.van-button) {
+  min-height: 46px;
 }
 </style>

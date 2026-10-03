@@ -16,6 +16,8 @@ const router = createRouter({
     { path: "/multiplayer/:id", name: "server-detail", component: () => import("./views/ServerDetailView.vue"), meta: { title: $t("router.users"), icon: "users" } },
     { path: "/settings", name: "settings", component: () => import("./views/SettingsView.vue"), meta: { title: $t("router.settings"), icon: "settings" } },
     { path: "/skins", name: "skins", component: () => import("./views/SkinView.vue"), meta: { title: $t("router.user"), icon: "user" } },
+    // 手机底栏第 5 格：底栏放不下的入口都收在这里（见 views/MoreView.vue 的注释）
+    { path: "/more", name: "more", component: () => import("./views/MoreView.vue"), meta: { title: $t("nav.more"), icon: "more" } },
   ],
 });
 

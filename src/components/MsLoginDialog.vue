@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { ref, watch } from "vue";
-import { NButton } from "naive-ui";
+import AppButton from "../ui/AppButton.vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAccountsStore } from "../stores/accounts";
 import AppSheet from "../ui/AppSheet.vue";
@@ -71,12 +71,12 @@ async function retry() {
     </div>
     <template #footer>
       <div class="qkms-footer">
-        <n-button @click="close">{{ $t("common.close") }}</n-button>
+        <app-button @click="close">{{ $t("common.close") }}</app-button>
         <template v-if="!accounts.msError">
-          <n-button @click="copyCode">{{ $t("ms-login-dialog.copy-code") }}</n-button>
-          <n-button type="primary" @click="accounts.manualCheck">{{ $t("ms-login-dialog.done") }}</n-button>
+          <app-button @click="copyCode">{{ $t("ms-login-dialog.copy-code") }}</app-button>
+          <app-button type="primary" @click="accounts.manualCheck">{{ $t("ms-login-dialog.done") }}</app-button>
         </template>
-        <n-button v-if="accounts.msError" type="primary" @click="retry">{{ $t("first-run-setup.retry") }}</n-button>
+        <app-button v-if="accounts.msError" type="primary" @click="retry">{{ $t("first-run-setup.retry") }}</app-button>
       </div>
     </template>
   </app-sheet>

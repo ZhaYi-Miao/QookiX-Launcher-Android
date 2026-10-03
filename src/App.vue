@@ -3,21 +3,19 @@ import { t as $t } from "./i18n";
 import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { darkTheme, lightTheme, NConfigProvider, NDialogProvider, NMessageProvider } from "naive-ui";
 import { api } from "./api";
 import { useSettingsStore } from "./stores/settings";
 import { useAccountsStore } from "./stores/accounts";
 import { useInstancesStore } from "./stores/instances";
 import { useTasksStore } from "./stores/tasks";
 import { usePinsStore } from "./stores/pins";
-import { MessageBridge } from "./composables/notify";
-import { buildDarkOverrides, buildLightOverrides, DEFAULT_ACCENT, darken, lighten, rgba, ACCENT_ALPHAS } from "./theme";
+import { DEFAULT_ACCENT, darken, lighten, rgba, ACCENT_ALPHAS } from "./theme";
 import { Tabbar as VanTabbar, TabbarItem as VanTabbarItem } from "vant";
 import AccountChip from "./components/AccountChip.vue";
 import LaunchProgress from "./components/LaunchProgress.vue";
 import CrashDialog from "./components/CrashDialog.vue";
 import FirstRunSetup from "./components/FirstRunSetup.vue";
-import { IconHome, IconGrid, IconCompass, IconDownload, IconUser, IconSettings, IconNewspaper, IconUsers } from "./components/icons";
+import { IconHome, IconGrid, IconCompass, IconDownload, IconMoreVertical } from "./components/icons";
 
 const route = useRoute();
 const settings = useSettingsStore();
@@ -28,7 +26,6 @@ const pins = usePinsStore();
 
 const isDark = computed(() => settings.settings?.theme !== "light");
 const accent = computed(() => settings.settings?.theme_color || DEFAULT_ACCENT);
-const themeOverrides = computed(() => (isDark.value ? buildDarkOverrides(accent.value) : buildLightOverrides(accent.value)));
 
 watch(isDark, () => document.documentElement.classList.toggle("light", !isDark.value), { immediate: true });
 
@@ -58,28 +55,51 @@ watch(() => settings.settings?.background_image, (v) => {
 
 watch(() => settings.settings?.orientation, (m) => { if (m) void api.setOrientation(m); }, { immediate: true });
 
-const tabs = computed(() => {
-  const list = [
-    { name: "home", label: $t("nav.home"), icon: IconHome, to: "/" },
-    { name: "instances", label: $t("nav.instances"), icon: IconGrid, to: "/instances" },
-    { name: "browse", label: $t("nav.browse"), icon: IconCompass, to: "/browse" },
-    { name: "multiplayer", label: $t("nav.multiplayer"), icon: IconUsers, to: "/multiplayer" },
-    { name: "skins", label: $t("nav.skins"), icon: IconUser, to: "/skins" },
-    { name: "settings", label: $t("nav.settings"), icon: IconSettings, to: "/settings" },
-  ];
-  if (settings.settings?.show_news ?? true) {
-    list.splice(3, 0, { name: "news", label: $t("nav.news"), icon: IconNewspaper, to: "/news" });
-  }
-  return list;
-});
+/**
+ * 底部导航（手机形态）。
+ *
+ * 原来是「最多 8 个 tab 平铺」——在 412px 宽的竖屏上每个只剩 ~51px：文字挤压换行，
+ * 而且中间那个会被系统手势条压住。手机底栏的经验值是 **5 个**，
+ * 所以把高频 4 个留在栏里，其余（多人 / 皮肤 / 新闻 / 设置）收进「更多」面板 ——
+ * 入口一个都没少，只是不再挤在一起。
+ */
+const PRIMARY_TABS = computed(() => [
+  { name: "home", label: $t("nav.home"), icon: IconHome, to: "/" },
+  { name: "instances", label: $t("nav.instances"), icon: IconGrid, to: "/instances" },
+  { name: "browse", label: $t("nav.browse"), icon: IconCompass, to: "/browse" },
+]);
 
-/** 当前页对应的入口名（Vant Tabbar 的 v-model） */
+/** 「更多」页收纳的那些路由（用于判断「更多」这格何时点亮） */
+const MORE_ROUTES = ["/more", "/multiplayer", "/skins", "/news", "/settings"];
+
+/** 当前页对应的入口名（Vant Tabbar 的选中态来源） */
 const activeTab = computed(() => {
   const p = route.path;
   if (p === "/") return "home";
+  // 实例详情 / 创建实例都算「实例」这一格
   if (p.startsWith("/instance") || p === "/create") return "instances";
-  return tabs.value.find((t) => t.to !== "/" && p.startsWith(t.to))?.name ?? "";
+  if (p.startsWith("/downloads")) return "downloads";
+  if (p.startsWith("/more")) return "more";
+  // 「更多」里的二级页（多人 / 皮肤 / 新闻 / 设置）也点亮「更多」这一格
+  if (MORE_ROUTES.some((r) => p.startsWith(r))) return "more";
+  return PRIMARY_TABS.value.find((t) => t.to !== "/" && p.startsWith(t.to))?.name ?? "";
 });
+
+/**
+ * Tabbar 的双向绑定值（可写）。
+ *
+ * 不能直接把 `activeTab`（只读 computed）绑给 v-model：点任何一项 Vant 都会回写它，
+ * 对只读 computed 写入会报错；而「实例」一格又对应多个路由，
+ * 也需要一个本地值来承接。所以用本地 ref 跟路由同步。
+ */
+const tabModel = ref("home");
+watch(
+  activeTab,
+  (v) => {
+    if (v !== "more") tabModel.value = v || "home";
+  },
+  { immediate: true }
+);
 
 const downloadCount = computed(() => tasks.activeCount);
 const pageTitle = computed(() => (route.meta.title as string) || "");
@@ -109,44 +129,48 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
 </script>
 
 <template>
-  <n-config-provider :theme="isDark ? darkTheme : lightTheme" :theme-overrides="themeOverrides" :inline-theme-disabled="true">
-    <n-dialog-provider>
-      <n-message-provider>
-        <MessageBridge />
-        <div class="shell app-bg">
-          <header class="top">
-            <h1 class="title">{{ pageTitle }}</h1>
-            <AccountChip />
-            <button v-if="pageAction" class="top-act" @click="pageAction.run()">{{ pageAction.text }}</button>
-          </header>
+  <!-- 顶层不再需要任何 UI 库的 provider：
+       naive 的 message/dialog 需要 provider 上下文，现在换成了不依赖上下文的 Vant Toast
+       （见 composables/message.ts），主题也早就由 CSS 变量 + vant.css 承担。
+       少一层包裹 = 少一处「弹层挂在 provider 里导致 zoom 脱节」的风险。 -->
+  <div class="shell app-bg">
+    <header class="top">
+      <h1 class="title">{{ pageTitle }}</h1>
+      <AccountChip />
+      <button v-if="pageAction" class="top-act" @click="pageAction.run()">{{ pageAction.text }}</button>
+    </header>
 
-          <main class="page">
-            <router-view v-slot="{ Component }">
-              <Transition name="page" mode="out-in">
-                <component :is="Component" />
-              </Transition>
-            </router-view>
-          </main>
+    <main class="page">
+      <router-view v-slot="{ Component }">
+        <Transition name="page" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
+    </main>
 
-          <van-tabbar v-model="activeTab" :fixed="false" :safe-area-inset-bottom="true" class="tabs">
-            <van-tabbar-item v-for="t in tabs" :key="t.name" :name="t.name" :to="t.to">
-              <template #icon><component :is="t.icon" class="tab-icon" /></template>
-              {{ t.label }}
-            </van-tabbar-item>
-            <van-tabbar-item name="downloads" to="/downloads" :badge="downloadCount > 0 ? String(downloadCount) : ''">
-              <template #icon><IconDownload class="tab-icon" /></template>
-              {{ $t("nav.downloads") }}
-            </van-tabbar-item>
-          </van-tabbar>
+    <van-tabbar v-model="tabModel" :fixed="false" :safe-area-inset-bottom="true" class="tabs">
+      <van-tabbar-item v-for="t in PRIMARY_TABS" :key="t.name" :name="t.name" :to="t.to">
+        <template #icon><component :is="t.icon" class="tab-icon" /></template>
+        {{ t.label }}
+      </van-tabbar-item>
+      <van-tabbar-item name="downloads" to="/downloads" :badge="downloadCount > 0 ? String(downloadCount) : ''">
+        <template #icon><IconDownload class="tab-icon" /></template>
+        {{ $t("nav.downloads") }}
+      </van-tabbar-item>
+      <!-- 「更多」：手机底栏只放 5 个，其余入口收到 /more 页（入口一个都没少）。
+           做成真实路由页而不是底栏内联弹层 —— 底栏项天生就是「切换页面」，
+           返回键/深链/选中态都由路由管，不用自己处理面板的开关与回退。 -->
+      <van-tabbar-item name="more" to="/more">
+        <template #icon><IconMoreVertical class="tab-icon" /></template>
+        {{ $t("nav.more") }}
+      </van-tabbar-item>
+    </van-tabbar>
 
-          <LaunchProgress />
-          <CrashDialog />
-          <FirstRunSetup />
-          <div id="van-layer"></div>
-        </div>
-      </n-message-provider>
-    </n-dialog-provider>
-  </n-config-provider>
+    <LaunchProgress />
+    <CrashDialog />
+    <FirstRunSetup />
+    <div id="van-layer"></div>
+  </div>
 </template>
 
 <style scoped>
@@ -205,6 +229,14 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
 }
 .tabs {
   flex-shrink: 0;
+  /* 手机：系统手势条（底部那条 pill）会**悬浮在应用之上**，
+     Vant 的 safe-area-inset-bottom 在多数安卓机上取不到值（实测会压住标签文字），
+     这里直接给一段固定内边距把图标文字抬到 pill 上方。 */
+  padding-bottom: 10px;
+}
+.tabs :deep(.van-tabbar-item) {
+  /* 底栏是最重要的触控目标，整格高度锁下限 */
+  min-height: 52px;
 }
 .page-enter-active { transition: opacity .22s ease, transform .22s ease; }
 .page-leave-active { transition: opacity .14s ease; }

@@ -6,7 +6,7 @@ import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
 import { usePinsStore } from "../stores/pins";
 
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { Button as VanButton, Swipe as VanSwipe, SwipeItem as VanSwipeItem } from "vant";
 import { loaderBadge } from "../utils/format";
 import AppIcon from "../components/AppIcon.vue";

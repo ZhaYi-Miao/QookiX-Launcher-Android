@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { pickFile as open } from "../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../api";

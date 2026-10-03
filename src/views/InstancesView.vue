@@ -3,7 +3,7 @@ import { t as $t } from "../i18n";
 import { computed, inject, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
 import InstanceCard from "../components/InstanceCard.vue";
 import AppPopup from "../ui/AppPopup.vue";

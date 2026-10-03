@@ -2,7 +2,8 @@
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
-import { NButton, useMessage } from "naive-ui";
+import AppButton from "../ui/AppButton.vue";
+import { useMessage } from "../composables/message";
 import { api } from "../api";
 import { fmtBytes } from "../utils/format";
 import type { PluginInfo, PluginProgressEvent, PluginSetupStatus } from "../types";
@@ -175,12 +176,12 @@ onBeforeUnmount(() => unlisten?.());
 
     <div class="frs-actions">
       <!-- 下载在后台跑：收起窗口不影响，进度也能在「设置 → 插件」看到 -->
-      <n-button v-if="running" @click="show = false">{{ $t("first-run-setup.run-in-background") }}</n-button>
+      <app-button v-if="running" @click="show = false">{{ $t("first-run-setup.run-in-background") }}</app-button>
       <template v-else>
-        <n-button v-if="status?.error" @click="check">{{ $t("first-run-setup.retry") }}</n-button>
-        <n-button v-else-if="finished || !items.length" type="primary" @click="show = false">{{ $t("common.close") }}</n-button>
-        <n-button v-else @click="start">{{ $t("first-run-setup.retry") }}</n-button>
-        <n-button v-if="!finished" @click="dismiss">{{ $t("first-run-setup.later") }}</n-button>
+        <app-button v-if="status?.error" @click="check">{{ $t("first-run-setup.retry") }}</app-button>
+        <app-button v-else-if="finished || !items.length" type="primary" @click="show = false">{{ $t("common.close") }}</app-button>
+        <app-button v-else @click="start">{{ $t("first-run-setup.retry") }}</app-button>
+        <app-button v-if="!finished" @click="dismiss">{{ $t("first-run-setup.later") }}</app-button>
       </template>
     </div>
   </app-sheet>

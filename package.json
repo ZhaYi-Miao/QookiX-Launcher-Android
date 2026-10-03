@@ -24,7 +24,6 @@
     "@tauri-apps/plugin-opener": "^2",
     "dompurify": "^3.4.16",
     "marked": "^18.0.14",
-    "naive-ui": "^2.45.2",
     "pinia": "^2.2.6",
     "skinview3d": "^3.4.2",
     "vant": "^4.10.2",

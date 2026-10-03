@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, ref } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { useTasksStore, type TaskEntry } from "../stores/tasks";
 import { fmtBytes, fmtSpeed } from "../utils/format";
 import { api } from "../api";

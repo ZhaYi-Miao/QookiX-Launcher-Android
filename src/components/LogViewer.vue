@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { NCheckbox, useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
+import AppSwitch from "../ui/AppSwitch.vue";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useTasksStore } from "../stores/tasks";
 import { api } from "../api";
@@ -109,7 +110,10 @@ async function exportLog() {
     <div class="log-toolbar">
       <span class="log-title">{{ $t("log-viewer.game-output") }}</span>
       <div class="log-actions">
-        <n-checkbox v-model:checked="autoScroll" size="small">{{ $t("log-viewer.auto-scroll") }}</n-checkbox>
+        <label class="log-auto">
+          <span>{{ $t("log-viewer.auto-scroll") }}</span>
+          <app-switch :value="autoScroll" @update:value="(v: boolean) => (autoScroll = v)" />
+        </label>
         <button class="mini" :title="$t('log-viewer.copy-all')" :aria-label="$t('log-viewer.copy-all')" @click="copyAll">
           <IconCopy />{{ $t("common.copy") }}</button>
         <button class="mini" :title="$t('log-viewer.export-file')" :aria-label="$t('log-viewer.export-file')" @click="exportLog">
@@ -145,8 +149,20 @@ async function exportLog() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 手机：窄屏放不下就换行，别把按钮压成小图标 */
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
+}
+/* 自动滚动开关：标签 + 开关一行，触控高度给足 */
+.log-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  font-size: 13px;
+  color: var(--text-3);
 }
 .log-title {
   font-size: 13px;

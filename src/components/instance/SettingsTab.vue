@@ -7,7 +7,8 @@
  */
 import { t as $t } from "../../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { NButton, NRadioButton, NRadioGroup, useMessage } from "naive-ui";
+import AppButton from "../../ui/AppButton.vue";
+import { useMessage } from "../../composables/message";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
 import { api } from "../../api";
@@ -20,8 +21,21 @@ import IconPickerDialog from "../IconPickerDialog.vue";
 import AppInput from "../../ui/AppInput.vue";
 import AppSlider from "../../ui/AppSlider.vue";
 import AppSelect from "../../ui/AppSelect.vue";
+import AppSeg from "../../ui/AppSeg.vue";
 
 const props = defineProps<{ instanceId: string }>();
+
+/** 分段控件的选项（文案走 i18n，key 与原来一致，审计仍为 0） */
+const memoryModeOptions = computed(() => [
+  { value: "global", label: $t("instance-settings.from-global") },
+  { value: "auto", label: $t("instance-settings.auto") },
+  { value: "custom", label: $t("instance-settings.mcreator") },
+]);
+const rendererModeOptions = computed(() => [
+  { value: "auto", label: $t("instance-settings.auto-recommended") },
+  { value: "global", label: $t("instance-settings.follow-global") },
+  { value: "custom", label: $t("instance-settings.explicit") },
+]);
 
 const instances = useInstancesStore();
 const accounts = useAccountsStore();
@@ -217,7 +231,9 @@ async function saveSettings() {
  * 还没触发就没机会了；而 watcher 又被「首次跳过」这类标志吃过一次，两件事叠在一起
  * 就是「我明明选了跟随全局，启动还是按版本自动」。
  */
-async function onRendererMode(mode: "auto" | "global" | "custom") {
+async function onRendererMode(raw: string | number) {
+  // 分段控件回传的是 string | number，这里收窄到模式枚举
+  const mode = String(raw) as "auto" | "global" | "custom";
   // 切到「指定」时把**当前实际生效**的那个带过去 —— 否则默认值会把渲染器悄悄换掉
   if (mode === "custom") {
     edit.value.renderer = effectiveRenderer.value.key;
@@ -293,11 +309,7 @@ onBeforeUnmount(() => {
   <div class="settings-grid">
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.memory") }}</h4>
-      <n-radio-group v-model:value="edit.memory_mode" size="small" class="mem-modes">
-        <n-radio-button value="global">{{ $t("instance-settings.from-global") }}</n-radio-button>
-        <n-radio-button value="auto">{{ $t("instance-settings.auto") }}</n-radio-button>
-        <n-radio-button value="custom">{{ $t("instance-settings.mcreator") }}</n-radio-button>
-      </n-radio-group>
+      <app-seg v-model:value="edit.memory_mode" class="mem-modes" :options="memoryModeOptions" />
 
       <template v-if="edit.memory_mode === 'custom'">
         <app-slider
@@ -334,16 +346,12 @@ onBeforeUnmount(() => {
 
     <div class="set-card glass">
       <h4>{{ $t("instance-settings.renderer") }}</h4>
-      <n-radio-group
+      <app-seg
         :value="edit.renderer_mode"
-        size="small"
         class="mem-modes"
+        :options="rendererModeOptions"
         @update:value="onRendererMode"
-      >
-        <n-radio-button value="auto">{{ $t("instance-settings.auto-recommended") }}</n-radio-button>
-        <n-radio-button value="global">{{ $t("instance-settings.follow-global") }}</n-radio-button>
-        <n-radio-button value="custom">{{ $t("instance-settings.explicit") }}</n-radio-button>
-      </n-radio-group>
+      />
 
       <template v-if="edit.renderer_mode === 'custom'">
         <app-select
@@ -367,13 +375,13 @@ onBeforeUnmount(() => {
           v-model:value="aliasDraft"
           :placeholder="$t('instance-settings.alias-hint')"
           @keydown.enter="saveAlias" />
-        <n-button
+        <app-button
           size="small"
           :disabled="savingAlias || aliasDraft === (instance?.alias ?? '')"
           @click="saveAlias"
         >
           {{ savingAlias ? $t('file-manager.saving') : $t('common.save') }}
-        </n-button>
+        </app-button>
       </div>
       <p class="hint">{{ $t("instance-settings.alias-usage") }}<code>qookix://launch/{{ aliasDraft || $t('instance-settings.alias-label') }}</code>{{ $t("instance-settings.alias-benefit") }}</p>
     </div>

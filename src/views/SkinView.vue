@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { useSkinRenderer, type AnimationKind } from "../composables/useSkinRenderer";
 import { useAccountsStore } from "../stores/accounts";
 import { api } from "../api";

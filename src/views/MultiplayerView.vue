@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { onMounted, ref } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { useServersStore } from "../stores/servers";
 import { Button as VanButton, Empty as VanEmpty, Tabs as VanTabs, Tab as VanTab } from "vant";
 import { IconPlus } from "../components/icons";

@@ -3,7 +3,8 @@ import { t as $t } from "../i18n";
 import { onBeforeUnmount, onMounted, ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listen } from "@tauri-apps/api/event";
-import { NButton, NModal } from "naive-ui";
+import AppSheet from "../ui/AppSheet.vue";
+import AppButton from "../ui/AppButton.vue";
 import { useTasksStore } from "../stores/tasks";
 
 interface CrashInfo {
@@ -106,21 +107,16 @@ watch(
 </script>
 
 <template>
-  <NModal
+  <app-sheet
     :show="show"
-    preset="card"
-    :style="{ width: 'min(560px, 92vw)' }"
-    :closable="true"
+    :title="info?.title ?? $t('crash-dialog.game-crashed')"
+    :mask-closable="true"
     @update:show="(v: boolean) => (show = v)"
   >
-    <template #header>
+    <div v-if="info" class="crash-body">
       <div class="crash-header">
         <span class="crash-badge" :class="sevMeta.cls">{{ sevMeta.label }}</span>
-        <span class="crash-title">{{ info?.title ?? $t('crash-dialog.game-crashed') }}</span>
       </div>
-    </template>
-
-    <div v-if="info" class="crash-body">
       <p class="crash-reason">{{ info.reason }}</p>
       <div v-if="info.affected_mods && info.affected_mods.length" class="crash-mods">
         <span class="mods-label">{{ $t("crash-dialog.related-mods") }}</span>
@@ -141,13 +137,13 @@ watch(
       <div class="crash-footer">
         <span v-if="info?.crash_report" class="crash-path">{{ info.crash_report }}</span>
         <div class="footer-btns">
-          <NButton @click="openLogs">{{ $t("crash-dialog.view-logs") }}</NButton>
-          <NButton v-if="info?.crash_report" @click="openCrash">{{ $t("crash-dialog.crash") }}</NButton>
-          <NButton type="primary" @click="show = false">{{ $t("crash-dialog.got-it") }}</NButton>
+          <app-button @click="openLogs">{{ $t("crash-dialog.view-logs") }}</app-button>
+          <app-button v-if="info?.crash_report" @click="openCrash">{{ $t("crash-dialog.crash") }}</app-button>
+          <app-button type="primary" @click="show = false">{{ $t("crash-dialog.got-it") }}</app-button>
         </div>
       </div>
     </template>
-  </NModal>
+  </app-sheet>
 </template>
 
 <style scoped>
@@ -253,8 +249,10 @@ watch(
   gap: 10px;
 }
 .footer-btns {
+  /* 手机：三个操作键竖排通栏，拇指区好点 */
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   flex-shrink: 0;
 }

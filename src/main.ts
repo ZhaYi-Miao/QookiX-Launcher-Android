@@ -8,6 +8,9 @@ import "./styles.css";
 // 顺序：先库样式，再我们的覆盖（vant.css 里全是 --van-* 变量映射，必须后写才生效）。
 import "vant/lib/index.css";
 import "./vant.css";
+// 文件管理器的手机壳布局（FileManager / ServerFileManager 共用一套类名，
+// 规则收在一处，避免两边各改一份）
+import "./styles-file-manager.css";
 
 // ── 输入法统一设置（安卓 IME 的自动大写 / 拼写替换）────────────────────
 // 安卓输入法默认 `autocapitalize=sentences` 并且会做拼写替换 ——

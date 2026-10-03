@@ -7,6 +7,7 @@
   "nav.settings": "Settings",
   "nav.news": "News",
   "nav.downloads": "Downloads",
+  "nav.more": "More",
   "nav.pinned": "Pinned",
   "nav.unpin": "Unpin",
   "nav.downloading": "Downloading {count}",

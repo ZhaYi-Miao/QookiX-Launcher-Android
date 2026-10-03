@@ -2,7 +2,8 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, useMessage } from "naive-ui";
+import AppButton from "../ui/AppButton.vue";
+import { useMessage } from "../composables/message";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -450,9 +451,9 @@ async function install() {
             <template v-if="feedbackMode === 'choose'">
               <div class="id-feedback-title">{{ $t("install-dialog.feedback-what") }}</div>
               <div class="id-feedback-actions">
-                <n-button size="small" @click="reportStale">{{ $t("install-dialog.feedback-outdated") }}</n-button>
-                <n-button size="small" @click="feedbackMode = 'quality'">{{ $t("install-dialog.feedback-wrong") }}</n-button>
-                <n-button size="small" @click="feedbackPanel = false">{{ $t("common.cancel") }}</n-button>
+                <app-button size="small" @click="reportStale">{{ $t("install-dialog.feedback-outdated") }}</app-button>
+                <app-button size="small" @click="feedbackMode = 'quality'">{{ $t("install-dialog.feedback-wrong") }}</app-button>
+                <app-button size="small" @click="feedbackPanel = false">{{ $t("common.cancel") }}</app-button>
               </div>
             </template>
             <template v-else>
@@ -460,8 +461,8 @@ async function install() {
               <app-input v-model:value="userSuggestion" size="small" :placeholder="$t('install-dialog.feedback-suggestion')" />
               <app-input v-model:value="userComment" size="small" :placeholder="$t('install-dialog.feedback-note')" />
               <div class="id-feedback-actions">
-                <n-button size="small" type="primary" :loading="submittingFeedback" @click="submitQuality">{{ $t("install-dialog.submit") }}</n-button>
-                <n-button size="small" @click="feedbackMode = 'choose'">{{ $t("install-dialog.back") }}</n-button>
+                <app-button size="small" type="primary" :loading="submittingFeedback" @click="submitQuality">{{ $t("install-dialog.submit") }}</app-button>
+                <app-button size="small" @click="feedbackMode = 'choose'">{{ $t("install-dialog.back") }}</app-button>
               </div>
             </template>
           </div>
@@ -562,15 +563,15 @@ async function install() {
       <!-- 操作按钮放在内容区内（而非 #footer）：
            版本列表较长时会把窗口撑高，footer 会跑到视口外点不到。 -->
       <div class="id-footer">
-        <n-button @click="emit('update:show', false)">{{ $t("common.close") }}</n-button>
-        <n-button
+        <app-button @click="emit('update:show', false)">{{ $t("common.close") }}</app-button>
+        <app-button
           type="primary"
           :loading="installing"
           @click="
             api.logDebug('[fe] 一键安装按钮被点击');
             install();
           "
-        >{{ $t("install-dialog.mcreator") }}</n-button>
+        >{{ $t("install-dialog.mcreator") }}</app-button>
       </div>
     </div>
   </app-sheet>

@@ -2,7 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
 import { api } from "../api";
 import { useInstancesStore } from "../stores/instances";

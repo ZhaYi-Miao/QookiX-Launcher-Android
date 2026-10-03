@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { api } from "../api";
 import { fmtDate, fmtSize } from "../utils/format";
 import type { ContextMenuItem, FsEntry } from "../types";

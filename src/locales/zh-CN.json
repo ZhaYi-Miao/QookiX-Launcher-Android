@@ -7,6 +7,7 @@
   "nav.settings": "设置",
   "nav.news": "新闻",
   "nav.downloads": "下载",
+  "nav.more": "更多",
   "nav.pinned": "固定",
   "nav.unpin": "取消固定",
   "nav.downloading": "正在下载 {count} 项",

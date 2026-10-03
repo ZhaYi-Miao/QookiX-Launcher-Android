@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, ref } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
 import { useAccountsStore } from "../stores/accounts";
 import AppPopup from "../ui/AppPopup.vue";

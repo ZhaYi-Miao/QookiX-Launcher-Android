@@ -523,3 +523,23 @@ a:active {
 :root[data-touch="large"] .n-switch {
   min-height: 32px;
 }
+/* ── 顶部加载条（src/loadingBar.ts 自管 DOM）──────────────────────────
+   视口顶端一条 2px 细线，走网络请求时可见；颜色跟随主题主色，失败转红。
+   这里只管外观，宽度/透明度由脚本控制。 */
+#qk-loading-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  z-index: 3000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+#qk-loading-bar .qk-lb-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}

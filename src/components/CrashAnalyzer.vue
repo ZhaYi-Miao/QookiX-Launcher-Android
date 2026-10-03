@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
-import { NButton, NSpin, useMessage } from "naive-ui";
+import AppButton from "../ui/AppButton.vue";
+import { useMessage } from "../composables/message";
 import { api } from "../api";
 import { fmtDateLocale as fmtTime, fmtSize } from "../utils/format";
 import { error as devError } from "../utils/logger";
@@ -301,7 +302,7 @@ function handleSelect(filename: string) {
 <template>
   <div class="crash-analyzer">
     <div v-if="loading" class="crash-loading">
-      <NSpin size="medium" />
+      <van-loading size="20" />
       <span>{{ $t("crash-analyzer.scanning") }}</span>
     </div>
 
@@ -355,7 +356,7 @@ function handleSelect(filename: string) {
       <!-- 分析结果 -->
       <div class="crash-result">
         <div v-if="analyzing" class="crash-analyzing">
-          <NSpin size="medium" />
+          <van-loading size="20" />
           <span>{{ $t("crash-analyzer.analyzing") }}</span>
         </div>
 
@@ -386,9 +387,9 @@ function handleSelect(filename: string) {
 
           <!-- 摘录 -->
           <div v-if="diagnosis.excerpt" class="crash-section">
-            <div class="crash-section-label">{{ $t("crash-analyzer.key-info") }}<NButton quaternary size="tiny" @click="copyExcerpt">
+            <div class="crash-section-label">{{ $t("crash-analyzer.key-info") }}<app-button plain size="tiny" @click="copyExcerpt">
                 <IconCopy />
-              </NButton>
+              </app-button>
             </div>
             <p class="crash-excerpt">{{ diagnosis.excerpt }}</p>
           </div>
@@ -440,9 +441,9 @@ function handleSelect(filename: string) {
 
           <!-- 关键堆栈 -->
           <div v-if="diagnosis.stacktrace.length" class="crash-section">
-            <div class="crash-section-label">{{ $t("crash-analyzer.key-stack") }}<NButton quaternary size="tiny" @click="copyStack">
+            <div class="crash-section-label">{{ $t("crash-analyzer.key-stack") }}<app-button plain size="tiny" @click="copyStack">
                 <IconCopy />
-              </NButton>
+              </app-button>
             </div>
             <div class="crash-stack">
               <div v-for="(f, i) in diagnosis.stacktrace" :key="i" class="crash-stack-line">
@@ -453,27 +454,27 @@ function handleSelect(filename: string) {
 
           <!-- 操作 -->
           <div class="crash-actions">
-            <NButton quaternary size="small" @click="analyze(true)">
-              <IconRefresh />{{ $t("crash-analyzer.reanalyze") }}</NButton>
-            <NButton quaternary size="small" @click="toggleRaw">
+            <app-button plain size="small" @click="analyze(true)">
+              <IconRefresh />{{ $t("crash-analyzer.reanalyze") }}</app-button>
+            <app-button plain size="small" @click="toggleRaw">
               <IconChevronRight v-if="!showRaw" />
-              <IconChevronDown v-else />{{ $t("crash-analyzer.view-raw") }}</NButton>
+              <IconChevronDown v-else />{{ $t("crash-analyzer.view-raw") }}</app-button>
           </div>
 
           <!-- 原始内容：点「查看原始报告」即自动加载，无需再单独点一次 -->
           <div v-if="showRaw" class="crash-raw">
-            <NSpin v-if="!rawContent" size="small" />
+            <van-loading v-if="!rawContent" size="16" />
             <template v-else>
               <pre>{{ rawContent }}</pre>
-              <NButton quaternary size="small" @click="copyRaw">
-                <IconCopy />{{ $t("crash-analyzer.copy-all") }}</NButton>
+              <app-button plain size="small" @click="copyRaw">
+                <IconCopy />{{ $t("crash-analyzer.copy-all") }}</app-button>
             </template>
           </div>
         </div>
 
         <!-- 尚未分析：显示「分析此崩溃报告」按钮（selected 为真但还没出结果） -->
         <div v-else class="crash-prompt">
-          <NButton type="primary" size="small" :disabled="analyzing || !selected" @click="analyze()">{{ $t("crash-analyzer.analyze-this") }}</NButton>
+          <app-button type="primary" size="small" :disabled="analyzing || !selected" @click="analyze()">{{ $t("crash-analyzer.analyze-this") }}</app-button>
         </div>
       </div>
     </div>

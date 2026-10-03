@@ -9,7 +9,9 @@ import { onMounted, ref, watch } from "vue";
 import { useInstancesStore } from "../../stores/instances";
 import { useAccountsStore } from "../../stores/accounts";
 import { usePinsStore } from "../../stores/pins";
-import { NButton, useDialog, useMessage } from "naive-ui";
+import AppButton from "../../ui/AppButton.vue";
+import { useDialog } from "../../composables/dialog";
+import { useMessage } from "../../composables/message";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../../api";
 import { supportsQuickPlay } from "../../version";
@@ -498,7 +500,7 @@ watch(
       <div class="bk-body">
         <div class="bk-toolbar">
           <span class="hint">{{ $t("instance-saves.backup-hint") }}</span>
-          <n-button size="small" type="primary" :loading="backingUp" @click="createBackup">{{ $t("instance-saves.create-backup") }}</n-button>
+          <app-button size="small" type="primary" :loading="backingUp" @click="createBackup">{{ $t("instance-saves.create-backup") }}</app-button>
         </div>
         <div v-if="loadingBackups" class="center">{{ $t("file-manager.loading") }}</div>
         <div v-else-if="!backups.length" class="center">{{ $t("instance-saves.no-backups") }}</div>
@@ -509,12 +511,12 @@ watch(
               <div class="c-meta"><span class="ver">{{ fmtSize(b.size) }}</span></div>
             </div>
             <div class="c-actions">
-              <n-button
+              <app-button
                 size="small"
                 type="warning"
                 :loading="restoring === b.filename"
                 @click="restoreBackup(b.filename)"
-              >{{ $t("common.restore") }}</n-button>
+              >{{ $t("common.restore") }}</app-button>
               <button class="bk-del" :title="$t('instance-saves.delete-backup')" :aria-label="$t('instance-saves.delete-backup')" @click="deleteBackup(b.filename)">
                 <IconTrash />
               </button>

@@ -1,34 +1,20 @@
 /**
- * 全局消息 API 持有器。
+ * 全局消息 API（给**非组件代码**用）。
  *
- * naive-ui 的 useMessage() 只能在组件 setup 上下文中调用；
- * 在异步回调（如 deep-link 处理、全局事件）里调用会直接抛异常。
- * App.vue 在 setup 中调用 setMessageApi() 存下实例，
- * 任何非组件代码通过 notifySuccess/notifyError 使用。
+ * 历史：naive 的 `useMessage()` 只能在组件 setup 里调，异步回调/全局事件里调会抛异常，
+ * 所以以前要向 MessageBridge 组件「借」一个实例存到模块级变量。
+ * 现在后端换成了不依赖任何 provider 的 Vant Toast（见 ./message.ts），
+ * 这层间接就不需要了 —— 这里保留的只是**语义化名字**（notifySuccess/notifyError），
+ * 让调用点读起来是「通知」而不是「组件里拿到的那个 message 对象」。
  */
-
-import { defineComponent, h } from "vue";
-import { useMessage, type MessageApi } from "naive-ui";
 import { log as devLog, error as devError, warn as devWarn } from "../utils/logger";
+import { useMessage } from "./message";
 
-let holder: MessageApi | null = null;
-
-export function setMessageApi(api: MessageApi) {
-  holder = api;
-}
-
-/** 放在 n-message-provider 内部，把 MessageApi 存入模块级持有器 */
-export const MessageBridge = defineComponent({
-  name: "MessageBridge",
-  setup() {
-    setMessageApi(useMessage());
-    return () => h("span", { style: "display:none" });
-  },
-});
+const message = useMessage();
 
 export function notifySuccess(content: string) {
   try {
-    holder?.success(content);
+    message.success(content);
   } catch {
     devLog("[notify]", content);
   }
@@ -36,7 +22,7 @@ export function notifySuccess(content: string) {
 
 export function notifyError(content: string) {
   try {
-    holder?.error(content);
+    message.error(content);
   } catch {
     devError("[notify]", content);
   }
@@ -44,7 +30,7 @@ export function notifyError(content: string) {
 
 export function notifyWarning(content: string) {
   try {
-    holder?.warning(content);
+    message.warning(content);
   } catch {
     devWarn("[notify]", content);
   }

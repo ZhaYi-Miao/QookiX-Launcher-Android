@@ -9,7 +9,8 @@
 import { t as $t } from "../../i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, useMessage } from "naive-ui";
+import AppButton from "../../ui/AppButton.vue";
+import { useMessage } from "../../composables/message";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { pickFile as open } from "../../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -518,8 +519,8 @@ defineExpose({
       <div v-if="confirmState" ref="confirmCardRef" style="display: flex; flex-direction: column; gap: 16px;">
         <div style="font-size: 14px; color: var(--text-2); line-height: 1.6;">{{ confirmState.content }}</div>
         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-          <n-button @click="confirmState = null">{{ $t("common.cancel") }}</n-button>
-          <n-button type="error" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</n-button>
+          <app-button @click="confirmState = null">{{ $t("common.cancel") }}</app-button>
+          <app-button type="danger" :loading="confirmLoading" @click="handleConfirm">{{ confirmState.positiveText }}</app-button>
         </div>
       </div>
     </app-sheet>
@@ -547,13 +548,13 @@ defineExpose({
           </button>
         </div>
         <div class="sv-actions">
-          <n-button size="small" @click="switchState.show = false">{{ $t("common.cancel") }}</n-button>
-          <n-button
+          <app-button size="small" @click="switchState.show = false">{{ $t("common.cancel") }}</app-button>
+          <app-button
             size="small"
             type="primary"
             :disabled="!switchState.selected || switchState.loading"
             @click="doSwitchVersion"
-          >{{ $t("instance-content.switch") }}</n-button>
+          >{{ $t("instance-content.switch") }}</app-button>
         </div>
       </div>
     </app-sheet>

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { t as $t } from "../../i18n";
 import { computed, onMounted, ref } from "vue";
-import { NButton, useDialog, useMessage } from "naive-ui";
+import AppButton from "../../ui/AppButton.vue";
+import { useDialog } from "../../composables/dialog";
+import { useMessage } from "../../composables/message";
 import { api } from "../../api";
 import type { ControlLayoutInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
@@ -202,8 +204,8 @@ function fmtTime(sec: number): string {
       <app-input v-model:value="renameTo" :placeholder="$t('instance-keys.new-name')" @keyup.enter="submitRename" />
       <p class="rename-hint">{{ $t("instance-keys.name-hint") }}</p>
       <div class="rename-actions">
-        <n-button @click="renameShow = false">{{ $t("common.cancel") }}</n-button>
-        <n-button type="primary" @click="submitRename">{{ $t("file-manager.ok") }}</n-button>
+        <app-button @click="renameShow = false">{{ $t("common.cancel") }}</app-button>
+        <app-button type="primary" @click="submitRename">{{ $t("file-manager.ok") }}</app-button>
       </div>
     </app-sheet>
 

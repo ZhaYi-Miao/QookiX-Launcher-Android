@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage } from "../composables/message";
 import { highlight, langLabel } from "../utils/highlight";
 import { api } from "../api";
 
