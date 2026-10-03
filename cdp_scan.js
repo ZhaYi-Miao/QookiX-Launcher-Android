@@ -253,7 +253,10 @@ ws.onopen = async () => {
       // 注意：同一路由重复 goto 不会重挂载组件，所以上一轮的子页状态还在 ——
       // 先按子页里的「取消」回到分组列表，才能找到下一项。
       await evaluate(
-        `(function(){const b=document.querySelector(".back .van-button");` +
+        `(function(){` +
+          // 返回条的选择器随设置页形态变过两次，这里两种都认：
+          // .sv-back = 分组列表页的返回条；.back .van-button = 旧骨架里的「取消」
+          `const b=document.querySelector(".sv-back")||document.querySelector(".back .van-button");` +
           `if(b){b.click(); return "reset";} return "list";})()`
       );
       await sleep(900);
