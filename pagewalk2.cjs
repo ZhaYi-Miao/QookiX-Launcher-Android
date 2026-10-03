@@ -70,6 +70,30 @@ const DIAG = `(() => {
     return r.width > 0 && r.height > 0 && r.height < 30;
   }).slice(0, 5).map(e => { const r = e.getBoundingClientRect(); return e.tagName.toLowerCase() + '.' + String(e.className).slice(0, 22) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' "' + (e.textContent || '').trim().slice(0, 8) + '"'; });
   if (small.length) out.issues.push({ kind: 'small-tap', detail: small.length + ' 个', els: small });
+  // 6) 贴边：可见内容离左右边 < 12px（底栏/通栏容器不算）
+  //    被祖先横向滚动/裁剪的要素不算 —— 它的 rect 也在视口外，但用户看不到（不是出血）
+  const inScroller = (e) => {
+    for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+      const ox = getComputedStyle(p).overflowX;
+      if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') return true;
+    }
+    return false;
+  };
+  const edgeEls = [...document.querySelectorAll('.page *')].filter(e => {
+    const r = e.getBoundingClientRect();
+    const cs = getComputedStyle(e);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (r.width < 8 || r.height < 8) return false;
+    if (r.width >= vw - 2) return false;
+    const leaf = e.children.length === 0;
+    if (!leaf && !(e.textContent || '').trim()) return false;
+    if (inScroller(e)) return false;
+    return r.left < 12 || r.right > vw - 12;
+  }).slice(0, 5).map(e => {
+    const r = e.getBoundingClientRect();
+    return e.tagName.toLowerCase() + '.' + String(e.className).slice(0, 22) + ' l=' + Math.round(r.left) + ' r=' + Math.round(vw - r.right) + ' "' + (e.textContent || '').trim().slice(0, 10) + '"';
+  });
+  if (edgeEls.length) out.issues.push({ kind: 'edge-hug', detail: edgeEls.length + ' 处', els: edgeEls });
   return JSON.stringify(out);
 })()`;
 
@@ -79,9 +103,10 @@ ws.onopen = async () => {
     await send("Runtime.enable", {});
     await send("Page.enable", {});
     await evaluate("document.querySelectorAll('.van-overlay').forEach(o=>o.click()); 'ok'");
-    // 设置分组只在 /settings 下才有，先确保在这页
+    // 设置分组只在 /settings 下才有。先「跳走再回来」强制重建组件 ——
+    // 上一轮若停在某个子标签页，组件不会卸载，push('/settings') 仍是子页（找不到行）。
     if (mode === "settings") {
-      await evaluate("(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.$router; await r.push('/settings'); return 'ok'})()");
+      await evaluate("(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.$router; await r.push('/more'); await r.push('/settings'); return 'ok'})()");
       await sleep(1800);
     }
     for (let i = 0; i < STEPS.length; i++) {
@@ -104,7 +129,8 @@ ws.onopen = async () => {
       const shot = await send("Page.captureScreenshot", { format: "png" });
       const file = path.join(outDir, mode + "-" + String(i + 1).padStart(2, "0") + "-" + label + ".png");
       fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
-      const d = JSON.parse(diag.result.value);
+      let d = { issues: [] };
+      try { d = JSON.parse(diag.result.value); } catch { console.log("   " + label + " 体检失败（页面可能在跳转）"); }
       if (d.issues.length) bad++;
       console.log((d.issues.length ? "!! " : "   ") + label + (d.issues.length ? "  " + d.issues.map((i) => i.kind + "(" + (i.els || []).join(" ; ") + ")").join("  |  ") : ""));
       // 回到列表（设置有返回键；实例详情用 tab 直接切，不用返回）

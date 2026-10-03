@@ -2110,6 +2110,13 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 18px;
 }
+/* 手机：子标签页原来一点左右内边距都没有，卡片背景直接顶到屏幕两边
+   （宽屏时子页在左侧导航右边，加了反而挤）。用 container query 只在窄屏加。 */
+@container page (max-width: 640px) {
+  .settings-pane {
+    padding: 0 16px 16px;
+  }
+}
 .btn {
   display: inline-flex;
   align-items: center;
@@ -2216,13 +2223,18 @@ textarea.text-input {
   height: 14px;
 }
 .storage-grid {
-  grid-template-columns: 1fr;
+  /* minmax(0,1fr) 而不是 1fr：1fr 的最小尺寸是内容 min-content，
+     卡里那一组 nowrap 的图例+按钮会把它顶到 438px 宽（容器 352px）→ 右侧出血。 */
+  grid-template-columns: minmax(0, 1fr);
 }
 .storage-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* 手机：图例 + 操作区原来 nowrap，硬撑到 438px（容器只有 352px），
+     右侧「更新」按钮被顶出屏幕。放不下就换行。 */
+  flex-wrap: wrap;
   margin-bottom: 14px;
 }
 .storage-header h3 {
@@ -2232,6 +2244,10 @@ textarea.text-input {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 同上：窄屏下这一组（上次更新 / 刷新 / 更新）自己也要能换行，
+     并允许收缩，否则会把卡片撑宽。 */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .storage-footer {
   display: flex;
@@ -2297,6 +2313,8 @@ textarea.text-input {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  /* 数值+单位不许折行（原来「26.3 KB」会断成两行，右列参差不齐） */
+  white-space: nowrap;
 }
 .legend-dot {
   flex: none;
@@ -2510,6 +2528,11 @@ textarea.text-input {
   display: flex;
   /* 不被同行说明文字挤压，否则「横屏/跟随系统」这类两字标签会被竖着折行 */
   flex-shrink: 0;
+  /* 但也不能超出所在行：选项多时（挖孔/刘海 3 项）要横滑，而不是把最后一个
+     选项顶到屏幕外（实测 401px 塞进 315px，右侧按钮被裁掉一半）。 */
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 9px;
   padding: 3px;

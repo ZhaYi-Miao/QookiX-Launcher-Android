@@ -95,6 +95,13 @@ const DIAG = `(async () => {
     }
   }
   // 6) 贴边：可见内容离屏幕左右边 < 12px（手机上会显得"顶着屏边"）
+  const clipped = (e) => {
+    for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+      const ox = getComputedStyle(p).overflowX;
+      if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') return true;
+    }
+    return false;
+  };
   const edgeEls = [...document.querySelectorAll('.page *')].filter(e => {
     const r = e.getBoundingClientRect();
     const cs = getComputedStyle(e);
@@ -103,6 +110,7 @@ const DIAG = `(async () => {
     if (r.width >= vw - 2) return false;           // 通栏容器（背景/分组）不算
     const leaf = e.children.length === 0;
     if (!leaf && !(e.textContent || '').trim()) return false;
+    if (clipped(e)) return false;   // 被横向滚动容器裁掉的不可见，不算出血
     return r.left < 12 || r.right > vw - 12;
   }).slice(0, 5).map(e => {
     const r = e.getBoundingClientRect();
