@@ -421,6 +421,14 @@ onBeforeUnmount(() => {
   font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   font-size: 13px;
   line-height: 20px;
+  /* 关掉系统字体缩放对编辑器的影响。
+     安卓「设置 → 显示与亮度 → 字体大小」> 1 时，WebView 会放大字体，
+     但 CSS 的 `line-height: 20px` 不会跟着变 —— 于是 textarea 内
+     **浏览器自己的点击命中测试**按放大后的行高算，而行号列仍按 20px 排，
+     结果就是「光标显示在 23 行，实际改的是 24 行」。
+     编辑器是代码工具，必须保证一格就是一行。 */
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
   letter-spacing: 0;
   tab-size: 2;
   white-space: pre;
