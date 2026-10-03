@@ -14,7 +14,9 @@ const router = createRouter({
     { path: "/create", name: "create", component: () => import("./views/CreateInstanceView.vue"), meta: { title: $t("router.chuang-jian-shi-li"), icon: "plus" } },
     { path: "/multiplayer", name: "multiplayer", component: () => import("./views/MultiplayerView.vue"), meta: { title: $t("instance-saves.users"), icon: "users" } },
     { path: "/multiplayer/:id", name: "server-detail", component: () => import("./views/ServerDetailView.vue"), meta: { title: $t("router.users"), icon: "users" } },
-    { path: "/settings", name: "settings", component: () => import("./views/SettingsView.vue"), meta: { title: $t("router.settings"), icon: "settings" } },
+    // `:tab?` 让设置子标签进路由历史 —— 否则安卓返回手势会跳过子标签
+    // 直接退回上一个页面（用户实测：更多→设置→常规，返回却退到了「更多」）
+    { path: "/settings/:tab?", name: "settings", component: () => import("./views/SettingsView.vue"), meta: { title: $t("router.settings"), icon: "settings" } },
     { path: "/skins", name: "skins", component: () => import("./views/SkinView.vue"), meta: { title: $t("router.user"), icon: "user" } },
     // 手机底栏第 5 格：底栏放不下的入口都收在这里（见 views/MoreView.vue 的注释）
     { path: "/more", name: "more", component: () => import("./views/MoreView.vue"), meta: { title: $t("nav.more"), icon: "more" } },

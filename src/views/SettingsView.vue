@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { fmtMem, fmtSize, fmtTime } from "../utils/format";
 import { Cell as VanCell, CellGroup as VanCellGroup } from "vant";
 import { useMessage } from "../composables/message";
@@ -403,8 +404,25 @@ function onCustomMirrorInput() {
   }
 }
 
-/** 当前打开的设置分组；null = 停在「分组列表」（手机一级页） */
-const tab = ref<string | null>(null);
+/**
+ * 当前打开的设置分组；null = 停在「分组列表」（手机一级页）。
+ *
+ * 关键：它**必须是路由的一部分**（`/settings/:tab`），不能只放在组件状态里。
+ * 否则安卓返回手势按路由栈回退，「更多 → 设置 → 常规」会直接退回「更多」，
+ * 把设置内部的层级吃掉（用户实测）。做成路径后返回键自然先退子页再退设置。
+ */
+const route = useRoute();
+const router = useRouter();
+const tab = computed<string | null>(() => {
+  const t = route.params.tab;
+  return typeof t === "string" && t ? t : null;
+});
+
+/** 打开/关闭某个分组（写进路由历史，返回手势才有层级可退） */
+function setTab(next: string | null) {
+  if (next) void router.push("/settings/" + next);
+  else void router.push("/settings");
+}
 
 /** 「默认内存」分段控件选项（文案沿用原有 key） */
 const memoryModeOptions = computed(() => [
@@ -916,7 +934,7 @@ onUnmounted(() => {
           :title="t.label"
           is-link
           center
-          @click="tab = t.key"
+          @click="setTab(t.key)"
         >
           <template #icon>
             <span class="nav-icon"><component :is="t.icon" /></span>
@@ -930,7 +948,7 @@ onUnmounted(() => {
 
     <div v-else :key="tab" class="settings-body">
       <!-- 返回条：单栏下必须显式给出口（标题栏里不放二级返回，保持顶部只有全局标题） -->
-      <button class="sv-back" @click="tab = null">
+      <button class="sv-back" @click="setTab(null)">
         <IconChevronLeft />
         <span>{{ tabs.find((x) => x.key === tab)?.label }}</span>
       </button>

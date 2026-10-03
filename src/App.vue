@@ -80,8 +80,8 @@ const activeTab = computed(() => {
   if (p.startsWith("/instance") || p === "/create") return "instances";
   if (p.startsWith("/downloads")) return "downloads";
   if (p.startsWith("/more")) return "more";
-  // 「更多」里的二级页（多人 / 皮肤 / 新闻 / 设置）也点亮「更多」这一格
-  if (MORE_ROUTES.some((r) => p.startsWith(r))) return "more";
+  // 「更多」里的二级页（多人 / 皮肤 / 新闻 / 设置，含 /settings/xxx 子标签）也点亮「更多」
+  if (MORE_ROUTES.some((r) => p === r || p.startsWith(r + "/"))) return "more";
   return PRIMARY_TABS.value.find((t) => t.to !== "/" && p.startsWith(t.to))?.name ?? "";
 });
 
@@ -248,10 +248,11 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
 }
 .tabs {
   flex-shrink: 0;
-  /* 手机：系统手势条（底部那条 pill）会**悬浮在应用之上**，
-     Vant 的 safe-area-inset-bottom 在多数安卓机上取不到值（实测会压住标签文字），
-     这里直接给一段固定内边距把图标文字抬到 pill 上方。 */
-  padding-bottom: 10px;
+  /* 手机：系统手势条（底部那条 pill）悬浮在应用之上，而本 WebView 读不到
+     env(safe-area-inset-bottom)（实测只给 1px），所以给一点固定内边距把标签
+     抬离手势区。之前是 10px，用户反馈「底栏上方空太多」→ 收到 2px：
+     标签下沿距屏幕底约 11px，既不被手势条压住，也不显得空。 */
+  padding-bottom: 2px;
 }
 .tabs :deep(.van-tabbar-item) {
   /* 底栏是最重要的触控目标，整格高度锁下限 */
