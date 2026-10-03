@@ -7,6 +7,7 @@ import { useAccountsStore } from "../stores/accounts";
 import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
 import MsLoginDialog from "./MsLoginDialog.vue";
+import { IconTrash } from "./icons";
 
 /** 顶栏的账号入口（手机形态）：一行头像+用户名，点开是**底部弹层**的账号列表
  *  —— 桌面的下拉气泡（n-popover）在手机上既难点又贴不住指头。 */
