@@ -26,6 +26,8 @@ const done = ref(false);
 const type = ref("mod");
 const provider = ref<"all" | "modrinth" | "curseforge">("all");
 const version = ref("");
+/** 游戏版本筛选的选项：官方 manifest 里的正式版（与创建实例页同一接口） */
+const versionOptions = ref<{ label: string; value: string }[]>([]);
 const showFilter = ref(false);
 const showInstall = ref(false);
 const installTarget = ref<ProjectHit | null>(null);
@@ -66,15 +68,25 @@ function openInstall(p: any) {
   installTarget.value = p;
   showInstall.value = true;
 }
-onMounted(() => void load(true));
+onMounted(async () => {
+  void load(true);
+  try {
+    const m = await api.getVersionManifest();
+    versionOptions.value = m.versions
+      .filter((v) => v.type === "release")
+      .map((v) => ({ label: v.id, value: v.id }));
+  } catch {
+    // manifest 拉不到（离线）时筛选里就没有版本可选，占位符仍在，不影响其它筛选
+  }
+});
 </script>
 
 <template>
   <div class="bv">
     <div class="bar">
       <van-search v-model="query" :placeholder="$t('browse.search-placeholder')" class="q" @search="onSearch" />
-      <button class="ftype" @click="showFilter = true">
-        <IconSliders /> {{ TYPES.find((t) => t.value === type)?.label }}
+      <button class="ftype" :class="{ on: version || type !== 'mod' }" @click="showFilter = true">
+        <IconSliders /> {{ $t("browse.filter") }}
       </button>
     </div>
     <van-list v-model:loading="loading" :finished="done" finished-text="" @update:loading="(v: boolean) => v && page > 0 && load(false)">
@@ -94,7 +106,9 @@ onMounted(() => void load(true));
       </div>
       <div class="fgroup">
         <label>{{ $t("browse.game-version") }}</label>
-        <app-select v-model:value="version" :options="[]" :placeholder="$t('browse.all-versions')" size="small" />
+        <!-- 版本列表来自官方 manifest（与创建实例页同一接口）；
+             之前这里硬编码了空数组，弹层里永远只有占位符（什么都选不了）。 -->
+        <app-select v-model:value="version" :options="versionOptions" :placeholder="$t('browse.all-versions')" size="small" />
       </div>
     </app-sheet>
     <install-dialog v-model:show="showInstall" :project="installTarget" :default-instance="instances.instances[0]?.id" @install-dep="openInstall" />
@@ -133,9 +147,21 @@ onMounted(() => void load(true));
   font-family: inherit;
   font-size: 13px;
 }
+/* 有筛选生效时给个提示点，不然看不出「筛选」按钮里藏着条件 */
+.ftype.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-08);
+}
+.ftype :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
+  /* 手机：一行一张卡。双列时每张卡只有 ~160px，标题/作者/描述全被压扁，
+     「安装」两个字还会被挤成竖排。 */
+  grid-template-columns: 1fr;
   gap: 10px;
   grid-auto-rows: max-content;
 }

@@ -71,6 +71,7 @@ const emit = defineEmits<{ (e: "update:show", v: boolean): void }>();
 }
 .sheet-bar {
   flex-shrink: 0;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -83,9 +84,16 @@ const emit = defineEmits<{ (e: "update:show", v: boolean): void }>();
   font-size: 16px;
   font-weight: 600;
   color: var(--text-1);
+  /* 标题要**真正居中**：flex + text-align:center 的写法会被右侧关闭键挤偏
+     （用户报「标题歪了」）。改成绝对定位横跨整行居中，关闭键浮在右侧。 */
+  position: absolute;
+  left: 44px;
+  right: 52px;
   text-align: center;
-  /* 标题居中时右侧要给关闭键留位，视觉上才不会偏 */
-  margin-right: 34px;
+  pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sheet-x {
   flex-shrink: 0;

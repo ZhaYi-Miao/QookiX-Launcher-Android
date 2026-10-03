@@ -46,15 +46,18 @@ const currentLabel = computed(() => {
   return hit ? hit.label : "";
 });
 
-const columns = computed(() => [
-  {
-    values: props.options.map((o) => ({
-      text: o.disabled ? `${o.label}（${$t("instance-content.disable")}）` : o.label,
-      value: o.value,
-      disabled: !!o.disabled,
-    })),
-  },
-]);
+/**
+ * 单列 Picker 的 columns 就是**选项数组**（`{text, value}`）。
+ * 之前包了一层 `{values: [...]}` —— 那是多列/级联的格式，Vant 会把它当成
+ * 一个「没有 text 的选项」，滚轮里永远只有一条空白（用户报「游戏版本点开是空白」）。
+ */
+const columns = computed(() =>
+  props.options.map((o) => ({
+    text: o.disabled ? `${o.label}（${$t("instance-content.disable")}）` : o.label,
+    value: o.value,
+    disabled: !!o.disabled,
+  }))
+);
 
 const selectedValues = ref<(string | number)[]>([]);
 

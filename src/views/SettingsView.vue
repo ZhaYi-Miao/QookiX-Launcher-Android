@@ -2976,11 +2976,24 @@ textarea.text-input {
   background: var(--accent-soft);
 }
 .about-links-row {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
+    grid-column: 1 / -1;
+    display: grid;
+    /* 手机：一行两个（3 个会让「GitHub 仓库」这类长文字换行，很难看） */
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    }
+    .about-links-row .about-link {
+    justify-content: flex-start;
+    padding: 14px 14px;
+    min-height: 52px;
+    font-size: 14px;
+    /* 文字绝不换行：放不下就省略号 */
+    white-space: nowrap;
+    }
+    .about-links-row .link-left {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    }
 .about-links-row .about-link {
   justify-content: flex-start;
   padding: 18px 16px;

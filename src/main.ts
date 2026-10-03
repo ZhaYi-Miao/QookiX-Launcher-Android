@@ -99,7 +99,19 @@ window.addEventListener("qk-back", (e) => {
   router.push(BACK_PARENT[String(route.name)] ?? "/");
 });
 
+// ── Vant 弹层挂载点（src/ui/vant.ts 的 VANT_LAYER = #van-layer）──────────
+// 这个元素**必须在 Vue 挂载之前就存在于文档里**：首帧渲染的组件（顶栏账号芯片、
+// 首页弹层…）里的 <Teleport> 在挂载那一刻就会解析它，若当时不存在，
+// Teleport 静默失败、内容不渲染，且之后也不会重试 → 表现为「点了没反应」。
+// 所以：先建好目标并挂在 body 上 → 再 mount（此时组件解析目标成功）→
+// 最后把它挪进 #app（保持在缩放子树里，弹层与页面同步缩放）。
+// 挪动只是改 DOM 位置，Teleport 持有的是元素引用，不受影响。
+const vanLayer = document.createElement("div");
+vanLayer.id = "van-layer";
+document.body.appendChild(vanLayer);
+
 const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 app.mount("#app");
+document.getElementById("app")?.prepend(vanLayer);

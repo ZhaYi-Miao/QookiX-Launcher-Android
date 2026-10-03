@@ -101,12 +101,24 @@ watch(
   { immediate: true }
 );
 
+function runPageAction() {
+  pageAction.value?.run();
+}
 const downloadCount = computed(() => tasks.activeCount);
 const pageTitle = computed(() => (route.meta.title as string) || "");
 
 /** 页面右上动作：由页面通过 inject("pageAction") 声明 */
 const pageAction = ref<{ text: string; run: () => void } | null>(null);
 provide("pageAction", pageAction);
+// 切页时清掉上一个页面设置的动作 —— pageAction 是一个全局共享的 ref，
+// 页面 A 设置了「上传皮肤」后跳到页面 B，B 不设置的话**按钮还挂着 A 的动作**，
+// 表现为「内容中心右上角是上传皮肤、设置右上角是新建实例」这种串台。
+watch(
+  () => route.fullPath,
+  () => {
+    pageAction.value = null;
+  }
+);
 
 onMounted(async () => {
   try { await settings.load(); } catch { /* 不阻塞启动 */ }
@@ -134,10 +146,13 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
        （见 composables/message.ts），主题也早就由 CSS 变量 + vant.css 承担。
        少一层包裹 = 少一处「弹层挂在 provider 里导致 zoom 脱节」的风险。 -->
   <div class="shell app-bg">
+    <!-- Vant 弹层挂载点 #van-layer 已预置在 index.html 的 #app 里
+         （必须在 Vue 挂载前就存在，否则首帧组件里的 Teleport 会静默失败）。
+         别把它挪回这个模板 —— 模板里渲染的节点要等整个应用挂载完才进文档，来不及。 -->
     <header class="top">
       <h1 class="title">{{ pageTitle }}</h1>
       <AccountChip />
-      <button v-if="pageAction" class="top-act" @click="pageAction.run()">{{ pageAction.text }}</button>
+      <button v-if="pageAction" class="top-act" @click="runPageAction()">{{ pageAction.text }}</button>
     </header>
 
     <main class="page">
@@ -169,7 +184,6 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
     <LaunchProgress />
     <CrashDialog />
     <FirstRunSetup />
-    <div id="van-layer"></div>
   </div>
 </template>
 

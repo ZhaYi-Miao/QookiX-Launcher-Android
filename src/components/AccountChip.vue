@@ -45,6 +45,9 @@ async function pick(uuid: string) {
   }
 }
 
+function onChipTap() {
+  show.value = true;
+}
 async function addOffline() {
   if (!offlineName.value.trim()) return;
   adding.value = true;
@@ -61,14 +64,17 @@ async function addOffline() {
 </script>
 
 <template>
-  <div class="chip" @click="show = true">
+  <!-- 单根包裹：这一层是多根 fragment → 单根的转换，本身不产生盒子（display: contents），
+       布局与「.chip 直接作为 .top 的 flex item」完全一致。 -->
+  <div class="acct-wrap">
+  <div class="chip" @click="onChipTap">
     <span class="av">
       <img v-if="avatarUrl" :src="avatarUrl" alt="" @error="attempt++" />
       <span v-else class="ini">{{ initial }}</span>
     </span>
     <span class="nm">{{ current?.username ?? $t("account-chip.not-logged-in") }}</span>
   </div>
-  <app-popup :show="show" position="bottom" round @update:show="(v: boolean) => (show = v)">
+  <app-popup :show="show" position="bottom" round :lazy-render="false" @update:show="(v: boolean) => (show = v)">
     <div class="sheet">
       <div class="stitle">{{ $t("account-chip.current-account") }}</div>
       <button
@@ -90,9 +96,13 @@ async function addOffline() {
     </div>
   </app-popup>
   <MsLoginDialog />
+  </div>
 </template>
 
 <style scoped>
+.acct-wrap {
+  display: contents;
+}
 .chip {
   display: flex;
   align-items: center;
