@@ -2,6 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useMessage } from "../composables/message";
+import { useRouter } from "vue-router";
 import { useServersStore } from "../stores/servers";
 import { useAccountsStore } from "../stores/accounts";
 import { api } from "../api";
@@ -13,6 +14,12 @@ import AppInput from "../ui/AppInput.vue";
 const servers = useServersStore();
 const accounts = useAccountsStore();
 const message = useMessage();
+const router = useRouter();
+
+/** 进入服务器详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数） */
+function openDetail(id: string) {
+  void router.push(`/multiplayer/${id}`);
+}
 const showCreate = ref(false);const form = ref({ name: "", core: "paper", mcVersion: "" });
 const saving = ref(false);
 const starting = ref("");
@@ -160,7 +167,9 @@ onBeforeUnmount(() => {
          只有两句提示、没有真实内容（新闻已经有独立的页面），属于多余入口，去掉。 -->
     <div v-if="servers.servers.length" class="list">
       <div v-for="s in servers.servers" :key="s.id" class="srv glass">
-        <div class="srv-main">
+        <!-- 整块可点进详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数）。
+             没有这个入口的话，服务器详情页只能靠手输路由到达，等于进不去。 -->
+        <div class="srv-main" role="button" tabindex="0" @click="openDetail(s.id)" @keydown.enter="openDetail(s.id)">
           <div class="srv-name">{{ s.name }}</div>
           <div class="srv-meta">{{ s.core }} · {{ s.mc_version }} · :{{ s.port }}</div>
         </div>
@@ -248,6 +257,12 @@ onBeforeUnmount(() => {
 .srv-main {
   flex: 1;
   min-width: 0;
+  /* 可点进详情：加按压反馈，否则用户不知道这块能点 */
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.srv-main:active {
+  opacity: 0.6;
 }
 .srv-name {
   font-weight: 600;
