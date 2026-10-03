@@ -1011,78 +1011,6 @@ fn find_server_jre() -> Result<String, String> {
     Err("没有可用的 Java 运行时：请先在「设置 → 运行环境」里装一个 JRE".to_string())
 }
 
-/// 启动一个服务器。需要：核心已装好 + 同意 EULA。
-#[tauri::command]
-pub async fn start_hosted_server(id: String) -> Result<(), String> {
-    let s = get_server(&id)?;
-
-    if !core_installed(&id) {
-        return Err("还没下载服务端核心".to_string());
-    }
-    let dir = server_dir(&id)?;
-
-    // EULA 以**配置**为准重写一遍再检查。
-    // （不能只读 eula.txt：勾选「同意」时若没同步落盘，文件里还是 eula=false，
-    //   表现就是「明明勾了却还说要同意」——同一份状态存两处必然对不上。）
-    if s.eula {
-        std::fs::write(
-            dir.join("eula.txt"),
-            "# Minecraft EULA（运行服务端即表示你同意）\n# 由 QookiX 生成；请在「服务器设置」里勾选同意后改成 true\neula=true\n",
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    let eula = std::fs::read_to_string(dir.join("eula.txt")).unwrap_or_default();
-    if !eula.lines().any(|l| l.trim() == "eula=true") {
-        return Err("请先在「服务器设置」里勾选同意 Minecraft EULA".to_string());
-    }
-
-    // 已经在跑？
-    if server_runtime(&id).map(|r| r.running) == Some(true) {
-        return Err("这个服务器已经在运行了".to_string());
-    }
-
-    // 每次启动前重写 RCON 配置：Minecraft 首次启动会自己把 enable-rcon 改成 false
-    ensure_rcon_props(&dir, s.port)?;
-
-    let jre_home = find_server_jre()?;
-    // 核心 jar：Paper/原版是 server.jar；Fabric 是 fabric-installer.jar
-    let jar = dir.join("server.jar");
-    let jar = if jar.exists() { jar } else {
-        // Fabric 情形
-        std::fs::read_dir(&dir)
-            .ok()
-            .and_then(|rd| rd.flatten().find(|e| {
-                let n = e.file_name().to_string_lossy().to_string();
-                n.starts_with("fabric-server-launch") && n.ends_with(".jar")
-            }).map(|e| e.path()))
-            .ok_or_else(|| "找不到服务端核心 jar".to_string())?
-    };
-
-    // 手机上要留余量给主进程 + 系统：1GB 堆实测会让 :server 稳占 ~850MB，
-    // 再加主进程 300MB / :tunnel 120MB 就触发 lowmemorykiller 了。
-    // 上限压到 2048，且下限 512（1-2 人小服够用）。
-    let mem = s.max_memory_mb.clamp(512, 2048);
-    let spec = crate::server_process::LaunchSpec {
-        id: id.clone(),
-        jre_home,
-        jar: jar.to_string_lossy().to_string(),
-        xmx_mb: mem,
-        work_dir: dir.to_string_lossy().to_string(),
-        // Paper/原版都接受 nogui（表示不要读 stdin）
-        args: vec!["nogui".to_string()],
-        token: crate::server_process::new_token(),
-    };
-
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(
-        dir.join("launch.json"),
-        serde_json::to_string_pretty(&spec).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 拉起 :server 独立进程（Rust → Kotlin → 新进程 → JNI → 回到 Rust 起 JVM）
-    crate::android_bridge::start_server_process(&id)
-}
 
 /// 停止运行中的服务器。
 ///
@@ -1296,3 +1224,94 @@ fn local_wifi_ip() -> Option<String> {
 pub fn hosted_server_addresses() -> Vec<String> {
     local_wifi_ip().into_iter().collect()
 }
+
+//
+// 前端 `src/api.ts` / `stores/servers.ts` 早于本次实现就写好了，约定：
+//   start_hosted_server      → 返回 { pid }
+//   stop_hosted_server       → void
+//   is_hosted_server_running → boolean
+//   read_hosted_server_log   → string[]
+// 而我先实现的是 start/stop_hosted_server(→String)、hosted_server_runtime、
+// hosted_server_log。名字和返回类型对不上会让 UI 直接崩
+// （`const { pid } = await api.startHostedServer(id)` 拿到 undefined 就抛错）。
+// 这里按 UI 的契约补一层，不去改已经写好的前端。
+
+/// 启动服务器（UI 契约：返回 `{ pid }`）
+#[tauri::command]
+pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String> {
+    // 复用已实现的启动流程
+    let s = get_server(&id)?;
+    if !core_installed(&id) {
+        return Err("还没下载服务端核心".to_string());
+    }
+    let dir = server_dir(&id)?;
+    if s.eula {
+        let _ = std::fs::write(
+            dir.join("eula.txt"),
+            "# Minecraft EULA（运行服务端即表示你同意）\n# 由 QookiX 生成；请在「服务器设置」里勾选同意后改成 true\neula=true\n",
+        );
+    }
+    let eula = std::fs::read_to_string(dir.join("eula.txt")).unwrap_or_default();
+    if !eula.lines().any(|l| l.trim() == "eula=true") {
+        return Err("请先在「服务器设置」里勾选同意 Minecraft EULA".to_string());
+    }
+    if server_runtime(&id).map(|r| r.running) == Some(true) {
+        return Err("这个服务器已经在运行了".to_string());
+    }
+    ensure_rcon_props(&dir, s.port)?;
+    let jre_home = find_server_jre()?;
+    let jar = dir.join("server.jar");
+    let jar = if jar.exists() {
+        jar
+    } else {
+        std::fs::read_dir(&dir)
+            .ok()
+            .and_then(|rd| {
+                rd.flatten()
+                    .find(|e| {
+                        let n = e.file_name().to_string_lossy().to_string();
+                        n.starts_with("fabric-server-launch") && n.ends_with(".jar")
+                    })
+                    .map(|e| e.path())
+            })
+            .ok_or_else(|| "找不到服务端核心 jar".to_string())?
+    };
+    let mem = s.max_memory_mb.clamp(512, 2048);
+    let spec = crate::server_process::LaunchSpec {
+        id: id.clone(),
+        jre_home,
+        jar: jar.to_string_lossy().to_string(),
+        xmx_mb: mem,
+        xmin_mb: s.min_memory_mb,
+        work_dir: dir.to_string_lossy().to_string(),
+        args: vec!["nogui".to_string()],
+        token: crate::server_process::new_token(),
+    };
+    std::fs::write(
+        dir.join("launch.json"),
+        serde_json::to_string_pretty(&spec).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    crate::android_bridge::start_server_process(&id)?;
+    // 进程刚拉起，pid 要从 runtime.json 读（Kotlin 写的）
+    let pid = read_runtime_io(&id).map(|_| 0).unwrap_or(0);
+    let pid = std::fs::read_to_string(dir.join("runtime.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok())
+        .map(|i| i.pid)
+        .unwrap_or(pid);
+    Ok(serde_json::json!({ "pid": pid }))
+}
+
+/// 服务器是否在运行（UI 契约：boolean）
+#[tauri::command]
+pub fn is_hosted_server_running(id: String) -> bool {
+    server_runtime(&id).map(|r| r.running).unwrap_or(false)
+}
+
+/// 读服务器日志（UI 契约：string[]）
+#[tauri::command]
+pub fn read_hosted_server_log(id: String) -> Vec<String> {
+    hosted_server_log(id, Some(300)).unwrap_or_default()
+}
+

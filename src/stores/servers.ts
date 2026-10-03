@@ -82,9 +82,12 @@ export const useServersStore = defineStore("servers", {
       if (idx >= 0) this.servers[idx] = { ...this.servers[idx], last_started: Date.now() };
       return pid;
     },
-    async stop(id: string) {
-      await api.stopHostedServer(id);
+    async stop(id: string): Promise<string> {
+      // Rust 侧停服会区分「优雅停服（世界已存盘）」与「强制停止」，
+      // 这句话要透传给 UI 展示，不能在 store 里吞掉。
+      const note = await api.stopHostedServer(id);
       this.runningIds = { ...this.runningIds, [id]: false };
+      return note;
     },
     setRunning(id: string, running: boolean) {
       this.runningIds = { ...this.runningIds, [id]: running };

@@ -42,6 +42,8 @@ pub struct LaunchSpec {
     pub jre_home: String,
     pub jar: String,
     pub xmx_mb: u32,
+    /// -Xms（launch 时会夹到 [256, xmx_mb]）
+    pub xmin_mb: u32,
     pub work_dir: String,
     /// 传给 MinecraftServer 的参数，第一项通常是 `nogui`
     pub args: Vec<String>,
@@ -590,11 +592,17 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
 
             let jvm_args = vec![
                 format!("-Xmx{}M", spec2.xmx_mb),
-                // -Xms 固定 256M，不要用 xmx/2：
-                // 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server 起步就占 500MB），
-                // 手机上主进程 + :tunnel + :server 一起会被 lowmemorykiller 杀
-                // （logcat: "low watermark is breached"），表现为「开服后过一会儿 App 自己没了」。
-                format!("-Xms256M"),
+                // -Xms 用配置里的「最小内存」，但要夹紧：
+                // ① 下限 256M —— 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server
+                //    起步就占 500MB），主进程 + :tunnel + :server 一起会被
+                //    lowmemorykiller 杀（logcat: "low watermark is breached"）。
+                // ② 上限不超过 -Xmx —— 配置里的 min_memory_mb 默认值可能比用户设的
+                //    max 还大（实测新建服就是 min=1024 / max=512），照抄会让 JVM
+                //    启动即报「初始堆大于最大堆」而拒绝启动。
+                format!(
+                    "-Xms{}M",
+                    spec2.xmin_mb.clamp(256, spec2.xmx_mb)
+                ),
                 "-XX:+UseG1GC".to_string(),
                 "-Dfile.encoding=UTF-8".to_string(),
                 // 服务端不需要窗口

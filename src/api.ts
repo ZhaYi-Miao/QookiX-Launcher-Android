@@ -63,16 +63,6 @@ const UNIMPLEMENTED = new Set([
   "import_minecraft_folder",
   "export_instance_pack",
   "import_instance_pack",
-  "list_hosted_servers",
-  "get_hosted_server",
-  "create_hosted_server",
-  "update_hosted_server",
-  "delete_hosted_server",
-  "install_hosted_server_core",
-  "start_hosted_server",
-  "stop_hosted_server",
-  "is_hosted_server_running",
-  "read_hosted_server_log",
   "open_hosted_server_folder",
   "reveal_hosted_server_path",
   "list_hosted_server_folders",
@@ -614,9 +604,19 @@ export const api = {
     invoke<void>("install_hosted_server_core", { id }, { silent: true }),
   startHostedServer: (id: string) =>
     invoke<{ pid: number }>("start_hosted_server", { id }, { silent: true }),
-  stopHostedServer: (id: string) => invoke<void>("stop_hosted_server", { id }),
+    /** 停止服务器；返回一句给用户看的结果（已优雅停服 / 被强制停止） */
+    stopHostedServer: (id: string) => invoke<string>("stop_hosted_server", { id }),
   isHostedServerRunning: (id: string) => invoke<boolean>("is_hosted_server_running", { id }),
   readHostedServerLog: (id: string) => invoke<string[]>("read_hosted_server_log", { id }),
+    /** 联机地址（WiFi IP:端口）；未连 WiFi 时为 null */
+    hostedServerAddress: (id: string) =>
+      invoke<string | null>("hosted_server_address", { id }, { silent: true }),
+    /** 执行一条服务端控制台命令（RCON），返回服务端输出 */
+    serverConsoleCommand: (id: string, command: string) =>
+      invoke<string>("server_console_command", { id, command }),
+    /** 核心是否已就绪（能否启动） */
+    hostedServerCoreInstalled: (id: string) =>
+      invoke<boolean>("hosted_server_core_installed", { id }, { silent: true }),
   openHostedServerFolder: (id: string, sub?: string) =>
     invoke<void>("open_hosted_server_folder", { id, sub: sub ?? null }),
   listHostedServerFolders: (id: string) =>
