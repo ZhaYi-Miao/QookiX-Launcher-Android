@@ -12,6 +12,7 @@ mod accounts;
 mod modpack;
 mod servers;
 mod server_process;
+mod rcon;
 mod crash;
 mod renderer_health;
 mod storage;
@@ -68,6 +69,7 @@ pub fn run() {
     server_process::inspect_server_core_manifest,
     servers::start_hosted_server,
     servers::stop_hosted_server,
+    servers::server_console_command,
     servers::hosted_server_runtime,
     servers::hosted_server_log,
     servers::hosted_server_core_installed,

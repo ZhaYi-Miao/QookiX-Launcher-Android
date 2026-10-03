@@ -79,6 +79,8 @@ class ServerService : Service() {
         }
 
         const val EXTRA_ID = "server_id"
+        /** 主进程在优雅停服成功后广播这个 action，让 :server 进程撤掉常驻通知 */
+        const val ACTION_STOPPED = "com.zhayi.qookix.SERVER_STOPPED"
 
         /**
          * 外部（Rust JNI）入口。
@@ -105,9 +107,37 @@ class ServerService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 优雅停服成功后，主进程会发这个广播让我们撤掉常驻通知。
+     *
+     * 不用静态 BroadcastReceiver（那会多一个常驻组件），直接在服务里动态注册：
+     * 服务活着才需要收通知，进程都没了通知早就随进程消失了。
+     */
+    private fun registerStopReceiver() {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == ACTION_STOPPED) {
+                    Log.i(TAG, "收到停服通知，撤掉常驻通知")
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.cancel(NOTIF_ID)
+                    stopForeground(true)
+                    stopSelf()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter(ACTION_STOPPED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        registerStopReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

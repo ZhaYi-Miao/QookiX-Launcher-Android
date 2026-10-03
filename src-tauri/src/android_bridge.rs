@@ -81,6 +81,30 @@ pub fn stop_server_process(_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 强制结束 `:server` 进程（RCON 停服失败时的兜底：世界可能没存盘）。
+#[cfg(target_os = "android")]
+pub fn force_stop_server(_id: &str) -> Result<(), String> {
+    // 直接杀整个 :server 进程：JVM 随之消失，服也就停了。
+    // 这里不发 /stop —— 那个请求会让 JVM 走 System.exit，属于同一条不优雅的路。
+    android::stop_server_process_any()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn force_stop_server(_id: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// 通知 Kotlin 撤掉前台服务的常驻通知（优雅停服成功后调用）
+#[cfg(target_os = "android")]
+pub fn notify_server_stopped(id: &str) -> Result<(), String> {
+    android::notify_server_stopped(id)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn notify_server_stopped(_id: &str) -> Result<(), String> {
+    Ok(())
+}
+
 /// 拉起游戏界面（GameActivity）。游戏必须跑在带 SurfaceView 的 Activity 里，
 /// 否则 GL4ES 没有 Surface 可用，GLFW 创建窗口就会失败。
 #[cfg(target_os = "android")]
@@ -471,6 +495,105 @@ mod android {
         env.call_method(&ctx, "stopService", "(Landroid/content/Intent;)Z", &[JValue::Object(&intent)])
             .map_err(|e| e.to_string())
             .map(|_| ())
+    }
+
+    /// 构造指向 ServerService 的 Intent
+    ///
+    /// 返回 `JObject<'local>`（借自传入 env）。**不要**谎报成 `'static`：
+    /// JNI local ref 的生命周期受 env 约束，编译期会放行、运行时留下悬垂引用。
+    fn server_service_intent<'local>(
+        env: &mut jni::JNIEnv<'local>,
+        id: &str,
+    ) -> Result<jni::objects::JObject<'local>, String> {
+        use jni::objects::JValue;
+        let pkg = env.new_string("com.zhayi.qookix").map_err(|e| e.to_string())?;
+        let cls = env
+            .new_string("com.zhayi.qookix.services.ServerService")
+            .map_err(|e| e.to_string())?;
+        let cn_cls = env
+            .find_class("android/content/ComponentName")
+            .map_err(|e| e.to_string())?;
+        let cn = env
+            .new_object(
+                &cn_cls,
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[JValue::Object(&pkg), JValue::Object(&cls)],
+            )
+            .map_err(|e| e.to_string())?;
+        let intent_cls = env
+            .find_class("android/content/Intent")
+            .map_err(|e| e.to_string())?;
+        let intent = env
+            .new_object(&intent_cls, "()V", &[])
+            .map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "setComponent",
+            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+            &[JValue::Object(&cn)],
+        )
+        .map_err(|e| e.to_string())?;
+        let key = env.new_string("server_id").map_err(|e| e.to_string())?;
+        let val = env.new_string(id).map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&key), JValue::Object(&val)],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(intent)
+    }
+
+    /// 结束 `:server` 进程（不区分服务器，兜底强杀用）
+    pub fn stop_server_process_any() -> Result<(), String> {
+        use jni::objects::JValue;
+        let vm = java_vm().ok_or_else(|| "原生桥未就绪".to_string())?;
+        let mut env = vm
+            .attach_current_thread_as_daemon()
+            .map_err(|e| e.to_string())?;
+        let ctx = activity().ok_or_else(|| "原生桥未就绪（Activity 未 attach）".to_string())?;
+        let intent = server_service_intent(&mut env, "")?;
+        env.call_method(
+            &ctx,
+            "stopService",
+            "(Landroid/content/Intent;)Z",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|e| e.to_string())
+        .map(|_| ())
+    }
+
+    /// 让 Kotlin 把常驻通知撤掉（优雅停服后调用，否则通知会一直挂在下拉栏）
+    pub fn notify_server_stopped(id: &str) -> Result<(), String> {
+        use jni::objects::JValue;
+        let vm = java_vm().ok_or_else(|| "原生桥未就绪".to_string())?;
+        let mut env = vm
+            .attach_current_thread_as_daemon()
+            .map_err(|e| e.to_string())?;
+        // 用广播通知 :server 进程撤通知（跨进程，直接调方法不行）
+        let ctx = activity().ok_or_else(|| "原生桥未方绪".to_string())?;
+        let intent = server_service_intent(&mut env, id)?;
+        // JString → JObject 转换：JValue::Object 需要 &JObject，这里用局部变量延长生命周期
+        let action = env
+            .new_string("com.zhayi.qookix.SERVER_STOPPED")
+            .map_err(|e| e.to_string())?;
+        let action_obj: jni::objects::JObject = action.into();
+        env.call_method(
+            &intent,
+            "setAction",
+            "(Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&action_obj)],
+        )
+        .ok();
+        env.call_method(
+            &ctx,
+            "sendBroadcast",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// 读 `android.os.Build$VERSION.SDK_INT`（用于选 startService / startForegroundService）

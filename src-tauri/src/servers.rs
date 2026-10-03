@@ -249,12 +249,45 @@ pub fn ensure_server_files(id: &str, s: &ServerConfig) -> Result<(), String> {
         }
     }
     let props = dir.join("server.properties");
+    // RCON 是「优雅停服 + 控制台命令」的唯一通道，必须在 properties 里开启。
+    // 注意：Minecraft 只在**启动时**读这些项，所以改完要重启服才生效。
+    let rcon = crate::rcon::load_or_create_creds(&dir, s.port)?;
     if !props.exists() {
-        let body = format!(
-            "# 由 QookiX 生成\nmotd={}\nserver-port={}\nmax-players=10\nonline-mode=true\ndifficulty=normal\ngamemode=survival\nlevel-name=world\nsync-chunk-writes=false\nview-distance=6\nsimulation-distance=4\n",
-            s.motd, s.port
-        );
-        let _ = std::fs::write(&props, body);
+    let body = format!(
+  "# 由 QookiX 生成\nmotd={}\nserver-port={}\nmax-players=10\nonline-mode=true\ndifficulty=normal\ngamemode=survival\nlevel-name=world\nsync-chunk-writes=false\nview-distance=6\nsimulation-distance=4\n\n# RCON：QookiX 用它执行 stop（优雅停服，世界会存盘）与控制台命令。\n# 密码在同目录 rcon.json 里；请勿泄露（等同服务器后台权限）。\nenable-rcon=true\nrcon.password={}\nrcon.port={}\nbroadcast-rcon-to-ops=false\n",
+  s.motd, s.port, rcon.password, rcon.port
+  );
+  let _ = std::fs::write(&props, body);
+    } else {
+  // 已存在的 properties：把 RCON 三项补上（用户可能是手动删过或老版本生成的）
+  if let Ok(cur) = std::fs::read_to_string(&props) {
+    let mut need = false;
+    for k in ["enable-rcon", "rcon.password", "rcon.port"] {
+      if !cur.lines().any(|l| l.trim_start().starts_with(k)) {
+        need = true;
+      }
+    }
+    if need {
+      let mut lines: Vec<String> = cur
+      .lines()
+      .filter(|l| {
+        let t = l.trim_start();
+        !t.starts_with("enable-rcon")
+          && !t.starts_with("rcon.password")
+          && !t.starts_with("rcon.port")
+          && !t.starts_with("broadcast-rcon-to-ops")
+      })
+      .map(|l| l.to_string())
+      .collect();
+      lines.push(String::new());
+      lines.push("# 由 QookiX 补上：RCON（优雅停服 / 控制台命令）".into());
+      lines.push("enable-rcon=true".into());
+      lines.push(format!("rcon.password={}", rcon.password));
+      lines.push(format!("rcon.port={}", rcon.port));
+      lines.push("broadcast-rcon-to-ops=false".into());
+      let _ = std::fs::write(&props, lines.join("\n") + "\n");
+    }
+  }
     }
     Ok(())
 }
@@ -1008,6 +1041,9 @@ pub async fn start_hosted_server(id: String) -> Result<(), String> {
         return Err("这个服务器已经在运行了".to_string());
     }
 
+    // 每次启动前重写 RCON 配置：Minecraft 首次启动会自己把 enable-rcon 改成 false
+    ensure_rcon_props(&dir, s.port)?;
+
     let jre_home = find_server_jre()?;
     // 核心 jar：Paper/原版是 server.jar；Fabric 是 fabric-installer.jar
     let jar = dir.join("server.jar");
@@ -1048,10 +1084,106 @@ pub async fn start_hosted_server(id: String) -> Result<(), String> {
     crate::android_bridge::start_server_process(&id)
 }
 
-/// 停止运行中的服务器（IPC 优雅停服，失败则杀 :server 进程）。
+/// 停止运行中的服务器。
+///
+/// 顺序很重要：**先 RCON `stop`（服务端自己存盘关世界）**，只有在 RCON 不可用
+/// 或超时后才退回 IPC `System.exit(0)`。后者实测不会触发 `Saving worlds`，
+/// 等于直接杀进程 —— 玩家建筑会回档。
 #[tauri::command]
-pub async fn stop_hosted_server(id: String) -> Result<(), String> {
-    crate::android_bridge::stop_server_process(&id)
+pub async fn stop_hosted_server(id: String) -> Result<String, String> {
+    let rt = server_runtime(&id).ok_or_else(|| "这个服务器没有运行记录".to_string())?;
+    if !rt.running {
+        return Ok("服务器本来就没在运行".to_string());
+    }
+    // 拿 RCON 凭据
+    let dir = server_dir(&id)?;
+    let creds = crate::rcon::load_or_create_creds(&dir, get_server(&id)?.port)?;
+
+    // runtime.json 里有 IPC 端口与 token（等 JVM 退出用）
+    let (ipc_port, token) = read_runtime_io(&id).unwrap_or((0, String::new()));
+
+    match crate::rcon::graceful_stop(ipc_port, &token, &creds, 20) {
+        Ok(msg) => {
+            // JVM 已自行退出，:server 进程会随之结束；这里只清通知
+            let _ = crate::android_bridge::notify_server_stopped(&id);
+            Ok(msg)
+        }
+        Err(e) => {
+            tracing::warn!("[server] 优雅停服失败（{e}），退回强制停止");
+            // 兜底：直接让 :server 进程里的 JVM 退出
+            let forced = crate::android_bridge::force_stop_server(&id);
+            match forced {
+                Ok(()) => Ok(format!("{e}；已强制停止（世界可能未存盘）")),
+                Err(e2) => Err(format!("{e}；强制停止也失败：{e2}")),
+            }
+        }
+    }
+}
+
+/// 确保 `server.properties` 里的 RCON 三项是「开」的。
+///
+/// ## 为什么每次启动前都要重写
+///
+/// Minecraft **首次启动时会自己生成一份完整的 server.properties**，
+/// 并把 `enable-rcon` 写成 `false`、`rcon.password` 留空。
+/// 我们在「装核心」时写好的配置会被这一次覆盖掉 ——
+/// 表现就是「代码里明明 enable-rcon=true，RCON 端口却连不上（Connection refused）」。
+///
+/// server.properties 只在服务端**启动时**读取，所以启动前改是安全且立刻生效的。
+pub fn ensure_rcon_props(dir: &Path, game_port: u16) -> Result<crate::rcon::RconCreds, String> {
+    let creds = crate::rcon::load_or_create_creds(dir, game_port)?;
+    let props = dir.join("server.properties");
+    let mut lines: Vec<String> = match std::fs::read_to_string(&props) {
+        Ok(cur) => cur
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                // 先剔掉旧的 RCON 行，下面统一重写（可能有多行重复）
+                !t.starts_with("enable-rcon")
+                    && !t.starts_with("rcon.password")
+                    && !t.starts_with("rcon.port")
+            })
+            .map(|l| l.to_string())
+            .collect(),
+        Err(_) => vec![
+            "# 由 QookiX 生成".into(),
+            format!("server-port={game_port}"),
+            String::new(),
+        ],
+    };
+    lines.push(String::new());
+    lines.push("# RCON：由 QookiX 启用（优雅停服 / 控制台命令）".into());
+    lines.push("enable-rcon=true".into());
+    lines.push(format!("rcon.password={}", creds.password));
+    lines.push(format!("rcon.port={}", creds.port));
+    lines.push("broadcast-rcon-to-ops=false".into());
+    std::fs::write(&props, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    Ok(creds)
+}
+
+/// 执行一条服务端控制台命令（RCON）。
+#[tauri::command]
+pub fn server_console_command(id: String, command: String) -> Result<String, String> {
+    let cmd = command.trim().to_string();
+    if cmd.is_empty() {
+        return Ok(String::new());
+    }
+    let dir = server_dir(&id)?;
+    let creds = crate::rcon::load_or_create_creds(&dir, get_server(&id)?.port)?;
+    crate::rcon::exec(creds.port, &creds.password, &cmd)
+}
+
+/// 读 runtime.json 里的 (ipc_port, token)
+fn read_runtime_io(id: &str) -> Option<(u16, String)> {
+    let dir = server_dir(id).ok()?;
+    let text = std::fs::read_to_string(dir.join("runtime.json")).ok()?;
+    let info: crate::server_process::RuntimeInfo = serde_json::from_str(&text).ok()?;
+    Some((info.ipc_port, info.token))
+}
+
+/// IPC 探活（rcon.rs 与 UI 都用）
+pub fn ipc_alive(port: u16, token: &str) -> bool {
+    ipc_status(port, token).is_some()
 }
 
 /// 服务器运行态（UI 轮询用）。
