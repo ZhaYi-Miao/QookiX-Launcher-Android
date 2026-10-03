@@ -5,7 +5,7 @@ import { useMessage } from "../composables/message";
 import { useSkinRenderer, type AnimationKind } from "../composables/useSkinRenderer";
 import { useAccountsStore } from "../stores/accounts";
 import { api } from "../api";
-import { Button as VanButton, Empty as VanEmpty } from "vant";
+import { Button as VanButton, Empty as VanEmpty, Search as VanSearch } from "vant";
 import { pickFile } from "../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { usePageAction } from "../composables/usePageAction";

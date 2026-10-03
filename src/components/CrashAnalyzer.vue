@@ -2,6 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import AppButton from "../ui/AppButton.vue";
+import { Loading as VanLoading } from "vant";
 import { useMessage } from "../composables/message";
 import { api } from "../api";
 import { fmtDateLocale as fmtTime, fmtSize } from "../utils/format";

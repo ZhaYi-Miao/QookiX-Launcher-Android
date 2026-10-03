@@ -5,7 +5,7 @@ import { useMessage } from "../composables/message";
 import { useTasksStore, type TaskEntry } from "../stores/tasks";
 import { fmtBytes, fmtSpeed } from "../utils/format";
 import { api } from "../api";
-import { Progress as VanProgress, Tabs as VanTabs, Tab as VanTab } from "vant";
+import { Button as VanButton, Progress as VanProgress, Tabs as VanTabs, Tab as VanTab } from "vant";
 const tasks = useTasksStore();
 const message = useMessage();
 const activeTab = ref<"active" | "finished">("active");

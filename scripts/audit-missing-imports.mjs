@@ -15,8 +15,14 @@ function files(dir, acc = []) {
   return acc;
 }
 
-/** 已知的全局注册组件 / Vant 标签 / 原生标签前缀，不需要 import */
-const OK_PREFIX = ["van-", "n-", "router-", "transition", "template", "component", "slot", "teleport", "keep-alive", "suspense"];
+/**
+ * 无需 import 的标签。
+ * 注意：**van-* 不在豁免名单里** —— 本项目的 Vant 组件是按需 import 的
+ * （main.ts 没有 app.use(Vant) 全局注册），漏了 import 就会渲染成空元素
+ * （2026-10-03 抓到：SkinView 用了 <van-search> 却没 import Search，
+ *  表现为「输入框消失、按获取皮肤没反应」）。
+ */
+const OK_PREFIX = ["n-", "router-", "transition", "template", "component", "slot", "teleport", "keep-alive", "suspense"];
 
 let bad = 0;
 for (const file of files(ROOT)) {
