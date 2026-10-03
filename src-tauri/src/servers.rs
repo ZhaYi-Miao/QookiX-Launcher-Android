@@ -440,33 +440,202 @@ async fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/** 流式下载到文件（服务端核心用；失败删半截文件） */
-async fn download_to(url: &str, dest: &Path, client: &reqwest::Client) -> Result<(), String> {
+/// 取元数据用的 client：**短超时**（15 秒）。
+///
+/// 不能复用下载那个 600 秒超时的 client：Mojang / CDN 在这台设备上
+/// 经常连得上却发不出数据（实测 install 挂到 CDP 超时也没返回），
+/// 600 秒的等待会让「点一下装核心」看起来像卡死。15 秒 × 4 次重试
+/// 最多 1 分钟就能明确告诉用户「这个源连不上」。
+async fn meta_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(PAPERMC_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// 带重试的 JSON GET。
+///
+/// 这台设备上到 CDN / API 的连接**会中途断**（实测大文件固定在 1.8MB 左右被切，
+/// 小 JSON 也会偶发 `error decoding response body`）。一次失败就报错的话，
+/// 「点一下装核心」经常直接失败，而重试一次通常就好。
+async fn get_json_retry(
+    client: &reqwest::Client,
+    url: &str,
+    tries: usize,
+) -> Result<serde_json::Value, String> {
+    let mut last = String::new();
+    for i in 1..=tries.max(1) {
+        let attempt = async {
+            let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            resp.json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("解析响应失败: {e}"))
+        }
+        .await;
+        match attempt {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last = e;
+                tracing::warn!("[core] 请求 {url} 第 {i} 次失败: {last}");
+                if i < tries.max(1) {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * i as u64)).await;
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
+/**
+ * 流式下载到文件，**带 sha256 校验与断点续传**。
+ *
+ * ## 为什么必须做这两件事
+ *
+ * 实测发现下载会被中途截断（同一个 1.8MB 上限，PC curl 和手机 reqwest 都中招）：
+ * 拿到的是**半个 jar**，大小 1.8MB 而非 49MB。旧实现直接把它当成功返回，
+ * 于是「核心已安装」为真，启动时才炸（zip 解析失败 / 主类找不到），
+ * 错误信息完全指不到真凶。
+ *
+ * - **sha256 校验**：Paper 的 builds 接口给了 `downloads["server:default"].sha256`，
+ *   是唯一可靠的「文件完整」判据。
+ * - **断点续传**：既然每次连接只给 ~1.8MB，就用 `Range: bytes=N-` 一段段接上，
+ *   而不是每次从 0 开始（那样永远下不完）。
+ */
+async fn download_verified(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    expect_sha: Option<&str>,
+) -> Result<u64, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write as _;
+    use tokio::io::AsyncWriteExt;
+
     if let Some(p) = dest.parent() {
         std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("下载失败: HTTP {}", resp.status()));
+    let part = dest.with_extension("part");
+    // 最多 200 段：1.8MB × 200 ≈ 360MB，足够任何核心
+    const MAX_CHUNKS: usize = 200;
+
+    for attempt in 1..=MAX_CHUNKS {
+        let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        let req = client.get(url).header("Range", format!("bytes={have}-"));
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if attempt == 1 {
+                    return Err(format!("下载失败: {e}"));
+                }
+                tracing::warn!("[core] 第 {attempt} 段请求失败: {e}，重试");
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                continue;
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(format!("下载失败: HTTP {status}"));
+        }
+
+        // 206 = 服务端支持续传；200 = 不支持，只能从头下（先清掉已有分片）
+        let append = status == reqwest::StatusCode::PARTIAL_CONTENT && have > 0;
+        if !append && have > 0 {
+            let _ = std::fs::remove_file(&part);
+        }
+
+        let mut f = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(append)
+            .write(true)
+            .open(&part)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut resp = resp;
+        let mut got = 0u64;
+        // **关键**：连接中途断开（`error decoding response body`）是这里的常态，
+        // 不是致命错误 —— 已经写进 .part 的字节都算数，下一轮带 Range 接着下。
+        // 早先写成 `chunk().await?` 会让第一次断流就把整个下载判失败，
+        // 续传代码永远走不到，等于没有续传。
+        let mut cut = false;
+        loop {
+            // 单段最多 15 秒没有新数据就换下一段。
+            // 整体 timeout 是 600 秒，若不在读层面加超时，一个卡住的连接会
+            // 干等十分钟才断 —— 续传轮数有限，等不起（实测 240 秒只下了 391KB）。
+            let step = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                resp.chunk(),
+            )
+            .await;
+            match step {
+                // step: Result<Result<Option<Bytes>, Error>, Elapsed>（三层，别写错）
+                Ok(Ok(Some(chunk))) => {
+                    if let Err(e) = f.write_all(&chunk).await {
+                        return Err(format!("写入失败: {e}"));
+                    }
+                    got += chunk.len() as u64;
+                }
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => {
+                    tracing::warn!("[core] 本段被中断（已写入 {got} 字节）: {e}");
+                    cut = true;
+                    break;
+                }
+                Err(_) => {
+                    tracing::warn!("[core] 本段 15 秒无进展，续传（已写入 {got} 字节）");
+                    cut = true;
+                    break;
+                }
+            }
+        }
+        drop(f);
+        let _ = cut;
+
+        let total = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        tracing::info!("[core] 第 {attempt} 段 +{got} 字节，累计 {total}");
+
+        // 有 sha256 就以它为准判完成
+        if let Some(want) = expect_sha {
+            if total > 0 {
+                let mut h = Sha256::new();
+                let mut buf = vec![0u8; 256 * 1024];
+                let mut rf = std::fs::File::open(&part).map_err(|e| e.to_string())?;
+                use std::io::Read as _;
+                loop {
+                    let n = rf.read(&mut buf).map_err(|e| e.to_string())?;
+                    if n == 0 {
+                        break;
+                    }
+                    h.update(&buf[..n]);
+                }
+                let got_sha = format!("{:x}", h.finalize());
+                if got_sha.eq_ignore_ascii_case(want) {
+                    std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+                    return Ok(total);
+                }
+                tracing::warn!(
+                    "[core] sha256 不符（{got_sha}…），续传中或需重下（已有 {total} 字节）"
+                );
+                // 校验不过：文件内容有问题（比如服务端忽略了 Range 从头重发），
+                // 删掉重来，别在坏文件上无限续传
+                if !append {
+                    let _ = std::fs::remove_file(&part);
+                }
+            }
+        } else if got == 0 {
+            return Err("下载中断：服务器没有返回任何数据".to_string());
+        } else if total > 0 && !append {
+            // 无 sha256 可校验时，用「本次读完了整个响应」作为完成判据
+            let _ = std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+            return Ok(total);
+        }
     }
-    let mut f = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| e.to_string())?;
-    use tokio::io::AsyncWriteExt;
-    let mut resp = resp;
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("下载中断: {e}"))?
-    {
-        f.write_all(&chunk).await.map_err(|e| e.to_string())?;
-    }
-    drop(f);
-    Ok(())
+
+    Err("下载未完成：超过最大重试次数".to_string())
 }
 
 /**
@@ -481,14 +650,10 @@ async fn download_paper(
     mc_version: &str,
 ) -> Result<String, String> {
     let url = format!("{PAPERMC_API}/paper/versions/{mc_version}/builds");
-    let body: serde_json::Value = client
-        .get(&url)
-        .send()
+    let meta = meta_client().await?;
+    let body = get_json_retry(&meta, &url, 4)
         .await
-        .map_err(|e| format!("获取 Paper 版本信息失败: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析失败: {e}"))?;
+        .map_err(|e| format!("获取 Paper 版本信息失败: {e}"))?;
 
     let builds = body
         .as_array()
@@ -496,43 +661,221 @@ async fn download_paper(
     if builds.is_empty() {
         return Err(format!("Paper 暂无 {mc_version} 的构建"));
     }
+    // 选 build：**在 STABLE 里取 id 最大的那个**。
+    //
+    // 两个坑叠在一起：
+    // ① 不能靠数组顺序。虽然实测 fill v3 是新→旧，但依赖顺序很脆；
+    // ② 字段名是 **`id`**，没有 `build` 字段。写成 `b.get("build")` 时所有 key 都是 0，
+    //    `max_by_key` 会**静默返回最后一个元素** —— 而那恰好是最旧的 build 2。
+    //    它在 CDN 上没缓存，实测速率 ~1KB/s（49MB 要十几个小时），
+    //    最新的 build 133 却是 10 秒下完。字段名写错会伪装成「网络慢」。
+    let build_no = |b: &serde_json::Value| {
+        b.get("id")
+            .and_then(|v| v.as_i64())
+            .or_else(|| b.get("build").and_then(|v| v.as_i64()))
+            .unwrap_or(0)
+    };
+    if builds.iter().all(|b| build_no(b) == 0) {
+        return Err("Paper API 返回格式异常：所有构建都没有 id 字段".to_string());
+    }
     let build = builds
         .iter()
-        .rev()
-        .find(|b| b.get("channel").and_then(|v| v.as_str()) == Some("STABLE"))
-        .or_else(|| builds.last())
-        .unwrap();
-    let dl = build
+        .filter(|b| b.get("channel").and_then(|v| v.as_str()) == Some("STABLE"))
+        .max_by_key(|b| build_no(b))
+        .or_else(|| builds.iter().max_by_key(|b| build_no(b)))
+        .ok_or_else(|| "Paper 没有可用构建".to_string())?;
+    tracing::info!(
+        "[core] 选用 Paper build {}（channel={}）",
+        build_no(build),
+        build.get("channel").and_then(|v| v.as_str()).unwrap_or("?")
+    );
+
+    let dl_info = build
         .get("downloads")
         .and_then(|d| d.get("server:default"))
-        .and_then(|d| d.get("url"))
+        .ok_or_else(|| "该构建没有服务端核心".to_string())?;
+    let dl = dl_info
+        .get("url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "该构建没有服务端核心".to_string())?
+        .ok_or_else(|| "下载地址为空".to_string())?
         .to_string();
+    // sha256 在 `downloads["server:default"].checksums.sha256`（v3 是嵌套的，
+    // 不是 v2 那种直接挂在 downloads 下）。取不到就退化为「无校验」而不是假装有。
+    let sha = dl_info
+        .get("checksums")
+        .and_then(|c| c.get("sha256"))
+        .or_else(|| dl_info.get("sha256"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    if sha.is_none() {
+        tracing::warn!("[core] Paper 没给 sha256，只能按长度判断完整性");
+    }
 
     let dest = server_dir(id)?.join("server.jar");
-    download_to(&dl, &dest, client).await?;
+    let bytes = download_verified(client, &dl, &dest, sha.as_deref()).await?;
+    tracing::info!("[core] Paper 核心完成 {bytes} 字节");
     Ok(dl)
 }
 
-/** 下载原版服务端核心（Mojang 官方 piston 元数据） */
-async fn download_vanilla(client: &reqwest::Client, id: &str, mc_version: &str) -> Result<(), String> {
-    let pkg: serde_json::Value = client
-        .get(format!("{PISTON_META}/{mc_version}"))
-        .send()
+/**
+ * 下载原版服务端核心。
+ *
+ * 路径是「版本清单 → 该版本详情 → downloads.server」两步：
+ * `piston-meta.mojang.com/v1/packages/...` 那个新接口实测全部 404（已废弃），
+ * 只有 `version_manifest_v2.json` 这条老路是通的（项目 mirror.rs 也在用它）。
+ *
+ * 官方只给 **sha1**（不是 sha256），所以完整性判据用 sha1。
+ */
+async fn download_vanilla(
+    client: &reqwest::Client,
+    id: &str,
+    mc_version: &str,
+) -> Result<(), String> {
+    let meta = meta_client().await?;
+    let manifest = get_json_retry(&meta, crate::mirror::OFFICIAL_MANIFEST, 4)
         .await
-        .map_err(|e| format!("获取版本信息失败: {e}"))?
-        .json()
+        .map_err(|e| format!("获取版本清单失败: {e}"))?;
+    let entry = manifest
+        .get("versions")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|v| v.get("id").and_then(|x| x.as_str()) == Some(mc_version))
+        })
+        .ok_or_else(|| format!("版本清单里没有 {mc_version}"))?;
+    let vurl = entry
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "版本清单缺少 url".to_string())?
+        .to_string();
+    let vj = get_json_retry(&meta, &vurl, 4)
         .await
-        .map_err(|e| format!("解析失败: {e}"))?;
-    let dl = pkg
+        .map_err(|e| format!("获取 {mc_version} 详情失败: {e}"))?;
+    let dl = vj
         .get("downloads")
         .and_then(|d| d.get("server"))
-        .and_then(|d| d.get("url"))
+        .ok_or_else(|| format!("版本 {mc_version} 没有官方服务端核心"))?;
+    let url = dl
+        .get("url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("版本 {mc_version} 没有官方服务端核心"))?
+        .ok_or_else(|| "下载地址为空".to_string())?
         .to_string();
-    download_to(&dl, &server_dir(id)?.join("server.jar"), client).await
+    let sha1 = dl.get("sha1").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // 官方源慢就换 BMCLAPI 镜像（同路径替换）。
+    // 注意：这里**必须直接 .await**，不能套 `tauri::async_runtime::block_on` ——
+    // 本函数已经在 tokio 运行时里，运行时内再 block_on 会直接死锁，
+    // 表现为「点装核心后命令永远不返回」（实测卡到 CDP 超时也没任何错误）。
+    let mirror_base = match crate::settings::get_settings().await {
+        Ok(s) => crate::mirror::resolve_from(&s.mirror, s.mirror_custom.as_deref().unwrap_or("")),
+        Err(_) => String::new(),
+    };
+    let dest = server_dir(id)?.join("server.jar");
+    let urls: Vec<String> = if mirror_base.is_empty() {
+        vec![url]
+    } else {
+        vec![
+            url.clone(),
+            format!("{mirror_base}{}", url.strip_prefix("https://piston-data.mojang.com").unwrap_or(&url)),
+        ]
+    };
+
+    let mut last_err = String::new();
+    for u in urls {
+        match download_sha1(client, &u, &dest, sha1.as_deref()).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                tracing::warn!("[core] 原版核心从 {u} 下载失败: {e}");
+                last_err = e;
+            }
+        }
+    }
+    Err(format!("原版核心下载失败: {last_err}"))
+}
+
+/// sha1 校验版下载（官方原版核心只提供 sha1）
+async fn download_sha1(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    want: Option<&str>,
+) -> Result<(), String> {
+    use sha1::{Digest, Sha1};
+    use std::io::{Read, Write};
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(p) = dest.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    let part = dest.with_extension("part");
+    for attempt in 1..=200u32 {
+        let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        let resp = client
+            .get(url)
+            .header("Range", format!("bytes={have}-"))
+            .send()
+            .await
+            .map_err(|e| format!("下载失败: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(format!("HTTP {status}"));
+        }
+        let append = status == reqwest::StatusCode::PARTIAL_CONTENT && have > 0;
+        if !append && have > 0 {
+            let _ = std::fs::remove_file(&part);
+        }
+        let mut f = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(append)
+            .write(true)
+            .open(&part)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut resp = resp;
+        let mut got = 0u64;
+        loop {
+            let step =
+                tokio::time::timeout(std::time::Duration::from_secs(15), resp.chunk()).await;
+            match step {
+                Ok(Ok(Some(c))) => {
+                    f.write_all(&c).await.map_err(|e| e.to_string())?;
+                    got += c.len() as u64;
+                }
+                Ok(Ok(None)) | Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        drop(f);
+        let total = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        tracing::info!("[core] 原版第 {attempt} 段 +{got}，累计 {total}");
+        if got == 0 && total == 0 {
+            return Err("服务器没有返回数据".to_string());
+        }
+        if let Some(w) = want {
+            let mut h = Sha1::new();
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut rf = std::fs::File::open(&part).map_err(|e| e.to_string())?;
+            loop {
+                let n = rf.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                h.update(&buf[..n]);
+            }
+            let got_sha = format!("{:x}", h.finalize());
+            if got_sha.eq_ignore_ascii_case(w) {
+                std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+            tracing::warn!("[core] 原版 sha1 不符，续传（{total} 字节）");
+            if !append {
+                let _ = std::fs::remove_file(&part);
+            }
+        } else {
+            std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+    Err("下载未完成".to_string())
 }
 
 /** Fabric 服务端安装器（官方 meta API） */
@@ -541,14 +884,10 @@ async fn download_fabric(
     id: &str,
     mc_version: &str,
 ) -> Result<(), String> {
-    let meta: serde_json::Value = client
-        .get("https://meta.fabricmc.net/v2/versions/installer")
-        .send()
+    let mc = meta_client().await?;
+    let meta = get_json_retry(&mc, "https://meta.fabricmc.net/v2/versions/installer", 4)
         .await
-        .map_err(|e| format!("获取 Fabric 版本信息失败: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析失败: {e}"))?;
+        .map_err(|e| format!("获取 Fabric 版本信息失败: {e}"))?;
     let url = meta
         .as_array()
         .and_then(|a| a.first())
@@ -557,7 +896,7 @@ async fn download_fabric(
         .ok_or_else(|| "Fabric 安装器列表为空".to_string())?
         .to_string();
     let dir = server_dir(id)?;
-    download_to(&url, &dir.join("fabric-installer.jar"), client).await?;
+    download_verified(client, &url, &dir.join("fabric-installer.jar"), None).await?;
     // 顺便写一份 server.properties 里的推荐项（Fabric 也认）
     Ok(())
 }
@@ -611,4 +950,188 @@ pub async fn install_hosted_server_core(id: String) -> Result<String, String> {
 #[tauri::command]
 pub fn hosted_server_core_installed(id: String) -> bool {
     core_installed(&id)
+}
+
+// ── 服务端运行（主进程侧，:server 独立进程配合） ────────────────────────
+
+/// 找一个可用的 JRE：优先用户装的（runtimes/），退回系统 JRE。
+fn find_server_jre() -> Result<String, String> {
+    let data = crate::settings::data_dir_sync()
+        .ok_or_else(|| "数据目录不可用".to_string())?;
+    let runtimes = PathBuf::from(&data).join("runtimes");
+    if let Ok(rd) = std::fs::read_dir(&runtimes) {
+        for e in rd.flatten() {
+            let home = e.path();
+            // 有 libjli.so 才算可用
+            if home.join("lib").join("arm64").join("libjli.so").exists()
+                || home.join("lib").join("libjli.so").exists()
+            {
+                return Ok(home.to_string_lossy().to_string());
+            }
+        }
+    }
+    // 系统 JRE
+    let sys = std::env::var("JAVA_HOME").unwrap_or_default();
+    if !sys.is_empty() {
+        return Ok(sys);
+    }
+    Err("没有可用的 Java 运行时：请先在「设置 → 运行环境」里装一个 JRE".to_string())
+}
+
+/// 启动一个服务器。需要：核心已装好 + 同意 EULA。
+#[tauri::command]
+pub async fn start_hosted_server(id: String) -> Result<(), String> {
+    let s = get_server(&id)?;
+
+    if !core_installed(&id) {
+        return Err("还没下载服务端核心".to_string());
+    }
+    let dir = server_dir(&id)?;
+
+    // EULA 以**配置**为准重写一遍再检查。
+    // （不能只读 eula.txt：勾选「同意」时若没同步落盘，文件里还是 eula=false，
+    //   表现就是「明明勾了却还说要同意」——同一份状态存两处必然对不上。）
+    if s.eula {
+        std::fs::write(
+            dir.join("eula.txt"),
+            "# Minecraft EULA（运行服务端即表示你同意）\n# 由 QookiX 生成；请在「服务器设置」里勾选同意后改成 true\neula=true\n",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let eula = std::fs::read_to_string(dir.join("eula.txt")).unwrap_or_default();
+    if !eula.lines().any(|l| l.trim() == "eula=true") {
+        return Err("请先在「服务器设置」里勾选同意 Minecraft EULA".to_string());
+    }
+
+    // 已经在跑？
+    if server_runtime(&id).map(|r| r.running) == Some(true) {
+        return Err("这个服务器已经在运行了".to_string());
+    }
+
+    let jre_home = find_server_jre()?;
+    // 核心 jar：Paper/原版是 server.jar；Fabric 是 fabric-installer.jar
+    let jar = dir.join("server.jar");
+    let jar = if jar.exists() { jar } else {
+        // Fabric 情形
+        std::fs::read_dir(&dir)
+            .ok()
+            .and_then(|rd| rd.flatten().find(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.starts_with("fabric-server-launch") && n.ends_with(".jar")
+            }).map(|e| e.path()))
+            .ok_or_else(|| "找不到服务端核心 jar".to_string())?
+    };
+
+    // 手机上要留余量给主进程 + 系统：1GB 堆实测会让 :server 稳占 ~850MB，
+    // 再加主进程 300MB / :tunnel 120MB 就触发 lowmemorykiller 了。
+    // 上限压到 2048，且下限 512（1-2 人小服够用）。
+    let mem = s.max_memory_mb.clamp(512, 2048);
+    let spec = crate::server_process::LaunchSpec {
+        id: id.clone(),
+        jre_home,
+        jar: jar.to_string_lossy().to_string(),
+        xmx_mb: mem,
+        work_dir: dir.to_string_lossy().to_string(),
+        // Paper/原版都接受 nogui（表示不要读 stdin）
+        args: vec!["nogui".to_string()],
+        token: crate::server_process::new_token(),
+    };
+
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        dir.join("launch.json"),
+        serde_json::to_string_pretty(&spec).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // 拉起 :server 独立进程（Rust → Kotlin → 新进程 → JNI → 回到 Rust 起 JVM）
+    crate::android_bridge::start_server_process(&id)
+}
+
+/// 停止运行中的服务器（IPC 优雅停服，失败则杀 :server 进程）。
+#[tauri::command]
+pub async fn stop_hosted_server(id: String) -> Result<(), String> {
+    crate::android_bridge::stop_server_process(&id)
+}
+
+/// 服务器运行态（UI 轮询用）。
+#[tauri::command]
+pub fn hosted_server_runtime(id: String) -> Option<ServerRuntime> {
+    server_runtime(&id)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerRuntime {
+    pub running: bool,
+    #[serde(rename = "startedAt")]
+    pub started_at: u64,
+    /// JVM 起来了吗（false = 还在启动中）
+    #[serde(rename = "jvmUp")]
+    pub jvm_up: bool,
+    #[serde(rename = "exitNote")]
+    pub exit_note: Option<String>,
+}
+
+/// 读 runtime.json 并探活（IPC /status 通了才算真在跑）。
+pub fn server_runtime(id: &str) -> Option<ServerRuntime> {
+    let dir = server_dir(id).ok()?;
+    let rt = dir.join("runtime.json");
+    if !rt.exists() {
+        return None;
+    }
+    let text = std::fs::read_to_string(rt).ok()?;
+    let info: crate::server_process::RuntimeInfo = serde_json::from_str(&text).ok()?;
+
+    // 探活：连 IPC 端口问一句。进程死了连不上。
+    let alive = ipc_status(info.ipc_port, &info.token).is_some();
+    Some(ServerRuntime {
+        running: alive,
+        started_at: info.started_at,
+        jvm_up: alive,
+        exit_note: info.exit,
+    })
+}
+
+/// GET http://127.0.0.1:{port}/status，返回 Some 表示进程活着且鉴权通过
+fn ipc_status(port: u16, token: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    if port == 0 {
+        return None;
+    }
+    let addr = format!("127.0.0.1:{port}");
+    let mut s = TcpStream::connect(&addr).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_millis(2000)))
+        .ok()?;
+    s.set_write_timeout(Some(std::time::Duration::from_millis(2000)))
+        .ok()?;
+    s.write_all(
+        format!("GET /status HTTP/1.1\r\nX-Token: {token}\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .ok()?;
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).ok()?;
+    // 必须确认是 200：鉴权失败/路径不对时服务端会回 404，
+    // 那不代表「进程活着」，只代表「端口有人在听」。
+    if !buf.starts_with("HTTP/1.1 200") {
+        tracing::warn!("[server] IPC 探活返回异常: {}", &buf.lines().next().unwrap_or(""));
+        return None;
+    }
+    Some(buf)
+}
+
+/// 读服务端日志尾部（Paper 写自己的 logs/latest.log，这里只取最后 n 行）。
+#[tauri::command]
+pub fn hosted_server_log(id: String, lines: Option<usize>) -> Result<Vec<String>, String> {
+    let dir = server_dir(&id)?;
+    // Paper 1.17+ 的日志布局
+    let path = dir.join("logs").join("latest.log");
+    let path = if path.exists() { path } else { dir.join("latest.log") };
+    let text = std::fs::read_to_string(path).map_err(|e| format!("读日志失败: {e}"))?;
+    let n = lines.unwrap_or(200).min(2000);
+    let all: Vec<&str> = text.lines().collect();
+    Ok(all[all.len().saturating_sub(n)..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect())
 }

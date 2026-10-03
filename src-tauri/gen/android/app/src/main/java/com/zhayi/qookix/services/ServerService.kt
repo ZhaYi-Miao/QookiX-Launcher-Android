@@ -1,0 +1,243 @@
+package com.zhayi.qookix.services
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
+import com.zhayi.qookix.MainActivity
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * 服务端运行服务，**跑在 `:server` 独立进程**（见 AndroidManifest 的 `android:process`）。
+ *
+ * ## 为什么要独立进程
+ *
+ * 服务端是另一个 JVM，内存几十上百 MB。放在主进程的话：
+ * - 服务端把系统 OOM 判定打到整个 App，用户在 UI 里操作也会被系统杀掉，服务器一起没了；
+ * - 服务端 JVM 崩溃会直接带走 UI（表现是「开服后应用闪退」）。
+ *
+ * 独立进程后主进程始终活着，UI 能读到退出原因并提示用户。
+ *
+ * ## 通信方式
+ *
+ * 不用 AIDL（要额外编译），走 **文件 + localhost HTTP**：
+ * - 主进程把启动参数写进 `files/servers/{id}/launch.json`，再 startForegroundService 本服务；
+ * - 本服务读 launch.json → 调 JNI `nativeStart`（Rust 侧起 JVM + IPC HTTP）→ 立即返回；
+ * - 主进程靠 `runtime.json`（IPC 端口 + token）发 `/stop`、查 `/status`。
+ */
+class ServerService : Service() {
+
+    companion object {
+        private const val TAG = "QookiXServer"
+        private const val CHANNEL_ID = "qookix_server"
+        private const val NOTIF_ID = 4201
+
+        /** 正在运行的服 id（:server 进程内；进程被杀即失效，正好是我们要的语义） */
+        @Volatile
+        var currentServerId: String? = null
+            private set
+
+        private val starting = AtomicBoolean(false)
+
+        /**
+         * 供 Rust 侧测试/调试用；正式路径是 Rust 直接 JNI 构造 Intent 调
+         * `Context.startForegroundService`（见 android_bridge.rs 的说明——
+         * 那条 call_activity 桥要求的 Kotlin 方法其实并不存在）。
+         */
+        fun start(context: Context, serverId: String) {
+            currentServerId = serverId
+            val intent = Intent(context, ServerService::class.java).apply {
+                putExtra(EXTRA_ID, serverId)
+                setComponent(
+                    android.content.ComponentName(
+                        context.packageName,
+                        ServerService::class.java.name
+                    )
+                )
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        /** 主进程侧兜底：整个 :server 进程干掉（IPC 停服失败时用，世界可能没存盘） */
+        fun stop(context: Context) {
+            context.stopService(Intent(context, ServerService::class.java))
+            currentServerId = null
+        }
+
+        const val EXTRA_ID = "server_id"
+
+        /**
+         * 外部（Rust JNI）入口。
+         *
+         * **必须在 :server 进程里调用**——这里会建第二个 JVM，和主进程的游戏 VM 隔离。
+         * 立即返回，启动在 Rust 的后台线程里进行。
+         *
+         * 放在 companion 里才能加 @JvmStatic：JNI 是按 `静态方法` 找符号的，
+         * 实例方法没有 `Java_..._nativeStart` 这种导出名。
+         */
+        @JvmStatic
+        private external fun nativeStart(launchJsonPath: String, ipcPort: Int): Int
+
+        @JvmStatic
+        private external fun nativeIsRunning(): Int
+
+        init {
+            // 与 TauriBridge 一致：Rust 侧产物叫 libqookix_lib.so
+            // （写 "qookix" 会 UnsatisfiedLinkError，而且这个异常发生在
+            //  class 初始化时，onStartCommand 根本进不去 → 服务静默不启动）
+            System.loadLibrary("qookix_lib")
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val serverId = intent?.getStringExtra(EXTRA_ID)
+        if (serverId.isNullOrEmpty()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // 立刻发通知：Android 8+ 要求 startForegroundService 后 5 秒内 startForeground，
+        // 否则系统直接 ANR 掉这个服务。
+        startForegroundCompat(buildNotification(serverId, "正在启动…"))
+
+        if (!starting.compareAndSet(false, true)) {
+            // 已经有一次启动在进行，重复请求直接忽略（防连点）
+            return START_STICKY
+        }
+
+        val dir = File(filesDir, "servers/$serverId")
+        val launchJson = File(dir, "launch.json")
+        if (!launchJson.exists()) {
+            Log.e(TAG, "launch.json 不存在: $launchJson")
+            stopping("启动参数丢失")
+            return START_NOT_STICKY
+        }
+
+        // IPC 端口传 0：由 Rust 侧 bind(0) 让系统分配，再回写 runtime.json。
+        // 这里**不能**先用 ServerSocket 探一个「空闲」端口再关掉传给 Rust ——
+        // 关闭后的端口处于 TIME_WAIT，而 Rust 的 TcpListener::bind 不带 SO_REUSEADDR，
+        // 会直接 Address already in use，IPC 线程静默死掉（状态查询与停服全失效）。
+        val ipcPort = 0
+
+        // 立刻把 runtime.json 写出来，好让主进程能 stop/查询
+        // （JVM 还在启动中，status 里 jvm=0，UI 显示「启动中」）
+        runCatching {
+            val token = org.json.JSONObject(launchJson.readText()).getString("token")
+            File(dir, "runtime.json").writeText(
+                """{"id":"$serverId","pid":${android.os.Process.myPid()},"ipcPort":$ipcPort,"token":"$token","startedAt":${System.currentTimeMillis()}}"""
+            )
+        }
+
+        val rc = nativeStart(launchJson.absolutePath, ipcPort)
+        if (rc != 0) {
+            Log.e(TAG, "nativeStart 失败 rc=$rc")
+            stopping("启动失败（$rc）")
+            return START_NOT_STICKY
+        }
+
+        // 通知改成「运行中」
+        notify(buildNotification(serverId, "运行中 · 端口见设置"))
+        // 不自动重启：服务端要用户显式启动（START_STICKY 会在进程被回收后偷偷复活，耗电且莫名其妙）
+        return START_NOT_STICKY
+    }
+
+    private fun pickIpcPort(serverId: String): Int {
+        // 20000 + hash%10000，避开 25565(游戏端口) 和常见端口
+        val base = 20000 + (serverId.hashCode().and(0x7fff) % 10000)
+        var port = base
+        while (port <= 29999) {
+            val free = try {
+                java.net.ServerSocket(port).use { true }
+            } catch (e: Exception) {
+                false
+            }
+            if (free) return port
+            port++
+        }
+        return base
+    }
+
+    private fun createChannel() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(
+                CHANNEL_ID,
+                "服务器",
+                NotificationManager.IMPORTANCE_LOW // 别打扰：服务器在后台跑不该发提示音
+            ).apply { setShowBadge(false) }
+            nm.createNotificationChannel(ch)
+        }
+    }
+
+    private fun buildNotification(id: String, text: String): Notification {
+        val open = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+                putExtra("openServer", id)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val b = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("Minecraft 服务器")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentIntent(open)
+            .setOngoing(true)
+        return b.build()
+    }
+
+    private fun notify(n: Notification) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIF_ID, n)
+    }
+
+    private fun startForegroundCompat(n: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIF_ID, n)
+        }
+    }
+
+    private fun stopping(reason: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIF_ID)
+        } catch (_: Exception) {
+        }
+        stopForeground(true)
+        stopSelf()
+        starting.set(false)
+        currentServerId = null
+        Log.i(TAG, "服务停止：$reason")
+    }
+
+    override fun onDestroy() {
+        Log.i(TAG, "ServerService 销毁")
+        starting.set(false)
+        currentServerId = null
+        super.onDestroy()
+    }
+}

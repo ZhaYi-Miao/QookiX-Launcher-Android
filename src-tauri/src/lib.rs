@@ -11,6 +11,7 @@ mod java;
 mod accounts;
 mod modpack;
 mod servers;
+mod server_process;
 mod crash;
 mod renderer_health;
 mod storage;
@@ -64,6 +65,11 @@ pub fn run() {
     servers::delete_hosted_server,
     servers::suggest_server_memory,
     servers::install_hosted_server_core,
+    server_process::inspect_server_core_manifest,
+    servers::start_hosted_server,
+    servers::stop_hosted_server,
+    servers::hosted_server_runtime,
+    servers::hosted_server_log,
     servers::hosted_server_core_installed,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,

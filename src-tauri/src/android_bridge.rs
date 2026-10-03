@@ -59,6 +59,28 @@ pub fn install_apk(_path: &str) -> Result<(), String> {
     Err("桌面端不涉及 APK 安装".to_string())
 }
 
+/// 拉起 `:server` 独立进程（见 mod android 里的实现与「为什么不用 call_activity」的说明）。
+#[cfg(target_os = "android")]
+pub fn start_server_process(id: &str) -> Result<(), String> {
+    android::start_server_process(id)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn start_server_process(_id: &str) -> Result<(), String> {
+    Err("桌面端不支持 Android 独立进程服务端".to_string())
+}
+
+/// 停掉 `:server` 独立进程。
+#[cfg(target_os = "android")]
+pub fn stop_server_process(id: &str) -> Result<(), String> {
+    android::stop_server_process(id)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn stop_server_process(_id: &str) -> Result<(), String> {
+    Ok(())
+}
+
 /// 拉起游戏界面（GameActivity）。游戏必须跑在带 SurfaceView 的 Activity 里，
 /// 否则 GL4ES 没有 Surface 可用，GLFW 创建窗口就会失败。
 #[cfg(target_os = "android")]
@@ -313,6 +335,154 @@ mod android {
         )
         .ok()?;
         Some(String::new())
+    }
+
+    /// 拉起 `:server` 独立进程里的 ServerService。
+    ///
+    /// ## 为什么不走 `call_activity`
+    ///
+    /// 那条路要求 MainActivity 上有对应的 Kotlin 方法（`setOrientation` 等），
+    /// 但本项目的 MainActivity 是个空壳（只有 onCreate），**那些方法根本不存在** ——
+    /// `call_method` 会抛 NoSuchMethodError，被 `call_activity` 静默吞掉变成
+    /// 「原生桥未就绪」。这里改用 **Android 框架自带**的
+    /// `Context.startForegroundService(Intent)`：它是 API 26 起就有的系统方法，
+    /// 任何 Context（含 Activity）都有，不依赖我们自己的桥接代码是否写对。
+    ///
+    /// Intent 在 JNI 侧手工构造（组件名写死 `com.zhayi.qookix.services.ServerService`），
+    /// 免得 Kotlin 侧再引入一个必须同步维护的入口。
+    #[cfg(target_os = "android")]
+    pub fn start_server_process(id: &str) -> Result<(), String> {
+        use jni::objects::JValue;
+        use jni::sys::jint;
+
+        let vm = java_vm().ok_or_else(|| "原生桥未就绪（JavaVM 未初始化）".to_string())?;
+        let mut env = vm
+            .attach_current_thread_as_daemon()
+            .map_err(|e| e.to_string())?;
+        let ctx = activity().ok_or_else(|| "原生桥未就绪（Activity 未 attach）".to_string())?;
+
+        let pkg = env
+            .new_string("com.zhayi.qookix")
+            .map_err(|e| e.to_string())?;
+        let cls = env
+            .new_string("com.zhayi.qookix.services.ServerService")
+            .map_err(|e| e.to_string())?;
+
+        let cn_cls = env
+            .find_class("android/content/ComponentName")
+            .map_err(|e| e.to_string())?;
+        let cn = env
+            .new_object(
+                &cn_cls,
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[JValue::Object(&pkg), JValue::Object(&cls)],
+            )
+            .map_err(|e| e.to_string())?;
+
+        let intent_cls = env
+            .find_class("android/content/Intent")
+            .map_err(|e| e.to_string())?;
+        let intent = env
+            .new_object(&intent_cls, "()V", &[])
+            .map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "setComponent",
+            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+            &[JValue::Object(&cn)],
+        )
+        .map_err(|e| format!("setComponent 失败: {e}"))?;
+
+        let key = env.new_string("server_id").map_err(|e| e.to_string())?;
+        let val = env.new_string(id).map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&key), JValue::Object(&val)],
+        )
+        .map_err(|e| format!("putExtra 失败: {e}"))?;
+
+        // API 26+ 走 startForegroundService（ServerService 会在 5 秒内 startForeground）
+        // 低于 26 用 startService 兜底（项目 minSdk 已在 24+）
+        let started = if android_sdk_int() >= 26 {
+            env.call_method(
+                &ctx,
+                "startForegroundService",
+                "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+                &[JValue::Object(&intent)],
+            )
+        } else {
+            env.call_method(
+                &ctx,
+                "startService",
+                "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+                &[JValue::Object(&intent)],
+            )
+        };
+        match started {
+            Ok(_) => Ok(()),
+            // Android 12+ 后台启动前台服务会抛 IllegalStateException，
+            // 报友好一点：说明得回前台
+            Err(e) => Err(format!("拉起服务端进程失败: {e}")),
+        }
+    }
+
+    /// 停掉 `:server` 进程（连带 JVM 与服务器一起结束）。
+    pub fn stop_server_process(id: &str) -> Result<(), String> {
+        use jni::objects::JValue;
+        let vm = java_vm().ok_or_else(|| "原生桥未就绪（JavaVM 未初始化）".to_string())?;
+        let mut env = vm
+            .attach_current_thread_as_daemon()
+            .map_err(|e| e.to_string())?;
+        let ctx = activity().ok_or_else(|| "原生桥未就绪（Activity 未 attach）".to_string())?;
+
+        let pkg = env.new_string("com.zhayi.qookix").map_err(|e| e.to_string())?;
+        let cls = env
+            .new_string("com.zhayi.qookix.services.ServerService")
+            .map_err(|e| e.to_string())?;
+        let cn_cls = env.find_class("android/content/ComponentName").map_err(|e| e.to_string())?;
+        let cn = env
+            .new_object(
+                &cn_cls,
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[JValue::Object(&pkg), JValue::Object(&cls)],
+            )
+            .map_err(|e| e.to_string())?;
+        let intent_cls = env.find_class("android/content/Intent").map_err(|e| e.to_string())?;
+        let intent = env.new_object(&intent_cls, "()V", &[]).map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "setComponent",
+            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+            &[JValue::Object(&cn)],
+        )
+        .map_err(|e| e.to_string())?;
+        let key = env.new_string("server_id").map_err(|e| e.to_string())?;
+        let val = env.new_string(id).map_err(|e| e.to_string())?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&key), JValue::Object(&val), JValue::Object(&val)],
+        )
+        .ok();
+
+        env.call_method(&ctx, "stopService", "(Landroid/content/Intent;)Z", &[JValue::Object(&intent)])
+            .map_err(|e| e.to_string())
+            .map(|_| ())
+    }
+
+    /// 读 `android.os.Build$VERSION.SDK_INT`（用于选 startService / startForegroundService）
+    fn android_sdk_int() -> i32 {
+        let Some(vm) = java_vm() else { return 0 };
+        let Ok(mut env) = vm.attach_current_thread_as_daemon() else { return 0 };
+        let Ok(vcls) = env.find_class("android/os/Build$VERSION") else { return 0 };
+        let Ok(fid) = env.get_static_field(&vcls, "SDK_INT", "I") else { return 0 };
+        match fid {
+            jni::objects::JValueOwned::Int(v) => v,
+            _ => 0,
+        }
     }
 
     /// 两个字符串参数、**并取回字符串结果**的版本。

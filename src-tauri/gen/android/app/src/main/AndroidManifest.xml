@@ -146,6 +146,19 @@
             android:exported="false"
             android:process=":guard" />
 
+        <!-- Minecraft 服务端：**独立进程**（:server）。
+             服务端是另一个 JVM（内存几百 MB ~ 数 GB），必须与主进程隔离：
+             ① 放主进程时服务端触发系统 OOM，用户在 UI 里操作也会被一起杀掉，服务器陪葬；
+             ② 服务端 JVM 崩溃 / core dump 会直接带走启动器（表现是「开服后应用闪退」）。
+             独立进程后主进程始终存活，UI 能读到退出原因并提示。
+             通信方式与 :tunnel 一致：launch.json 下发参数 + localhost HTTP IPC（带 token 校验）。 -->
+        <service
+            android:name=".services.ServerService"
+            android:exported="false"
+            android:process=":server"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"
