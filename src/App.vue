@@ -91,12 +91,17 @@ const activeTab = computed(() => {
  * 不能直接把 `activeTab`（只读 computed）绑给 v-model：点任何一项 Vant 都会回写它，
  * 对只读 computed 写入会报错；而「实例」一格又对应多个路由，
  * 也需要一个本地值来承接。所以用本地 ref 跟路由同步。
+ *
+ * 注意 `more` 也要同步：「更多」现在是**真实路由页**（/more 及其二级页），
+ * 用户停在多人/皮肤/设置时，「更多」格就应该亮着。
+ * （这行 `if (v !== "more")` 的跳过逻辑是「更多=内联弹层」时代的遗物，已删——
+ *  它会让底栏停在上一个 tab 上，比如停在皮肤页时高亮的却是「首页」。）
  */
 const tabModel = ref("home");
 watch(
   activeTab,
   (v) => {
-    if (v !== "more") tabModel.value = v || "home";
+    tabModel.value = v || "home";
   },
   { immediate: true }
 );

@@ -161,6 +161,10 @@ onMounted(() => {
   overflow-x: auto;
   scrollbar-width: none;
   padding-bottom: 2px;
+  /* 关键：.iv 是 flex 列 + 滚动容器，实例多的时候内容超高，
+     没有这行的话 chips 会被 flex 压缩到只剩 padding（实测 2px）——
+     「全部 / 未分组」胶囊只剩一条缝，看起来就像被截掉了。 */
+  flex-shrink: 0;
 }
 .chip {
   flex-shrink: 0;
