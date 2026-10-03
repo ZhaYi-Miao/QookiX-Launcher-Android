@@ -873,4 +873,57 @@ function handleSelect(filename: string) {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/*
+ * 手机（窄容器）单栏。
+ *
+ * 桌面是「280px 报告列表 + 结果」两栏，而这一页容器只有 384px：
+ * 结果列被压到 70px 上下，标题、正文全折成一列一两个字。
+ * 竖屏改成上下堆叠——列表限高在上，结果占满下方。
+ * 触发条件用容器查询：界面缩放走 zoom，媒体查询的宽度不可靠。
+ */
+@container page (max-width: 720px) {
+  .crash-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+  .crash-log-items {
+    max-height: 168px;
+  }
+  /* 删除键原来是 hover 才显形，触屏没有 hover → 常显，并放大到手指点得到 */
+  .crash-log-del {
+    opacity: 1;
+    width: 40px;
+    height: 40px;
+    margin-right: 4px;
+  }
+  .crash-result {
+    padding: 12px;
+    gap: 12px;
+  }
+  .crash-title {
+    font-size: 17px;
+  }
+  /* 环境信息：键值并排时值只剩几十像素，改成上下两行并允许折行 */
+  .crash-detail {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .crash-detail-key {
+    width: auto;
+  }
+  .crash-detail-value {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-all;
+  }
+  .crash-stack {
+    max-height: 180px;
+  }
+  .crash-actions {
+    flex-wrap: wrap;
+  }
+}
 </style>

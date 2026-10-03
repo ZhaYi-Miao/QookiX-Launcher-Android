@@ -19,33 +19,39 @@ const adding = ref(false);
 
 
 const current = computed(() => accounts.current);
+/**
+ * 头像源，按真机实测可用性排序：
+ * crafatar 已长期 500 挂掉，但会给 WebView 回一张 **200 的占位图** —— 占位图不触发 @error，
+ * 整条回退链直接失效（用户看到的就是那张默认 Alex）；mc-heads 对非浏览器 UA 返 403，放兜底；
+ * 只有 minotar 稳定，排第一。
+ */
 const AVATAR_SOURCES = [
-  (u: string) => `https://mc-heads.net/avatar/${u}/64`,
-  (u: string) => `https://crafatar.com/avatars/${u}?size=64&overlay`,
   (u: string) => `https://minotar.net/helm/${u}/64`,
+  (u: string) => `https://mc-heads.net/avatar/${u}/64`,
 ];
-const attempt = ref(0);
 
-/** 头像 URL：多源依次回退（@error 时 attempt++） */
+/** 顶栏当前账号头像：与列表共用同一套多源回退；离线账号没有正版头像 → 显示首字 */
 const avatarUrl = computed(() => {
-  const u = current.value?.uuid;
-  if (!u || current.value?.type !== "microsoft" || attempt.value >= AVATAR_SOURCES.length) return null;
-  return AVATAR_SOURCES[attempt.value](u);
+  const c = current.value;
+  return c ? avatarFor(c.uuid, c.type) : null;
 });
 
 /** 离线账号显示名字首字（没有正版头像） */
-const initial = computed(() => (current.value?.username ?? "").slice(0, 1).toUpperCase());
+const initial = computed(() => initialOf(current.value?.username ?? ""));
 
 /**
  * 面板里**每个账号**的头像。
  * 原来只有顶栏当前账号有头像，列表里只有名字（用户反馈「把头像砍掉了」）。
  * 离线账号没有正版头像，显示名字首字；正版账号按 uuid 取头像，多源依次回退。
+ * 带 `v=avatarVersion`：换肤后 URL 变化，绕过 WebView 缓存，否则换了皮头像也不变。
  */
 const rowAvatar = ref<Record<string, number>>({});
 function avatarFor(uuid: string, type: string): string | null {
   if (type !== "microsoft") return null;
   const n = rowAvatar.value[uuid] ?? 0;
-  return n < AVATAR_SOURCES.length ? AVATAR_SOURCES[n](uuid) : null;
+  if (n >= AVATAR_SOURCES.length) return null;
+  const base = AVATAR_SOURCES[n](uuid);
+  return `${base}${base.includes("?") ? "&" : "?"}v=${accounts.avatarVersion}`;
 }
 function onRowAvatarError(uuid: string) {
   rowAvatar.value = { ...rowAvatar.value, [uuid]: (rowAvatar.value[uuid] ?? 0) + 1 };
@@ -107,7 +113,7 @@ async function addOffline() {
   <div class="acct-wrap">
   <div class="chip" @click="onChipTap">
     <span class="av">
-      <img v-if="avatarUrl" :src="avatarUrl" alt="" @error="attempt++" />
+      <img v-if="avatarUrl" :src="avatarUrl" alt="" @error="onRowAvatarError(current?.uuid ?? '')" />
       <span v-else class="ini">{{ initial }}</span>
     </span>
     <span class="nm">{{ current?.username ?? $t("account-chip.not-logged-in") }}</span>

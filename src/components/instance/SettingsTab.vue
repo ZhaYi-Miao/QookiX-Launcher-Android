@@ -22,6 +22,7 @@ import AppInput from "../../ui/AppInput.vue";
 import AppSlider from "../../ui/AppSlider.vue";
 import AppSelect from "../../ui/AppSelect.vue";
 import AppSeg from "../../ui/AppSeg.vue";
+import AppSwitch from "../../ui/AppSwitch.vue";
 
 const props = defineProps<{ instanceId: string }>();
 
@@ -256,6 +257,23 @@ async function onRendererKey(key: string) {
   await saveSettings();
 }
 
+/**
+ * 启动前检查文件完整性。
+ *
+ * 不进 `edit` 草稿：它不是「输入完再存」的值，改动要立刻落盘（和渲染器同理——
+ * 用户很可能改完马上点启动，防抖定时器还没跑就被切后台了）。
+ * 缺省（旧实例没有这个键）视为**开启**。
+ */
+const checkFiles = computed(() => instance.value?.check_files_on_launch !== false);
+
+async function onCheckFiles(v: boolean) {
+  try {
+    await instances.patch({ id: props.instanceId, check_files_on_launch: v });
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 /** 显式保存实例别名（点按钮触发，不走自动保存） */
 async function saveAlias() {
   if (savingAlias.value) return;
@@ -366,6 +384,14 @@ onBeforeUnmount(() => {
         （{{ effectiveRenderer.why }}）
       </p>
       <p class="hint">{{ $t("instance-settings.renderer-auto-rule") }}</p>
+    </div>
+
+    <div class="set-card glass">
+      <h4>{{ $t("instance-settings.check-files") }}</h4>
+      <div class="switch-row">
+        <p class="hint switch-hint">{{ $t("instance-settings.check-files-hint") }}</p>
+        <app-switch :value="checkFiles" @update:value="onCheckFiles" />
+      </div>
     </div>
 
     <div class="set-card glass">
@@ -682,6 +708,18 @@ textarea.text-input {
   font-size: 12px;
   color: var(--text-3);
   margin-top: 4px;
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* 这一行里的说明文字和开关同一行，去掉段落的顶部间距，否则与开关不居中 */
+.switch-row .switch-hint {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
 }
 /* 手机底线：这张卡里的所有 naive 按钮都抬到可点高度（别名增删、重命名等小按钮） */
 .set-card :deep(.n-button) {

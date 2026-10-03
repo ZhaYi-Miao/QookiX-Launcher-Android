@@ -529,8 +529,13 @@ pub async fn download_libraries(
         .filter_map(|lib| {
             let a = lib.downloads.as_ref()?.artifact.as_ref()?;
             let path = libraries_dir.join(&a.path);
-            // Skip if already exists
-            if path.exists() {
+            // 已存在**且 SHA1 一致**才跳过。
+            //
+            // 这里曾经只判 `path.exists()`，于是**半截 jar 会永远留着**：实测
+            // `log4j-api-2.17.0.jar` 只有 196128 字节（应为 301776），
+            // 现象是 1.18.2 一启动就 `NoClassDefFoundError: org/apache/logging/log4j/Logger`，
+            // 而且点「安装游戏」也修不好 —— 因为文件「存在」，直接跳过了。
+            if path.exists() && file_sha1_matches(&path, &a.sha1) {
                 return None;
             }
             Some((a.url.clone(), path.to_string_lossy().to_string(), Some(a.sha1.clone())))
@@ -538,6 +543,19 @@ pub async fn download_libraries(
         .collect();
 
     download_files_concurrent(&jobs, LIB_CONCURRENCY, None).await
+}
+
+/// 本地文件是否与期望的 SHA1 一致（用于「已存在就跳过」之前的完整性校验）。
+///
+/// 读不到文件时返回 false（当作需要重下）。只在校验库文件时调用，
+/// 文件不大（几 MB），整file 读进来算哈希足够快。
+fn file_sha1_matches(path: &Path, expected_sha1: &str) -> bool {
+    let Ok(content) = std::fs::read(path) else {
+        return false;
+    };
+    let mut hasher = Sha1::new();
+    hasher.update(&content);
+    format!("{:x}", hasher.finalize()) == expected_sha1
 }
 
 

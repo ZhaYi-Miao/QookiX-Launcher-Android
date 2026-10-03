@@ -27,7 +27,7 @@ pub async fn report_crash(instance_id: &str, exit_code: i32) -> anyhow::Result<(
     let filename = format!("crash-launcher-{}.txt", timestamp.format("%Y-%m-%d_%H-%M-%S"));
     let crash_file = crash_dir.join(filename);
 
-    let content = format!(
+    let mut content = format!(
         "QookiX 启动器退出报告\n\
          ====================\n\
          时间: {}\n\
@@ -39,6 +39,37 @@ pub async fn report_crash(instance_id: &str, exit_code: i32) -> anyhow::Result<(
         instance_id,
         exit_code
     );
+
+    // 把**启动日志尾部**一起写进来：很多「启动失败」根本不会生成 Minecraft 自己的
+    // crash-report（例如依赖库 jar 残缺导致 `NoClassDefFoundError: log4j.Logger`），
+    // 「崩溃分析」页面对这类问题只会显示「暂无崩溃报告」。
+    // 带上日志后，下面这些诊断规则（analyze_text）就能给出可执行的建议，
+    // 用户在崩溃分析页里也能看到同样的结论。
+    let launch_log = crate::launch::read_instance_log(instance_id)
+        .await
+        .unwrap_or_default();
+    if !launch_log.trim().is_empty() {
+        let tail: String = {
+            const MAX_LOG_CHARS: usize = 16_000;
+            let text = launch_log.trim();
+            if text.chars().count() > MAX_LOG_CHARS {
+                let skip = text.chars().count() - MAX_LOG_CHARS;
+                text.chars().skip(skip).collect()
+            } else {
+                text.to_string()
+            }
+        };
+        content.push_str("\n===== 启动日志（尾部）=====\n");
+        content.push_str(&tail);
+        content.push('\n');
+
+        let diag = analyze_text(&content, Some(exit_code));
+        if let Some(cause) = diag.causes.first() {
+            content.push_str("\n===== 启动器诊断 =====\n");
+            content.push_str(&format!("{}\n原因：{}\n建议：{}\n", cause.title, cause.reason, cause.advice));
+        }
+    }
+
     fs::write(&crash_file, content).await?;
     Ok(())
 }
@@ -207,6 +238,22 @@ pub fn analyze_text(content: &str, exit_code: Option<i32>) -> CrashDiagnosis {
             "尝试更换渲染后端，或重装游戏依赖的 native 库。",
             find_evidence(content, &["UnsatisfiedLinkError"]),
             80,
+        );
+    }
+    // 依赖库缺失/损坏：classpath 上的某个 jar 里找不到类。
+    // 实测成因是**下载被中断留下的半截 jar**（`log4j-api-2.17.0.jar` 只有 196128
+    // / 应为 301776 字节 → 1.18.2 一启动就 NoClassDefFoundError: log4j.Logger）。
+    // 半截图之所以能一直留着：早先的「已存在就跳过」不校验完整性，
+    // 现在安装流程按 SHA1 校验，所以「安装游戏」能修好它。
+    if lower.contains("noclassdeffounderror") || lower.contains("classnotfoundexception") {
+        push_cause(&mut causes,
+            "libraries",
+            "lwjgl",
+            "依赖库缺失或损坏",
+            "classpath 里的某个库找不到类，通常是该 jar 下载不完整（半截文件）或缺失。",
+            "到实例详情页点「安装游戏」修复：会按 SHA1 校验并重新下载损坏的库。",
+            find_evidence(content, &["NoClassDefFoundError", "ClassNotFoundException"]),
+            85,
         );
     }
     if lower.contains("lwjgl") && (lower.contains("glfw") || lower.contains("display")) {

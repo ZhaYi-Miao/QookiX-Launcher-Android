@@ -52,6 +52,8 @@ async function apply() {
     } else {
       await api.applySkinToAccount(currentAccount.value.uuid, currentSrc.value, model.value);
     }
+    /* 换肤后头像 URL 要变（avatarFor 带 v=avatarVersion），否则缓存住的旧头像不会更新 */
+    accounts.bumpAvatar();
     message.success($t("common.done"));
   } catch (e) {
     message.error(String(e));

@@ -37,6 +37,14 @@ const instances = useInstancesStore();
 /** 启动前那份待确认（由 store.launch 挂上来的） */
 const guard = computed(() => instances.pendingRendererGuard);
 
+// 两个弹层别叠在一起：用户点了启动 → 启动前提醒出现时，先把「启动后建议」收掉
+watch(guard, (g) => {
+  if (g) {
+    show.value = false;
+    issue.value = null;
+  }
+});
+
 /** 确认「切换为推荐渲染器并启动」 */
 async function switchAndLaunch() {
   const g = guard.value;
@@ -175,13 +183,13 @@ onBeforeUnmount(() => {
        手机形态：底部弹层（这是最后一个 naive 居中卡片弹窗）。 -->
   <app-sheet
     :show="!!guard"
-    :title="$t('renderer-hint-dialog.incompatible-title')"
+    :title="$t('renderer-hint-dialog.renderer-hint')"
     :mask-closable="true"
     @update:show="(v: boolean) => (v ? null : launchAnyway())"
   >
     <div v-if="guard" class="rh-body">
       <div class="rh-header">
-        <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-hint") }}</span>
+        <span class="rh-title">{{ $t("renderer-hint-dialog.incompatible-title") }}</span>
       </div>
       <div class="rh-switch">
         <span class="rh-chip rh-chip-used">{{ $t("renderer-hint-dialog.current-option", { p1: guard.usedName }) }}</span>
@@ -189,10 +197,15 @@ onBeforeUnmount(() => {
         <span class="rh-chip rh-chip-rec">{{ $t("renderer-hint-dialog.recommended-option", { p1: guard.recommendedName }) }}</span>
       </div>
 
-      <p class="rh-advice">{{ $t("renderer-hint-dialog.instance-version-a") }}<b>{{ guard.mcVersion }}</b
-        >{{ $t("renderer-hint-dialog.renderer-conflict") }}</p>
+      <p class="rh-advice">
+        {{ $t("renderer-hint-dialog.instance-version-a") }}
+        <b>{{ guard.mcVersion }}</b>，{{ $t("renderer-hint-dialog.renderer-conflict") }}
+      </p>
 
-      <p class="rh-advice">{{ $t("renderer-hint-dialog.switch-question") }}<b>{{ guard.recommendedName }}</b>{{ $t("renderer-hint-dialog.relaunch-confirm") }}</p>
+      <p class="rh-advice">
+        {{ $t("renderer-hint-dialog.switch-question") }}
+        <b>{{ guard.recommendedName }}</b> {{ $t("renderer-hint-dialog.relaunch-confirm") }}
+      </p>
 
       <p class="rh-advice rh-advice-dim">{{ $t("renderer-hint-dialog.pin-warning", { p1: guard.recommendedName }) }}</p>
     </div>
@@ -208,13 +221,13 @@ onBeforeUnmount(() => {
   <!-- 启动后：日志里发现了渲染器失败证据 -->
   <app-sheet
     :show="show"
-    :title="$t('renderer-hint-dialog.suggestion-text')"
+    :title="$t('renderer-hint-dialog.renderer-suggestion')"
     :mask-closable="true"
     @update:show="(v: boolean) => (v ? (show = v) : dismiss())"
   >
     <div v-if="issue" class="rh-body">
       <div class="rh-header">
-        <span class="rh-badge">{{ $t("renderer-hint-dialog.renderer-suggestion") }}</span>
+        <span class="rh-title">{{ $t("renderer-hint-dialog.suggestion-text") }}</span>
       </div>
       <p class="rh-reason">{{ issue.reason }}</p>
 
@@ -224,8 +237,12 @@ onBeforeUnmount(() => {
         <span class="rh-chip rh-chip-rec">{{ $t("renderer-hint-dialog.recommended-option", { p1: issue.recommended_name }) }}</span>
       </div>
 
-      <p class="rh-advice">{{ $t("renderer-hint-dialog.instance-version-a") }}<b>{{ issue.mc_version }}</b
-        >{{ $t("renderer-hint-dialog.recommended-is") }}<b>{{ issue.recommended_name }}</b>{{ $t("renderer-hint-dialog.switch-hint-a") }}<b>{{ $t("renderer-hint-dialog.this-instance") }}</b>{{ $t("renderer-hint-dialog.switch-hint-b") }}</p>
+      <p class="rh-advice">
+        {{ $t("renderer-hint-dialog.instance-version-a") }}
+        <b>{{ issue.mc_version }}</b>{{ $t("renderer-hint-dialog.recommended-is") }}
+        <b>{{ issue.recommended_name }}</b>。{{ $t("renderer-hint-dialog.switch-hint-a") }}
+        <b>{{ $t("renderer-hint-dialog.this-instance") }}</b>{{ $t("renderer-hint-dialog.switch-hint-b") }}
+      </p>
 
       <details v-if="issue.evidence.length" class="rh-evidence">
         <summary>{{ $t("renderer-hint-dialog.view-log-evidence", { p1: issue.evidence.length }) }}</summary>
@@ -249,15 +266,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.rh-badge {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 176, 32, 0.16);
-  color: #ffb020;
-  border: 1px solid rgba(255, 176, 32, 0.35);
-  white-space: nowrap;
 }
 .rh-title {
   font-weight: 600;

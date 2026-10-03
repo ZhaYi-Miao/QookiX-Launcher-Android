@@ -709,22 +709,35 @@ pub fn redirect_output(log_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 启动日志里出现这些措辞，说明**游戏已经死了**（只是 JVM 还挂在那里、画面白屏）。
+/// 启动日志里出现这些措辞，说明游戏**可能**已经死了。
 ///
-/// 这时立刻结束游戏，把玩家送回启动器看原因 —— 否则要等系统的 ANR/收尾机制
-/// （几十秒）才回到启动器，体验上就是「卡了很久才弹提示」。
+/// 光命中关键字还不够，必须再满足「日志停滞」才会真的结束游戏 —— 见
+/// [`FATAL_STALL_SECS`]。原因是一次实测事故：1.8.9 启动时会输出
+/// `kc: Invalid shaders/program/entity_sobel.fsh: Couldn't compile fragment program…`，
+/// 看着像致命错误，其实 MC 自己会 catch 掉（那条 shader 非必需），
+/// **游戏照常进主菜单** —— 早先只按关键字就杀，结果每局都在 Mojang 图标后「自己退出」。
 ///
-/// 只收「确定致命」的说法（宁可漏，不可误杀正在玩的游戏）：
-///  - `Failed to load required shader programs`：1.13+ 核心着色器加载失败，MC 自己就会退出；
-///  - `Invalid shaders/`：1.8.9 实测（post 着色器无效 → 异常抛到 main）；
+/// 判定原则：命中关键字 **且** 日志停滞（见 [`FATAL_STALL_SECS`]）才结束游戏。
+///
+/// **不要加 `Invalid shaders/`**：1.8.9 启动时会输出
+/// `kc: Invalid shaders/program/entity_sobel.fsh: Couldn't compile fragment program…`，
+/// 看着致命，其实 MC 自己会吞掉、照常进主菜单；而游戏到主菜单后就**不再输出日志**
+/// （安静期），「停滞」判据照样会命中 —— 结果两局都变成「进到 Mojang 图标就自己退出」。
+/// 宁可漏（那种卡死局面可以用抽屉里的「强制关闭」处理），不可误杀。
+///
+/// 三者都是明确致命：
+///  - `Failed to load required shader programs`：必需着色器加载失败；
 ///  - `Exception in thread "main"`：主线程挂了；
 ///  - `A fatal error has been detected`：JVM 自身崩溃（hs_err）。
 const FATAL_LAUNCH_MARKERS: &[&str] = &[
     "Failed to load required shader programs",
-    "Invalid shaders/",
     "Exception in thread \"main\"",
     "A fatal error has been detected",
 ];
+
+/// 命中关键字后，日志**停滞**这么久才认定「确实卡死了」，然后才结束游戏。
+/// 游戏若还在继续输出日志，就说明它活着，绝不能动它。
+const FATAL_STALL_SECS: u64 = 10;
 
 /// 只在启动后这段时间内做上面的「快判」：世界跑起来之后的报错交给
 /// 「回到启动器」那条检查路径，不在这里越权动手杀游戏。
@@ -739,6 +752,10 @@ pub fn spawn_log_tail(log_path: PathBuf, instance_id: String) {
 
         let started = std::time::Instant::now();
         let mut fatal_handled = false;
+        // 命中的致命关键字（等日志停滞再动手）
+        let mut suspect: Option<&'static str> = None;
+        // 最近一次读到新日志的时刻 —— 只要它还在往前走，就说明游戏活着
+        let mut last_line_at = std::time::Instant::now();
         let mut pos: u64 = 0;
         while TAIL_ACTIVE.load(Ordering::SeqCst) {
             if let Ok(mut file) = std::fs::File::open(&log_path) {
@@ -753,29 +770,21 @@ pub fn spawn_log_tail(log_path: PathBuf, instance_id: String) {
                                 pos += n as u64;
                                 let text = line.trim_end_matches(['\n', '\r']);
                                 if !text.is_empty() {
+                                    last_line_at = std::time::Instant::now();
                                     crate::progress::emit_launch_log(&instance_id, "out", text);
                                     if !fatal_handled
+                                        && suspect.is_none()
                                         && started.elapsed().as_secs() < FATAL_WINDOW_SECS
                                     {
                                         if let Some(hit) = FATAL_LAUNCH_MARKERS
                                             .iter()
                                             .find(|m| text.contains(**m))
                                         {
-                                            fatal_handled = true;
-                                            let msg = format!(
-                                                "[launcher] 启动日志出现致命错误（{hit}），游戏已无法继续，正在结束它以便回到启动器"
+                                            // 先记下，等日志停滞再确认（见 FATAL_STALL_SECS）
+                                            tracing::warn!(
+                                                "[launcher] 启动日志出现可疑致命错误（{hit}），等待确认是否卡死"
                                             );
-                                            tracing::warn!("{msg}");
-                                            crate::util::log_line(&msg);
-                                            crate::progress::emit_launch_log(
-                                                &instance_id,
-                                                "out",
-                                                &msg,
-                                            );
-                                            // kill_game 是 async：这里在普通线程里，借用 Tauri 的全局运行时
-                                            tauri::async_runtime::spawn(async {
-                                                let _ = crate::launch::kill_game().await;
-                                            });
+                                            suspect = Some(hit);
                                         }
                                     }
                                 }
@@ -785,6 +794,25 @@ pub fn spawn_log_tail(log_path: PathBuf, instance_id: String) {
                     }
                 }
             }
+
+            // 二次确认：命中关键字之后日志再也不动了，才认定游戏确实死了
+            if let Some(hit) = suspect {
+                if last_line_at.elapsed().as_secs() >= FATAL_STALL_SECS {
+                    fatal_handled = true;
+                    suspect = None;
+                    let msg = format!(
+                        "[launcher] 启动日志已停滞 {FATAL_STALL_SECS} 秒且出现致命错误（{hit}），游戏已无法继续，正在结束它以便回到启动器"
+                    );
+                    tracing::warn!("{msg}");
+                    crate::util::log_line(&msg);
+                    crate::progress::emit_launch_log(&instance_id, "out", &msg);
+                    // kill_game 是 async：这里在普通线程里，借用 Tauri 的全局运行时
+                    tauri::async_runtime::spawn(async {
+                        let _ = crate::launch::kill_game().await;
+                    });
+                }
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
     });

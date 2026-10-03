@@ -34,7 +34,9 @@
         <item>@string/mcl_option_customcontrol</item>
         <item>@string/control_screenshot</item>
         <item>@string/menu_perf</item>
-    </string-array>
+        <!-- 第 8 项：游戏内联机面板（TerracottaPanel）。新增项必须同步 GameActivity.GAME_MENU_ICONS -->
+        <item>@string/tc_title</item>
+        </string-array>
     
     <string-array name="renderer_values">
         <item>opengles2</item> <!-- gl4es_extra 1.1.4 with OpenGL ES 2/"3" -->

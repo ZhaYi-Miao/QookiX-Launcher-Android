@@ -12,6 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.zhayi.qookix.MainActivity
 import com.zhayi.qookix.R
+import com.zhayi.qookix.currentPlayerName
 
 class GameService : Service() {
 
@@ -40,6 +41,13 @@ class GameService : Service() {
     private fun autoStartTunnelHosting() {
         Thread {
             try {
+                // 先把隧道服务拉起来。它是**按需启动**的（启动器前端第一次调 /state 时才起），
+                // 而自动开房发生在游戏启动时 —— 不主动起就永远等不到端口文件，
+                // 于是整段静默跳过：房间要么没有，要么缺玩家名（显示成
+                // `Terracotta Anonymous Host`，真机踩过）。
+                startService(
+                    Intent(this, com.zhayi.qookix.tunnel.TerracottaTunnelService::class.java)
+                )
                 // 等隧道进程把端口文件写出来（最多等 8 秒）
                 val portFile = java.io.File(filesDir, "tunnel_port")
                 var waited = 0
@@ -48,7 +56,7 @@ class GameService : Service() {
                 }
                 if (!portFile.exists()) return@Thread
                 val port = portFile.readText().trim().toIntOrNull() ?: return@Thread
-                val player = currentPlayerName()
+                val player = currentPlayerName(this)
                 // 端口会变，所以每次重新读；/autohost 幂等
                 val conn = java.net.URL("http://127.0.0.1:$port/autohost?player=$player")
                     .openConnection() as java.net.HttpURLConnection
@@ -66,18 +74,7 @@ class GameService : Service() {
         }.start()
     }
 
-    /** 取当前游玩账号名作为房间里的玩家标识（拿不到就用 device 前缀） */
-    private fun currentPlayerName(): String {
-        return try {
-            val dir = java.io.File(filesDir, "accounts")
-            val f = dir.listFiles()?.firstOrNull { it.name.endsWith(".json") } ?: return "player"
-            val txt = f.readText()
-            val m = Regex("\"username\"\\s*:\\s*\"([^\"]+)\"").find(txt)
-            m?.groupValues?.get(1) ?: "player"
-        } catch (t: Throwable) {
-            "player"
-        }
-    }
+    // 玩家名取法已抽到 TerracottaEnv.kt（游戏内联机面板也要用，避免两份实现）
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {

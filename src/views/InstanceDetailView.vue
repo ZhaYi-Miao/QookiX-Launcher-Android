@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
+import { api } from "../api";
+import type { InstanceFileReport } from "../types";
 import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
 import { loaderBadge } from "../utils/format";
@@ -29,6 +31,50 @@ const launching = ref(false);
 
 const inst = computed(() => instances.get(instanceId));
 
+/**
+ * 游戏文件体检结果（后端 `check_instance_files`，只读、不下载）。
+ *
+ * null 表示「文件完整」或「还没查出来」——两种情况都不显示提示条。
+ * 创建实例时的后台安装一旦失败（网络断流 / 进程被杀 / 磁盘满），实例会停在
+ * 「只有 instance.json」的状态：界面看不出原因，也没有补救入口，这里把
+ * 「缺什么」和「补全」摆到启动按钮下面。
+ */
+const fileReport = ref<InstanceFileReport | null>(null);
+const repairing = ref(false);
+
+/** 有可修的项才给按钮；全是 `fixable:false`（如加载器没有对应版本）时按钮禁用 */
+const canRepair = computed(() => !!fileReport.value?.missing.some((m) => m.fixable));
+
+async function checkFiles() {
+  try {
+    const r = await api.checkInstanceFiles(instanceId);
+    fileReport.value = r.can_launch ? null : r;
+  } catch {
+    // 实例不存在 / 配置损坏：交给原本的报错路径，这里不弹提示条
+    fileReport.value = null;
+  }
+}
+
+async function repair() {
+  if (!canRepair.value || repairing.value) return;
+  repairing.value = true;
+  message.loading($t("instance-detail.repairing"));
+  try {
+    await api.repairInstanceFiles(instanceId);
+    await instances.load(true);
+    await checkFiles();
+    // 还有残留（例如加载器版本号为空这种补不回来的）就直接把后端的话给用户看
+    if (fileReport.value) message.warning(fileReport.value.advice);
+    else message.success($t("instance-detail.repair-done"));
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    repairing.value = false;
+  }
+}
+
+onMounted(checkFiles);
+
 const TABS = [
   { key: "content", label: $t("nav.browse") },
   { key: "saves", label: $t("instance-detail.group") },
@@ -52,6 +98,8 @@ async function launch() {
     if (res) message.success($t("home.launched", { p1: inst.value.name }));
   } catch (e) {
     message.error(String(e));
+    // 启动失败常见原因就是文件没下全，顺手复查一次，把提示条亮出来
+    void checkFiles();
   } finally {
     launching.value = false;
   }
@@ -70,6 +118,23 @@ async function launch() {
         </div>
       </div>
       <van-button type="primary" class="go" :loading="launching" @click="launch"><IconPlay /></van-button>
+    </div>
+
+    <div v-if="fileReport" class="guard">
+      <div class="guard-txt">
+        <div class="guard-title">
+          {{ $t("instance-detail.files-incomplete", { p1: fileReport.ok, p2: fileReport.total }) }}
+        </div>
+        <div class="guard-advice">{{ fileReport.advice }}</div>
+      </div>
+      <van-button
+        size="small"
+        type="primary"
+        class="guard-btn"
+        :loading="repairing"
+        :disabled="!canRepair"
+        @click="repair"
+      >{{ $t("instance-detail.repair-files") }}</van-button>
     </div>
 
     <div class="tabs">
@@ -145,6 +210,33 @@ async function launch() {
   flex-shrink: 0;
   min-height: 44px;
   min-width: 52px;
+}
+.guard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--accent-25);
+  background: var(--accent-08);
+  flex-shrink: 0;
+}
+.guard-txt {
+  flex: 1;
+  min-width: 0;
+}
+.guard-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.guard-advice {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.guard-btn {
+  flex-shrink: 0;
 }
 .tabs {
   display: flex;

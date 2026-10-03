@@ -547,6 +547,8 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
         installed: false,
         // 整合包导入的实例同样走「按版本自动挑渲染器」。
         renderer: None,
+        // 整合包导入最需要这项：它的游戏本体还没装，启动时正好顺带补全。
+        check_files_on_launch: Some(true),
     })
 }
 

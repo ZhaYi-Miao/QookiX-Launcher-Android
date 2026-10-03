@@ -14,6 +14,7 @@ import { Tabbar as VanTabbar, TabbarItem as VanTabbarItem } from "vant";
 import AccountChip from "./components/AccountChip.vue";
 import LaunchProgress from "./components/LaunchProgress.vue";
 import CrashDialog from "./components/CrashDialog.vue";
+import RendererHintDialog from "./components/RendererHintDialog.vue";
 import FirstRunSetup from "./components/FirstRunSetup.vue";
 import { IconHome, IconGrid, IconCompass, IconDownload, IconMoreVertical } from "./components/icons";
 
@@ -174,6 +175,7 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
 
     <LaunchProgress />
     <CrashDialog />
+    <RendererHintDialog />
     <FirstRunSetup />
   </div>
 </template>

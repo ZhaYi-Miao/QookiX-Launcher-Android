@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useMessage } from "../composables/message";
 import { List as VanList, Empty as VanEmpty, Search as VanSearch } from "vant";
 import { api } from "../api";
 import { useInstancesStore } from "../stores/instances";
+import { useSettingsStore } from "../stores/settings";
 
 import type { ProjectHit } from "../types";
 import ProjectCard from "../components/ProjectCard.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import AppSheet from "../ui/AppSheet.vue";
 import AppSelect from "../ui/AppSelect.vue";
-import { IconSliders } from "../components/icons";
+import { IconGlobe, IconSliders } from "../components/icons";
 
 
 const message = useMessage();
 const instances = useInstancesStore();
+const settingsStore = useSettingsStore();
 
 const loading = ref(false);
 const query = ref("");
@@ -66,6 +69,114 @@ function setLoader(next: string) {
 }
 const showInstall = ref(false);
 const installTarget = ref<ProjectHit | null>(null);
+
+// ---- 描述翻译：整页一起翻 ----
+// 翻译服务有批量接口（一次最多 5 个、同一平台、按条数扣额度），所以这里按来源
+// 分组后 5 条一批地翻，而不是一张张点。译文只放内存：换搜索词/刷新就没了，
+// 免得和新一页的结果错位。
+const showZh = ref(false); // 页面是否显示译文
+const translatingPage = ref(false); // 整页翻译进行中
+const pendingSlugs = ref<string[]>([]); // 本批还在翻的项目（卡片显示骨架）
+const translatedDescs = ref<Record<string, string>>({});
+
+function openBaiduByText(text: string) {
+  const q = encodeURIComponent(text);
+  openUrl(`https://fanyi.baidu.com/mtpe-individual/transText?query=${q}&lang=en2zh`).catch(() =>
+    message.error($t("install-dialog.open-browser-failed"))
+  );
+}
+
+async function translatePage() {
+  if (translatingPage.value) return;
+  const list = hits.value;
+  if (!list.length) return;
+
+  // 百度网页模式没有批量接口，只能一条条开浏览器
+  const service = settingsStore.settings?.translate_provider ?? "default";
+  if (service === "baidu_web") {
+    const first = list[0];
+    openBaiduByText(first.description || first.title);
+    message.info($t("browse.baidu-page-hint"));
+    return;
+  }
+
+  // 按来源分组：批量接口一批只能带一个平台
+  //
+  // 注意要用 **slug**：翻译服务（以及它的缓存）是以 slug 为键的，
+  // 传 `p.id` 会「请求成功但译文查不到」—— 按钮变成「显示原文」、卡片却还是英文。
+  const groups = new Map<string, string[]>();
+  for (const p of list) {
+    const key = p.slug || p.id;
+    if (translatedDescs.value[key]) continue; // 已有译文的不用再翻
+    const ids = groups.get(p.provider) ?? [];
+    ids.push(key);
+    groups.set(p.provider, ids);
+  }
+  showZh.value = true;
+  if (!groups.size) return;
+
+  translatingPage.value = true;
+  pendingSlugs.value = [...groups.values()].flat();
+
+  let rateLimited = false;
+  let firstError = "";
+  for (const [provider, ids] of groups) {
+    if (rateLimited) break;
+    for (let i = 0; i < ids.length; i += 5) {
+      const chunk = ids.slice(i, i + 5);
+      try {
+        const r = await api.translateModDescriptions(provider, chunk);
+        translatedDescs.value = { ...translatedDescs.value, ...r.translations };
+        if (r.rateLimited) {
+          rateLimited = true;
+          firstError = firstError || $t("browse.translate-busy");
+        } else if (r.error) {
+          firstError = firstError || r.error;
+        }
+      } catch (e) {
+        firstError = firstError || String(e);
+      }
+      pendingSlugs.value = pendingSlugs.value.filter((s) => !chunk.includes(s));
+      // 限流是按 IP 算的，继续打只会更糟
+      if (rateLimited) break;
+    }
+  }
+
+  pendingSlugs.value = [];
+  translatingPage.value = false;
+
+  // 批量接口按条数扣额度（30 条/分），一页 20 条可能翻不完：
+  // 已翻过的会被跳过，所以让用户再点一次「翻译本页」就能接着补。
+  const total = list.length;
+  const got = list.filter((p) => translatedDescs.value[p.slug || p.id]).length;
+  if (got === 0) {
+    showZh.value = false;
+    message.warning(firstError || $t("browse.no-translations"));
+    return;
+  }
+  if (got < total) {
+    message.warning(
+      $t("browse.translated-progress", {
+        p1: got,
+        p2: total,
+        p3: rateLimited ? $t("browse.fu-wu-xian-liu") : "",
+      })
+    );
+  }
+}
+
+function togglePageTranslate() {
+  if (showZh.value) {
+    showZh.value = false;
+    return;
+  }
+  void translatePage();
+}
+
+// 开着译文时翻页/换搜索词，新一页自动跟上（仍是每页一次批量）
+watch(hits, () => {
+  if (showZh.value) void translatePage();
+});
 
 const TYPES = [
   { value: "mod", label: $t("browse.mods") },
@@ -123,10 +234,33 @@ onMounted(async () => {
       <button class="ftype" :class="{ on: hasFilter }" @click="showFilter = true">
         <IconSliders /> {{ $t("browse.filter") }}
       </button>
+      <!-- 整页翻译：一次翻这一页所有卡片的描述（译文只放内存，换搜索词即失效） -->
+      <button
+        class="ftype"
+        :class="{ on: showZh }"
+        :disabled="translatingPage"
+        @click="togglePageTranslate"
+      >
+        <IconGlobe />
+        {{
+          translatingPage
+            ? $t("install-dialog.translating")
+            : showZh
+              ? $t("install-dialog.show-source")
+              : $t("browse.translate-page")
+        }}
+      </button>
     </div>
     <van-list v-model:loading="loading" :finished="done" finished-text="" @update:loading="(v: boolean) => v && page > 0 && load(false)">
       <div class="grid">
-        <ProjectCard v-for="p in hits" :key="p.id + p.provider" :project="p" @install="openInstall" />
+        <ProjectCard
+          v-for="p in hits"
+          :key="p.id + p.provider"
+          :project="p"
+          :translating="pendingSlugs.includes(p.slug || p.id)"
+          :translated-desc="showZh ? (translatedDescs[p.slug || p.id] ?? null) : null"
+          @install="openInstall"
+        />
       </div>
       <van-empty v-if="!loading && !hits.length" :description="$t('browse.no-results')" />
     </van-list>
@@ -209,6 +343,7 @@ onMounted(async () => {
   gap: 6px;
   min-height: 40px;
   padding: 8px 12px;
+  white-space: nowrap;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--panel);
@@ -225,6 +360,14 @@ onMounted(async () => {
 .ftype :deep(svg) {
   width: 16px;
   height: 16px;
+}
+/* 窄屏（工具栏里三个控件：搜索 + 筛选 + 翻译）把按钮收窄一点，别把搜索框挤没 */
+@media (max-width: 400px) {
+  .ftype {
+    padding: 8px 9px;
+    font-size: 12px;
+    gap: 4px;
+  }
 }
 .grid {
   display: grid;

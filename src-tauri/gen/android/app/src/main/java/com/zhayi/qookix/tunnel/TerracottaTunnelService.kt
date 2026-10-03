@@ -46,7 +46,12 @@ class TerracottaTunnelService : Service() {
     private var ready = false
     private var lastError: String? = null
     /** 房间码是否已经写进通知（只写一次，避免每次轮询都更新通知） */
+    @Volatile
     private var roomNotified = false
+    /** 房间码监听线程（见 [startRoomWatcher]） */
+    private var roomWatcher: Thread? = null
+    @Volatile
+    private var watchingRoom = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -122,15 +127,36 @@ class TerracottaTunnelService : Service() {
             }
             val n = android.app.Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("联机房间已开启")
-                .setContentText("保持运行中，朋友可以通过房间码加入")
+                .setContentTitle("正在等待「对局域网开放」")
+                .setContentText("在游戏里对局域网开放世界后，房间码会显示在这里")
                 .setOngoing(true)
                 .build()
-            startForeground(NOTIFICATION_ID, n)
+            startForegroundCompat(n)
         }.onFailure { Log.w(TAG, "晋升前台失败（房间可能不稳定）", it) }
     }
 
+    /**
+     * 带类型的前台服务晋升（与 ServerService 同一套写法）。
+     *
+     * Android 14（API 34）起，不带类型调用 `startForeground` 会抛
+     * `MissingForegroundServiceTypeException`：实测现象就是**通知不出现** ——
+     * 房间码写在通知里，于是玩家在游戏里什么都看不到（异常被 runCatching 吞掉，
+     * 只在 logcat 留一行 W/TcTunnel）。
+     */
+    private fun startForegroundCompat(n: android.app.Notification) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                n,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, n)
+        }
+    }
+
     private fun demoteForeground() {
+        stopRoomWatcher()
         runCatching { stopForeground(true) }
     }
 
@@ -160,12 +186,59 @@ class TerracottaTunnelService : Service() {
                 .setContentText("把这个房间码发给朋友即可加入")
                 .setOngoing(true)
                 .build()
-            startForeground(NOTIFICATION_ID, n)
+            startForegroundCompat(n)
             Log.i(TAG, "房间码已就绪: $code")
         }.onFailure { Log.w(TAG, "更新房间码通知失败", it) }
     }
 
+    /**
+     * 开房扫描期间自己盯着状态，一拿到房间码就写进通知栏。
+     *
+     * 为什么必须由本服务自己轮询：玩家在游戏里时启动器在后台，WebView 的定时器被挂起，
+     * 之前唯一会调 `/state` 的 `MultiplayerView` 早就停了 —— 实测现象就是
+     * 房间其实开好了（HostOk），通知栏却什么都没有，而游戏里玩家只能看通知栏。
+     * 另外 Android 14 起 `startForeground` 不带类型会抛异常（通知直接不出现），
+     * 那条已由 [startForegroundCompat] 修掉。
+     */
+    private fun startRoomWatcher() {
+        if (roomWatcher != null) return
+        roomNotified = false
+        watchingRoom = true
+        roomWatcher = Thread {
+            val deadline = System.currentTimeMillis() + 30 * 60 * 1000L
+            while (watchingRoom && !roomNotified && System.currentTimeMillis() < deadline) {
+                try {
+                    val s = TerracottaAndroidAPI.getState()
+                    if (s.contains("host")) {
+                        extractRoomCode(s)?.let { code ->
+                            roomNotified = true
+                            updateNotificationWithRoom(code)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // 还没初始化完 / EasyTier 正在起，都属正常，继续重试
+                    Log.w(TAG, "读取房间状态失败（继续重试）", t)
+                }
+                try {
+                    Thread.sleep(2000)
+                } catch (e: InterruptedException) {
+                    break
+                }
+            }
+        }.also {
+            it.isDaemon = true
+            it.name = "room-watcher"
+            it.start()
+        }
+    }
+
+    private fun stopRoomWatcher() {
+        watchingRoom = false
+        roomWatcher = null
+    }
+
     override fun onDestroy() {
+        stopRoomWatcher()
         shutdownTerracotta()
         super.onDestroy()
     }
@@ -208,6 +281,7 @@ class TerracottaTunnelService : Service() {
                                 // 开房时才需要「一直活着」：晋升为前台服务（带通知），
                                 // 否则切后台被系统回收，房间就断了。
                                 promoteToForeground()
+                                startRoomWatcher()
                                 TerracottaAndroidAPI.setScanning(null, query["player"])
                                 "{\"ok\":true,\"state\":\"host-scanning\"}"
                             }
@@ -215,6 +289,10 @@ class TerracottaTunnelService : Service() {
                                 val room = query["room"]
                                 if (room.isNullOrBlank()) "{\"ok\":false,\"error\":\"缺少房间码\"}"
                                 else {
+                                    // 先退出自己这边的房间/扫描：正开着房时 setGuesting 会直接失败，
+                                    // 而调用方（游戏内联机面板、启动器多人页）只看返回 JSON，
+                                    // 表现出来的就是「点了加入房间毫无反应」—— 真机踩过。
+                                    runCatching { TerracottaAndroidAPI.setWaiting() }
                                     val ok = TerracottaAndroidAPI.setGuesting(room, query["player"])
                                     "{\"ok\":$ok,\"state\":\"${if (ok) "guesting" else "failed"}\"}"
                                 }
@@ -229,6 +307,7 @@ class TerracottaTunnelService : Service() {
                                 // —— 在游戏里「开放局域网世界」即可，房间码会出现在通知栏。
                                 val name = query["player"]
                                 promoteToForeground()
+                                startRoomWatcher()
                                 TerracottaAndroidAPI.setScanning(name, name)
                                 "{\"ok\":true,\"state\":\"host-scanning\"}"
                             }

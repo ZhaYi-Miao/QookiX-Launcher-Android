@@ -182,6 +182,37 @@ export interface Instance {
    * - `"opengles2"` | `"mobileglues"` | `"vulkan_zink"`：显式指定
    */
   renderer?: string | null;
+  /**
+   * 启动前是否检查游戏文件完整性、缺了自动补全再启动。
+   * `undefined` / `null`（旧实例）与 `true` 都视为开启，只有 `false` 关闭。
+   */
+  check_files_on_launch?: boolean | null;
+}
+
+/**
+ * 「补全游戏文件」诊断结果（后端 `check_instance_files`，只读、不下载）。
+ *
+ * 用于回答了「实例到底缺什么」这个问题：创建实例时的后台安装一旦失败
+ * （网络断流 / 进程被杀 / 磁盘满），实例会停在「只有 instance.json」的状态，
+ * 界面看不出原因、也没有补救入口。
+ */
+export interface InstanceFileReport {
+  /** 5 个关键项里完整了几个（0-5） */
+  ok: number;
+  total: number;
+  missing: InstanceMissingItem[];
+  /** 缺文件时给用户的一句人话建议 */
+  advice: string;
+  /** 关键项全齐，可以直接启动 */
+  can_launch: boolean;
+}
+
+export interface InstanceMissingItem {
+  /** version / libraries / assets / loader / runtime */
+  kind: string;
+  detail: string;
+  /** false 表示「补全文件」也修不好（如加载器版本号为空，得换游戏版本） */
+  fixable: boolean;
 }
 
 /**

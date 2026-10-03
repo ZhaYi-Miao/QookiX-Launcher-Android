@@ -78,10 +78,18 @@ pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfi
     fs::create_dir_all(&instance_dir).await
         .context("Failed to create instance directory")?;
 
+    let mc_version = config["mcVersion"].as_str().unwrap_or("").to_string();
+    // 名称留空是允许的（创建页输入框的提示就是「留空则自动用版本号命名」）。
+    // 这里兜底成游戏版本号，否则会建出一个名字为空的实例，列表里看着像空白项。
+    let name = match config["name"].as_str().unwrap_or("").trim() {
+        "" => mc_version.clone(),
+        given => given.to_string(),
+    };
+
     let instance = MinecraftProfile {
         id: instance_id.clone(),
-        name: config["name"].as_str().unwrap_or("New Instance").to_string(),
-        mc_version: config["mcVersion"].as_str().unwrap_or("").to_string(),
+        name,
+        mc_version,
         loader: match config["loader"].as_str().unwrap_or("vanilla") {
             "fabric" => Loader::Fabric,
             "quilt" => Loader::Quilt,
@@ -116,6 +124,8 @@ pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfi
         // 渲染器默认「自动」：按 MC 版本挑（26.x → MobileGlues，其余 → GL4ES），
         // 见 launch::resolve_renderer。创建实例时也允许直接指定。
         renderer: config["renderer"].as_str().map(|s| s.to_string()),
+        // 默认开启：启动时检查文件完整性、缺了自动补全。
+        check_files_on_launch: config["checkFilesOnLaunch"].as_bool(),
     };
 
     let file_path = instance_dir.join("instance.json");
@@ -141,6 +151,15 @@ pub async fn delete_instance(instance_id: &str, keep_dir: bool) -> Result<()> {
     Ok(())
 }
 
+/// 从 patch 里按键名取值，**同时兼容两种前端命名**。
+///
+/// Windows 侧前端与后端约定 camelCase（`maxMemoryMb`），Android 侧前端跟随实例
+/// JSON 的 snake_case（`max_memory_mb`）。只认一种就会出现「改了没保存」——
+/// 界面显示已保存、盘上还是旧值，用户完全看不出来。
+fn pick<'a>(patch: &'a serde_json::Value, keys: &[&str]) -> Option<&'a serde_json::Value> {
+    keys.iter().find_map(|k| patch.get(*k))
+}
+
 pub async fn update_instance(patch: serde_json::Value) -> Result<MinecraftProfile> {
     let data_dir = crate::settings::get_data_dir().await?;
     let instance_id = patch.get("id")
@@ -158,39 +177,52 @@ pub async fn update_instance(patch: serde_json::Value) -> Result<MinecraftProfil
     let mut instance: MinecraftProfile = serde_json::from_str(&content)?;
 
     // Apply patch fields
-    if let Some(v) = patch.get("name").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["name"]).and_then(|v| v.as_str()) {
         instance.name = v.to_string();
     }
-    if let Some(v) = patch.get("icon").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["icon"]).and_then(|v| v.as_str()) {
         instance.icon = Some(v.to_string());
     }
-    if patch.get("group").is_some() {
-        instance.group = patch.get("group").and_then(|v| v.as_str()).map(|s| s.to_string());
+    if let Some(v) = pick(&patch, &["group"]) {
+        instance.group = v.as_str().map(|s| s.to_string());
     }
-    if let Some(v) = patch.get("accountId").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["accountId", "account_id"]).and_then(|v| v.as_str()) {
         instance.account_id = Some(v.to_string());
     }
-    if let Some(v) = patch.get("javaDir").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["javaDir", "java_path", "javaPath"]).and_then(|v| v.as_str()) {
         instance.java_dir = v.to_string();
     }
-    if let Some(v) = patch.get("javaArgs").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["javaArgs", "jvm_args"]).and_then(|v| v.as_str()) {
         instance.java_args = Some(v.to_string());
     }
-    if let Some(v) = patch.get("gameArgs").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["gameArgs", "game_args"]).and_then(|v| v.as_str()) {
         instance.game_args = Some(v.to_string());
     }
-    if let Some(v) = patch.get("maxMemoryMb").and_then(|v| v.as_i64()) {
+    if let Some(v) = pick(&patch, &["maxMemoryMb", "max_memory_mb"]).and_then(|v| v.as_i64()) {
         instance.max_memory_mb = Some(v as i32);
     }
-    if let Some(v) = patch.get("memoryMode").and_then(|v| v.as_str()) {
+    if let Some(v) = pick(&patch, &["memoryMode", "memory_mode"]).and_then(|v| v.as_str()) {
         instance.memory_mode = Some(v.to_string());
+    }
+    // 分辨率：传 `[宽, 高]` 表示设置，传 null 表示清空（回到启动时的默认值）。
+    if let Some(v) = pick(&patch, &["resolution"]) {
+        instance.resolution = match (v.as_array(), v.is_null()) {
+            (Some(arr), _) if arr.len() == 2 => match (arr[0].as_i64(), arr[1].as_i64()) {
+                (Some(w), Some(h)) => Some((w as i32, h as i32)),
+                _ => instance.resolution,
+            },
+            _ => None,
+        };
     }
     // 渲染器：`auto` / `global` / `opengles2` / `mobileglues` / `vulkan_zink`。
     // 传 null 表示回到「自动」（旧实例文件本来就没有这个键）。
-    if patch.get("renderer").is_some() {
-        instance.renderer = patch.get("renderer")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+    if let Some(v) = pick(&patch, &["renderer"]) {
+        instance.renderer = v.as_str().map(|s| s.to_string());
+    }
+    // 启动前检查文件完整性。前端只发 true/false，这里固定存 Some(bool)，
+    // 避免写入 null 后又落到「旧实例 → 默认开启」的分支上，关不掉。
+    if let Some(v) = pick(&patch, &["checkFilesOnLaunch", "check_files_on_launch"]).and_then(|v| v.as_bool()) {
+        instance.check_files_on_launch = Some(v);
     }
 
     let content = serde_json::to_string_pretty(&instance)?;

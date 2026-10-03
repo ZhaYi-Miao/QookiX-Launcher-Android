@@ -5,7 +5,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
-const FABRIC_API: &str = "https://meta.fabricmc.net/v2";
 const FORGE_API: &str = "https://files.minecraftforge.net/maven";
 
 /// 内置的公共 CurseForge API Key（Eternal 官方示例 Key）。
@@ -635,86 +634,212 @@ pub async fn project_dependencies(provider: &str, project_id: &str) -> Result<Ve
 
 // ==================== Loader Versions ====================
 
+/// 加载器本体在共享 `libraries/` 里的落盘路径。
+///
+/// 「下载」与「完整性检查」必须共用这一份：两边各写一套命名时，
+/// 检查会说「缺加载器本体」而安装说「已经装好了」，用户点补全永远补不完。
+pub fn loader_jar_path(
+    libraries_dir: &std::path::Path,
+    loader: &str,
+    mc_version: &str,
+    loader_version: &str,
+) -> std::path::PathBuf {
+    match loader {
+        "fabric" => libraries_dir.join(format!("fabric-loader-{loader_version}.jar")),
+        "quilt" => libraries_dir.join(format!("quilt-loader-{loader_version}.jar")),
+        "forge" => libraries_dir.join(format!("forge-{mc_version}-{loader_version}-installer.jar")),
+        "neoforge" => libraries_dir.join(format!("neoforge-{loader_version}-installer.jar")),
+        _ => libraries_dir.join(format!("{loader}-{loader_version}.jar")),
+    }
+}
+
+/// 按「镜像 → 官方」取版本列表并合并去重（新的在前）。
+///
+/// 不能只用第一份成功的：镜像站上文件存在但内容可能陈旧
+/// （Forge 的推广表就缺新游戏版本），只认镜像会一直报「没有版本」。
+/// 两份并起来，缺一份还能用，陈旧一份也不会漏。
+async fn fetch_list_mirrored<F>(
+    client: &reqwest::Client,
+    base: &str,
+    url: &str,
+    parse: F,
+) -> Result<Vec<String>>
+where
+    F: Fn(&str) -> Vec<String>,
+{
+    let mut urls: Vec<String> = Vec::new();
+    if !base.is_empty() {
+        let mapped = crate::mirror::map(base, url);
+        if mapped != url {
+            urls.push(mapped);
+        }
+    }
+    urls.push(url.to_string());
+
+    let (mut out, mut got_any, mut last): (Vec<String>, bool, String) =
+        (Vec::new(), false, String::new());
+    for u in &urls {
+        match client.get(u).send().await {
+            Ok(r) if r.status().is_success() => match r.text().await {
+                Ok(t) => {
+                    got_any = true;
+                    out.extend(parse(&t));
+                }
+                Err(e) => last = format!("{u} 读取失败：{e}"),
+            },
+            Ok(r) => last = format!("{u} 返回 {}", r.status()),
+            Err(e) => last = format!("{u} 请求失败：{e}"),
+        }
+    }
+    // 两份都拿不到才算失败；都拿到了但确实没有对应版本时返回空表，交给调用方提示「换版本」
+    if !got_any && !last.is_empty() {
+        return Err(anyhow::anyhow!("{last}"));
+    }
+    Ok(sorted_desc(out))
+}
+
+/// 从 Fabric / Quilt 的 meta 列表取版本号，形状都是 `[{ "loader": { "version": "…" } }, …]`
+fn parse_loader_meta_versions(text: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v["loader"]["version"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 从 Forge 推广表取版本号，键形如 `1.21.1-latest` / `1.21.1-recommended`
+fn parse_forge_promos_versions(text: &str, mc_version: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(promos) = value["promos"].as_object() else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for (key, ver) in promos {
+        let Some((mc, channel)) = key.split_once('-') else { continue };
+        if channel != "latest" && channel != "recommended" {
+            continue;
+        }
+        if !mc_version.is_empty() && mc != mc_version {
+            continue;
+        }
+        if let Some(v) = ver.as_str() {
+            out.push(v.to_string());
+        }
+    }
+    out
+}
+
+/// 版本号排序键：每段数字补成 10 位，之后直接按字典序比就等价于按版本号比。
+/// （不补位的话 `21.1.9` 会被判成大于 `21.1.219`，「默认选最新」就会选到老版本。）
+fn ver_key(v: &str) -> String {
+    let (mut out, mut num) = (String::new(), String::new());
+    for ch in v.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+            continue;
+        }
+        if !num.is_empty() {
+            out.push_str(&format!("{num:0>10}"));
+            num.clear();
+        }
+        out.push(ch.to_ascii_lowercase());
+    }
+    if !num.is_empty() {
+        out.push_str(&format!("{num:0>10}"));
+    }
+    out
+}
+
+/// 版本号降序（新的在前）。
+fn sorted_desc(mut list: Vec<String>) -> Vec<String> {
+    list.sort_by_key(|v| std::cmp::Reverse(ver_key(v)));
+    list.dedup();
+    list
+}
+
+/// 从 `maven-metadata.xml` 抠 `<version>` 列表。格式固定，按标签扫一遍即可，
+/// 只为这一处引 XML 库不划算；扫不出来返回空表，不会误判成「没有版本」以外的结论。
+fn xml_versions(xml: &str) -> Vec<String> {
+    xml.split("<version>")
+        .skip(1)
+        .filter_map(|s| s.split("</version>").next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 pub async fn get_loader_versions(loader: String, mc_version: String) -> Result<Vec<String>> {
     let client = crate::util::http_client().await;
+    let mirror_base = match crate::settings::get_settings().await {
+        Ok(s) => crate::mirror::resolve_from(&s.mirror, s.mirror_custom.as_deref().unwrap_or("")),
+        Err(_) => String::new(),
+    };
 
     match loader.as_str() {
+        // 官方按游戏版本给列表：`GET /versions/loader/{game_version}`
+        // → `[{ "loader": { "version": "0.19.5" }, … }]`。
+        // 之前请求的是不带游戏版本的那份列表，返回体里没有 `game_version` 字段，过滤后恒为空。
         "fabric" => {
-            let url = format!("{}/versions/loader", FABRIC_API);
-            let response = client.get(&url).send().await
-                .context("Failed to get Fabric versions")?;
-            let result: Value = response.json().await
-                .context("Failed to parse Fabric versions")?;
-            let empty_vec = vec![];
-            let versions = result.as_array().unwrap_or(&empty_vec);
-            let filtered: Vec<String> = versions.iter()
-                .filter(|v| {
-                    let game = v["version"]["game_version"].as_str().unwrap_or("");
-                    game == mc_version || mc_version.is_empty()
-                })
-                .filter_map(|v| v["version"]["loader"]["version"].as_str().map(|s| s.to_string()))
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter().collect();
-            Ok(filtered)
+            let url = if mc_version.is_empty() {
+                "https://meta.fabricmc.net/v2/versions/loader".to_string()
+            } else {
+                format!("https://meta.fabricmc.net/v2/versions/loader/{mc_version}")
+            };
+            fetch_list_mirrored(&client, &mirror_base, &url, parse_loader_meta_versions)
+                .await
+                .context("获取 Fabric 版本列表失败")
         }
+        // Forge 只有「每个游戏版本一条」的推广表
         "forge" => {
-            let url = format!("https://files.minecraftforge.net/maven/net/minecraftforge/forge/promotions_slim.json");
-            let response = client.get(&url).send().await
-                .context("Failed to get Forge versions")?;
-            let result: Value = response.json().await
-                .context("Failed to parse Forge versions")?;
-            let promos = result["promos"].as_object();
-            let mut versions = Vec::new();
-            if let Some(p) = promos {
-                for (key, _) in p {
-                    let parts: Vec<&str> = key.split('-').collect();
-                    if parts.len() == 2 && parts[1] == "latest" {
-                        let mc = parts[0];
-                        if mc == mc_version || mc_version.is_empty() {
-                            if let Some(ver) = p[key].as_str() {
-                                versions.push(ver.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(versions)
+            let url = "https://files.minecraftforge.net/maven/net/minecraftforge/forge/promotions_slim.json";
+            fetch_list_mirrored(&client, &mirror_base, url, |text| {
+                parse_forge_promos_versions(text, &mc_version)
+            })
+            .await
+            .context("获取 Forge 版本列表失败")
         }
+        // NeoForge 没有版本清单接口，只能读自家 Maven 的 `maven-metadata.xml`。
+        // 版本号 = 游戏版本去掉前导 `1.`：1.21.1 → 21.1.x、26.3 → 26.3.x。
+        // 之前这里指向 Modrinth 上另一个项目（Fabric API），所以永远取不到版本。
         "neoforge" => {
-            let url = "https://api.modrinth.com/v2/project/P7dR8mSH/version?loaders=[\"neoforge\"]";
-            let response = client.get(url).send().await
-                .context("Failed to get NeoForge versions")?;
-            let result: Value = response.json().await
-                .context("Failed to parse NeoForge versions")?;
-            let empty_vec = vec![];
-            let versions = result.as_array().unwrap_or(&empty_vec);
-            let filtered: Vec<String> = versions.iter()
-                .filter(|v| {
-                    let empty_gv = vec![];
-                    let gv = v["game_versions"].as_array().unwrap_or(&empty_gv);
-                    gv.iter().any(|g| g.as_str().unwrap_or("") == mc_version) || mc_version.is_empty()
-                })
-                .filter_map(|v| v["version_number"].as_str().map(|s| s.to_string()))
-                .collect();
-            Ok(filtered)
+            let url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
+            let prefix = if mc_version.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "{}.",
+                    mc_version.strip_prefix("1.").unwrap_or(mc_version.as_str())
+                )
+            };
+            fetch_list_mirrored(&client, &mirror_base, url, |text| {
+                xml_versions(text)
+                    .into_iter()
+                    .filter(|v| prefix.is_empty() || v.starts_with(&prefix))
+                    .collect()
+            })
+            .await
+            .context("获取 NeoForge 版本列表失败")
         }
+        // 官方同样按游戏版本给：`GET /v3/versions/loader/{game_version}`
         "quilt" => {
-            let url = format!("{}/versions/loader", "https://meta.quiltmc.org/v3/versions/loader");
-            let response = client.get(&url).send().await
-                .context("Failed to get Quilt versions")?;
-            let result: Value = response.json().await
-                .context("Failed to parse Quilt versions")?;
-            let empty_vec = vec![];
-            let versions = result.as_array().unwrap_or(&empty_vec);
-            let filtered: Vec<String> = versions.iter()
-                .filter(|v| {
-                    let game = v["game_version"].as_str().unwrap_or("");
-                    game == mc_version || mc_version.is_empty()
-                })
-                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter().collect();
-            Ok(filtered)
+            let root = "https://meta.quiltmc.org/v3/versions/loader";
+            let url = if mc_version.is_empty() {
+                root.to_string()
+            } else {
+                format!("{root}/{mc_version}")
+            };
+            fetch_list_mirrored(&client, &mirror_base, &url, parse_loader_meta_versions)
+                .await
+                .context("获取 Quilt 版本列表失败")
         }
         _ => Ok(vec![]),
     }
@@ -758,10 +883,24 @@ pub async fn install_game(instance_id: &str) -> Result<serde_json::Value> {
 
         // Install loader if needed
         if loader != "vanilla" {
-            let loader_version = instance["loader_version"].as_str().unwrap_or("");
+            let mut loader_version = instance["loader_version"].as_str().unwrap_or("").to_string();
+            // 老实例（以及创建时没让用户选版本的那批）`loader_version` 是空的：
+            // 这里补一次「取最新」并写回 instance.json，否则加载器装不上，
+            // 「补全文件」也会因为拿不到版本号而判成修不了。
+            if loader_version.is_empty() {
+                if let Some(latest) = get_loader_versions(loader.clone(), mc_version.clone())
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .next()
+                {
+                    loader_version = latest;
+                    instance["loader_version"] = json!(loader_version);
+                }
+            }
             if !loader_version.is_empty() {
                 crate::progress::emit_install(&ctx, "loader", "正在安装加载器…", 2, 3);
-                install_loader(&loader, &mc_version, loader_version, &instance_path).await?;
+                install_loader(&loader, &mc_version, &loader_version, &instance_path).await?;
             }
         }
 
@@ -790,52 +929,28 @@ pub async fn install_game(instance_id: &str) -> Result<serde_json::Value> {
     result
 }
 
+/// 把加载器本体下到共享 `libraries/`。
+///
+/// 落盘路径必须与 [`loader_jar_path`] 一致，否则「安装说已装好、检查说还缺」。
 async fn install_loader(loader: &str, mc_version: &str, loader_version: &str, instance_path: &std::path::Path) -> Result<()> {
-    let client = crate::util::http_client().await;
-
     let libs_dir = instance_path.parent().unwrap().parent().unwrap().join("libraries");
     tokio::fs::create_dir_all(&libs_dir).await.ok();
 
-    match loader {
-        "fabric" => {
-            // Download fabric-loader installer
-            let url = format!("https://maven.fabricmc.net/net/fabricmc/fabric-loader/{loader_version}/fabric-loader-{loader_version}.jar");
-            let dest = libs_dir.join(format!("fabric-loader-{}.jar", loader_version));
-            if !dest.exists() {
-                download::download_file(&url, &dest.to_string_lossy(), None).await?;
-            }
-        }
-        "forge" => {
-            let url = format!("https://files.minecraftforge.net/maven/net/minecraftforge/forge/{mc_version}-{loader_version}/forge-{mc_version}-{loader_version}-universal.jar");
-            let dest = libs_dir.join(format!("forge-{}-{}.jar", mc_version, loader_version));
-            if !dest.exists() {
-                download::download_file(&url, &dest.to_string_lossy(), None).await?;
-            }
-        }
-        "neoforge" => {
-            let url = format!("https://api.modrinth.com/v2/project/P7dR8mSH/version?loaders=[\"neoforge\"]&game_versions=[\"{}\"]", mc_version);
-            let resp = client.get(&url).send().await?;
-            let versions: Value = resp.json().await?;
-            if let Some(ver) = versions.as_array().and_then(|v| v.first()) {
-                if let Some(file) = ver["files"].as_array().and_then(|f| f.first()) {
-                    if let Some(dl_url) = file["url"].as_str() {
-                        let dest = libs_dir.join(format!("neoforge-{}.jar", loader_version));
-                        if !dest.exists() {
-                            download::download_file(dl_url, &dest.to_string_lossy(), None).await?;
-                        }
-                    }
-                }
-            }
-        }
-        "quilt" => {
-            let url = format!("https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/{loader_version}/quilt-loader-{loader_version}.jar");
-            let dest = libs_dir.join(format!("quilt-loader-{}.jar", loader_version));
-            if !dest.exists() {
-                download::download_file(&url, &dest.to_string_lossy(), None).await?;
-            }
-        }
-        _ => {}
+    let dest = loader_jar_path(&libs_dir, loader, mc_version, loader_version);
+    if dest.exists() {
+        return Ok(());
     }
+
+    // `download_file` 内部会按镜像设置改写地址并回退官方源，这里只给官方地址
+    let url = match loader {
+        "fabric" => format!("https://maven.fabricmc.net/net/fabricmc/fabric-loader/{loader_version}/fabric-loader-{loader_version}.jar"),
+        "quilt" => format!("https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/{loader_version}/quilt-loader-{loader_version}.jar"),
+        "forge" => format!("https://files.minecraftforge.net/maven/net/minecraftforge/forge/{mc_version}-{loader_version}/forge-{mc_version}-{loader_version}-installer.jar"),
+        // 之前这里查的是 Modrinth 上的 Fabric API，装 NeoForge 会下一个完全无关的 jar
+        "neoforge" => format!("https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader_version}/neoforge-{loader_version}-installer.jar"),
+        other => return Err(anyhow::anyhow!("不支持的加载器：{other}")),
+    };
+    download::download_file(&url, &dest.to_string_lossy(), None).await?;
     Ok(())
 }
 

@@ -105,8 +105,11 @@ async function loadDescTranslation() {
   if (!props.show || !descTranslatable.value || !props.project) return;
   descLoading.value = true;
   try {
-    const r = await api.translateModDescriptions(props.project.provider, [props.project.id]);
-    descZh.value = r.translations[props.project.id] ?? null;
+    // 翻译服务以 **slug** 为键：用 `id` 请求会「成功但查不到译文」，
+    // 表现为描述一直是英文（弹窗里也是同样的问题）。
+    const key = props.project.slug || props.project.id;
+    const r = await api.translateModDescriptions(props.project.provider, [key]);
+    descZh.value = r.translations[key] ?? null;
   } catch {
     // 翻译失败就退化成只显示原文，不打扰用户
     descZh.value = null;

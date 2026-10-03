@@ -13,6 +13,7 @@ mod modpack;
 mod servers;
 mod server_process;
 mod server_files;
+mod instance_files;
 mod rcon;
 mod crash;
 mod renderer_health;
@@ -66,6 +67,8 @@ pub fn run() {
     servers::update_hosted_server,
     servers::delete_hosted_server,
     servers::suggest_server_memory,
+    instance_files::check_instance_files,
+    instance_files::repair_instance_files,
     servers::install_hosted_server_core,
     server_files::list_hosted_server_dir,
     server_files::read_hosted_server_file,

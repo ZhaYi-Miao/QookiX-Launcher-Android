@@ -51,6 +51,10 @@ pub struct MinecraftProfile {
     /// 旧实例文件没有该字段 → None，与 `auto` 等价。
     #[serde(default)]
     pub renderer: Option<String>,
+    /// 启动前是否检查游戏文件完整性、缺了自动补全再启动。
+    /// `None`（旧实例文件）与 `Some(true)` 都视为**开启**，只有显式 `Some(false)` 关闭。
+    #[serde(default, alias = "checkFilesOnLaunch")]
+    pub check_files_on_launch: Option<bool>,
 }
 
 /// 渲染器健康检查的结论（见 `renderer_health::check`）。

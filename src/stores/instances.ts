@@ -1,7 +1,7 @@
 import { t as $t } from "../i18n";
 import { defineStore } from "pinia";
 import { api } from "../api";
-import type { Instance, InstanceGroup } from "../types";
+import type { Instance, InstanceFileReport, InstanceGroup } from "../types";
 import { autoRendererFor, effectiveRendererKey, rendererLabel } from "../utils/renderer";
 
 /** 启动前的渲染器确认（由全局弹窗消费），见 `rendererGuard`。 */
@@ -197,6 +197,56 @@ export const useInstancesStore = defineStore("instances", {
      * 后端那次安装其实照跑不误。已删除。
      */
     /**
+     * 启动前检查游戏文件完整性，缺了**自动补全**再启动。
+     *
+     * 背景：创建实例时的后台安装一旦中断（断网 / 进程被杀 / 磁盘满），实例会停在
+     * 「只有 instance.json」的状态 —— 这时点启动只会得到一句
+     * `INSTANCE_NOT_INSTALLED`，用户根本不知道该点哪里补。现在默认自动补。
+     *
+     * 实例设置里可以关掉（`check_files_on_launch === false`），缺省视为开启。
+     * 遇到补不了的项（例如加载器版本号为空，得换游戏版本）抛出后端给的 `advice`。
+     */
+    async ensureFilesBeforeLaunch(id: string) {
+      let inst = this.get(id);
+      // 冷启动时列表可能还没加载（从实例详情页点启动 / 用 qookix:// 协议唤起）
+      if (!inst) {
+        await this.load(true);
+        inst = this.get(id);
+      }
+      // 读不到实例就不拦，交给后面的启动命令去报错，别在这里吞掉真正的错误
+      if (!inst) return;
+      // undefined / null（旧实例）都算开启，只有显式 false 才跳过
+      if (inst.check_files_on_launch === false) return;
+
+      let report: InstanceFileReport;
+      try {
+        report = await api.checkInstanceFiles(id);
+      } catch {
+        // 检查本身失败不该挡住启动（比如后端读不了磁盘），让它按原来的路走
+        return;
+      }
+      if (report.can_launch) return;
+
+      // 一项都补不了就别白等：直接把后端那句建议抛给用户
+      if (!report.missing.some((m) => m.fixable)) throw new Error(report.advice);
+
+      this.installingId = id;
+      this.installStage = $t("stores.instances.fixing-files");
+      this.installDone = 0;
+      this.installTotal = 0;
+      try {
+        // 后端复用 install_game：逐文件校验、缺的才下，重复调用安全。
+        // 下载进度走「下载中心」的任务卡片，不在这里另做一套。
+        await api.repairInstanceFiles(id);
+      } finally {
+        this.installingId = null;
+        this.installStage = "";
+      }
+      // 后补完会变更 installed，后台刷新一次即可；不用前台 loading，避免列表闪
+      void this.refresh();
+    },
+
+    /**
      * 把后端抛出的「错误码」翻成人话。
      *
      * 后端很多失败用的是 `INSTANCE_NOT_INSTALLED` 这类码，直接 message.error(String(e))
@@ -215,6 +265,10 @@ export const useInstancesStore = defineStore("instances", {
       }
       this.launchingId = id;
       try {
+        // 用户已经决定启动，这时才去补文件（见 ensureFilesBeforeLaunch）。
+        // 放在渲染器确认之后：那是「要不要换个渲染器」的一次选择，
+        // 万一用户选了「不用了」，没必要先替他下几百 MB。
+        await this.ensureFilesBeforeLaunch(id);
         const res = await api.launchInstance(id, world, server);
         return res;
       } catch (e) {

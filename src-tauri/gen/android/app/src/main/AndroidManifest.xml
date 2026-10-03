@@ -136,9 +136,13 @@
              之所以不放在主进程：Terracotta 是 AGPL-3.0，其 README 给了例外
              （未修改二进制 + 不链接，或 IPC 交互 + 界面署名）。我们用「独立进程 + localhost HTTP」，
              启动器不链接它，可保持 GPL-3.0。署名见设置页「第三方声明」。 -->
+        <!-- foregroundServiceType 必须声明：Android 14（API 34）起不带类型调
+             startForeground 会抛 MissingForegroundServiceTypeException，实测现象是
+             通知根本不出现（房间码也就看不见），异常被 runCatching 吞掉。 -->
         <service
             android:name=".tunnel.TerracottaTunnelService"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:process=":tunnel" />
 
         <service

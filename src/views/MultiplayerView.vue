@@ -2,6 +2,7 @@
 import { t as $t } from "../i18n";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useMessage } from "../composables/message";
+import { useDialog } from "../composables/dialog";
 import { useRouter } from "vue-router";
 import { useServersStore } from "../stores/servers";
 import { useAccountsStore } from "../stores/accounts";
@@ -14,6 +15,7 @@ import AppInput from "../ui/AppInput.vue";
 const servers = useServersStore();
 const accounts = useAccountsStore();
 const message = useMessage();
+const dialog = useDialog();
 const router = useRouter();
 
 /** 进入服务器详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数） */
@@ -49,6 +51,30 @@ async function toggleRun(id: string) {
   } finally {
     starting.value = "";
   }
+}
+
+/**
+ * 删除服务器。
+ *
+ * 必须二次确认：删除会**连整个服务端目录一起删掉**（世界存档、插件、配置全没了），
+ * 而手机上的「删除」是个小号行内按钮、紧挨着「启动」，误触代价不可逆。
+ */
+function confirmRemove(s: { id: string; name: string }) {
+  dialog.warning({
+    title: $t("multiplayer.delete-server"),
+    content:
+      $t("multiplayer.delete-server-confirm-a") + s.name + $t("multiplayer.delete-server-confirm-b"),
+    positiveText: $t("common.delete"),
+    negativeText: $t("common.cancel"),
+    onPositiveClick: async () => {
+      try {
+        await servers.remove(s.id);
+        message.success($t("multiplayer.deleted", { p1: s.name }));
+      } catch (e) {
+        message.error(String(e));
+      }
+    },
+  });
 }
 
 
@@ -165,6 +191,16 @@ onBeforeUnmount(() => {
   <div class="mp">
     <!-- 手机：这个页面只有「本地服务器」一件事，原来那个「Minecraft 新闻」tab 里
          只有两句提示、没有真实内容（新闻已经有独立的页面），属于多余入口，去掉。 -->
+    <!-- 「创建服务器」按钮必须**常驻**：以前它只长在下面的 van-empty 里，
+         于是列表一旦有了一台服务器，空状态消失、按钮跟着消失，
+         就再也点不出第二台的创建入口了。 -->
+    <div v-if="servers.servers.length" class="mp-top">
+      <span class="mp-count">{{ $t("multiplayer.servers-count", { p1: servers.servers.length }) }}</span>
+      <van-button size="small" type="primary" @click="showCreate = true">
+        <IconPlus /> {{ $t("title-bar.new-server") }}
+      </van-button>
+    </div>
+
     <div v-if="servers.servers.length" class="list">
       <div v-for="s in servers.servers" :key="s.id" class="srv glass">
         <!-- 整块可点进详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数）。
@@ -176,7 +212,7 @@ onBeforeUnmount(() => {
         <van-button size="small" :type="servers.isRunning(s.id) ? 'default' : 'primary'" :loading="starting === s.id" @click="toggleRun(s.id)">
           {{ servers.isRunning(s.id) ? $t("multiplayer.stop") : $t("instance-card.launch") }}
         </van-button>
-        <van-button size="small" @click="servers.remove(s.id)">{{ $t("common.delete") }}</van-button>
+        <van-button size="small" @click="confirmRemove(s)">{{ $t("common.delete") }}</van-button>
       </div>
     </div>
     <van-empty v-else :description="$t('instance-saves.no-servers')">
@@ -247,6 +283,16 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.mp-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mp-count {
+  font-size: 13px;
+  color: var(--text-3);
 }
 .srv {
   display: flex;

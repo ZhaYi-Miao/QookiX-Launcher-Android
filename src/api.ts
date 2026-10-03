@@ -9,6 +9,7 @@ import type {
   CrashDiagnosis,
   FsEntry,
   Instance,
+  InstanceFileReport,
   InstanceGroup,
   MirrorPreset,
   MirrorTestResult,
@@ -272,6 +273,29 @@ export const api = {
   reorderGroups: (ids: string[]) => invoke<InstanceGroup[]>("reorder_instance_groups", { ids }),
   installGame: (instanceId: string) =>
     invoke<{ instance_id: string; total_bytes: number; file_count: number }>("install_game", { instanceId }, { silent: true }),
+
+  /**
+   * 诊断实例缺哪些游戏文件（**只读，不下载**）。
+   *
+   * 检查 version.json / libraries / assets / 加载器本体 / Java 运行时共 5 项。
+   * `missing[].fixable === false` 的项（例如加载器版本号为空）补全也救不回来，
+   * 这种情况要在界面上说清楚「得换游戏版本」，而不是给一个点了没用的按钮。
+   */
+  checkInstanceFiles: (instanceId: string) =>
+    invoke<InstanceFileReport>("check_instance_files", { instanceId }),
+
+  /**
+   * 补全缺失的游戏文件。
+   *
+   * 后端直接复用 `install_game`（逐文件校验、缺的才下），所以重复点也安全；
+   * 下载进度走「下载中心」的任务卡片，不在这里另做一套进度 UI。
+   */
+  repairInstanceFiles: (instanceId: string) =>
+    invoke<{ instance_id: string; total_bytes: number; file_count: number }>(
+      "repair_instance_files",
+      { instanceId },
+      { silent: true }
+    ),
 
   /**
    * 取消进行中的安装/下载任务。

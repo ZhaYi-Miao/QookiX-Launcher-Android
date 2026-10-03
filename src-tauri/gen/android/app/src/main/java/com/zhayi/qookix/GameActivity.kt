@@ -111,7 +111,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         private const val CONTROL_STYLE_VERSION = 3
         private const val STYLE_MARKER = ".qk-control-style"
 
-        /** `R.array.menu_ingame` 七项对应的图标（顺序必须与数组一致）。 */
+        /** `R.array.menu_ingame` 八项对应的图标（顺序必须与数组一致）。 */
         private val GAME_MENU_ICONS = intArrayOf(
             R.drawable.ic_qk_power,     // 强制关闭
             R.drawable.ic_qk_log,       // 日志输出
@@ -120,6 +120,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             R.drawable.ic_qk_gamepad,   // 自定义控制布局
             R.drawable.ic_qk_camera,    // 截图
             R.drawable.ic_qk_speed,     // 性能面板
+            R.drawable.ic_qk_share,     // 联机（陶瓦）
         )
 
         /** 性能面板的二级菜单：启用/停用、功能设置、返回。 */
@@ -200,6 +201,8 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
     private var mQuickSettingSideDialog: QuickSettingSideDialog? = null
     private var mPerfOverlay: PerfOverlayView? = null
     private var mPerfSettingsDialog: PerfSettingsDialog? = null
+    /** 游戏内「联机（陶瓦）」面板，见 [TerracottaPanel]。 */
+    private var mTerracottaPanel: TerracottaPanel? = null
     /** 启动阶段（黑屏那几十秒）的日志浮层，见 [StartupOverlay]。 */
     private var startupOverlay: StartupOverlay? = null
     private var perfMenuAdapter: QookixMenuAdapter? = null
@@ -382,6 +385,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
                 5 -> takeScreenshot()
                 // post：点击回调之后抽屉会被关掉，二级菜单要等那之后再开
                 6 -> mControlLayout.post { openPerfMenu() }
+                7 -> openTerracottaPanel()
             }
             drawerLayout.closeDrawers()
         }
@@ -670,6 +674,20 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             if (mControlLayout.hasMenuButton()) View.GONE else View.VISIBLE
     }
 
+    /**
+     * 游戏内联机面板：状态 / 房间码 / 加入朋友 / 开始-停止。
+     *
+     * 玩家在游戏里时启动器在后台，之前只能靠通知栏看房间码、想加入朋友还得退出游戏，
+     * 所以把这块搬到游戏内（实现见 [TerracottaPanel]）。
+     */
+    private fun openTerracottaPanel() {
+        if (mTerracottaPanel == null) {
+            mTerracottaPanel = TerracottaPanel(this, mControlLayout, filesDir)
+        }
+        drawerLayout.closeDrawers()
+        mControlLayout.post { mTerracottaPanel?.appear(true) }
+    }
+
     private fun openPerfSettings() {
         if (mPerfSettingsDialog == null) {
             mPerfSettingsDialog = PerfSettingsDialog(this, mControlLayout) {
@@ -832,6 +850,12 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         } catch (_: Throwable) {
         }
         startupOverlay = null
+        // 联机面板的线程池同理（面板每次 openTerracottaPanel 复用同一个实例）
+        try {
+            mTerracottaPanel?.stop()
+        } catch (_: Throwable) {
+        }
+        mTerracottaPanel = null
         try {
             CallbackBridge.removeGrabListener(touchpad)
             CallbackBridge.removeGrabListener(minecraftGLView)

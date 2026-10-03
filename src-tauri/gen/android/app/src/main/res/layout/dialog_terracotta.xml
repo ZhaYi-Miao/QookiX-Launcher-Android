@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 游戏内「联机（陶瓦）」面板内容。外壳是 SideDialogView（侧滑入），
+     底部按钮由外壳提供，这里只放内容和行内操作。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="@dimen/padding_moderate"
+    android:paddingVertical="@dimen/padding_moderate">
+
+    <TextView
+        android:id="@+id/tc_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/tc_status_idle"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/tc_code"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="@string/tc_code_none"
+        android:textColor="#7CFC00"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:typeface="monospace" />
+
+    <Button
+        android:id="@+id/tc_copy"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="@string/tc_copy" />
+
+    <!-- 加入房间后才有：访客要填进 MC「多人游戏 → 直接连接」的地址（可长按复制） -->
+    <TextView
+        android:id="@+id/tc_address"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:textColor="#FFFFFF"
+        android:textIsSelectable="true"
+        android:textSize="15sp"
+        android:typeface="monospace"
+        android:visibility="gone" />
+
+    <!-- 主操作放在这里：面板内容比屏幕高时要滚动，按钮不能沉到看不见的地方 -->
+    <Button
+        android:id="@+id/tc_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="@string/tc_start" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginVertical="14dp"
+        android:background="#33FFFFFF" />
+
+    <EditText
+        android:id="@+id/tc_room_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/tc_join_hint"
+        android:importantForAutofill="no"
+        android:inputType="text"
+        android:maxLines="1"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#80FFFFFF" />
+
+    <Button
+        android:id="@+id/tc_join"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="@string/tc_join" />
+
+    <TextView
+        android:id="@+id/tc_note"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/tc_note"
+        android:textColor="#B0BEC5"
+        android:textSize="12sp" />
+
+</LinearLayout>

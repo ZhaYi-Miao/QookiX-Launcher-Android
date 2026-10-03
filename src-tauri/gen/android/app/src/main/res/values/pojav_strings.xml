@@ -448,4 +448,26 @@
     <string name="startup_failed">启动似乎出了问题，请看下面的日志</string>
     <string name="startup_elapsed">已用时 %1$d 秒</string>
     <string name="startup_hint">点按可隐藏 · 完整日志：菜单 → 日志输出</string>
+    <string name="tc_title">联机（陶瓦）</string>
+    <string name="tc_status_idle">未开启联机</string>
+    <string name="tc_status_scanning">正在扫描局域网世界…</string>
+    <string name="tc_status_hosting">房间已开，把房间码发给朋友</string>
+    <string name="tc_status_guesting">已加入朋友的房间</string>
+    <string name="tc_code_none">—</string>
+    <string name="tc_copy">复制房间码</string>
+    <string name="tc_copied">已复制</string>
+    <string name="tc_address_hint">在 MC「多人游戏 → 直接连接」里填：%1$s</string>
+    <string name="tc_join_hint">粘贴朋友的房间码</string>
+    <string name="tc_join">加入房间</string>
+    <string name="tc_room_required">请先填房间码</string>
+    <string name="tc_joining">正在加入…</string>
+    <string name="tc_joined">已加入房间</string>
+    <string name="tc_join_failed">加入失败：房间码对不对？房间还在开吗？</string>
+    <string name="tc_start">开始联机</string>
+    <string name="tc_stop">停止联机</string>
+    <string name="tc_leave">退出房间</string>
+    <string name="tc_copy_address">复制连接地址</string>
+    <string name="tc_note">点「开始联机」→ 在游戏里「对局域网开放」→ 房间码会显示在通知栏，也会出现在这里。</string>
+    <string name="tc_vpn_hint">检测到系统 VPN：陶瓦拿不到虚拟网卡，多半连不上 —— 请先关掉 VPN（Clash/v2ray 的 TUN 也算）再试</string>
+    <string name="tc_unavailable">隧道还没起来：先回启动器打开一次「多人游戏」页</string>
 </resources>
