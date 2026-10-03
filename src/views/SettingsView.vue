@@ -902,8 +902,13 @@ onUnmounted(() => {
   <div v-if="settings.settings" class="settings-view">
     <!-- 手机形态：一级 = 分组列表（整屏），二级 = 某个分组（带返回条）。
          原来是「左侧固定导航 + 右侧卡片区」的桌面双栏（竖屏下导航吃掉 ~120px 宽、
-         卡片全被挤扁），现在改成 iOS/安卓设置页的原生形态：列表进、进子页返回。 -->
-    <div v-if="!tab" class="sv-list">
+         卡片全被挤扁），现在改成 iOS/安卓设置页的原生形态：列表进、进子页返回。
+
+         注意 Transition 必须**同时包住一级和二级**：如果只包二级（v-else），
+         从列表进入分组是「v-if/v-else 换元素」，Transition 是重新挂载的，
+         初次渲染不走进场动画 —— 表现就是「点进去没有任何动画」。 -->
+    <Transition name="settings-pane" mode="out-in" @after-enter="refreshCurrentPaneIndicators">
+    <div v-if="!tab" key="__list__" class="sv-list">
       <van-cell-group inset class="grp">
         <van-cell
           v-for="t in tabs"
@@ -923,8 +928,7 @@ onUnmounted(() => {
       </van-cell-group>
     </div>
 
-    <Transition v-else name="settings-pane" mode="out-in" @after-enter="refreshCurrentPaneIndicators">
-    <div :key="tab" class="settings-body">
+    <div v-else :key="tab" class="settings-body">
       <!-- 返回条：单栏下必须显式给出口（标题栏里不放二级返回，保持顶部只有全局标题） -->
       <button class="sv-back" @click="tab = null">
         <IconChevronLeft />
@@ -3486,6 +3490,26 @@ textarea.text-input {
   }
   .scale-ctl {
     width: 100%;
+  }
+  /* 设置页里所有「标签/数值 + 滑杆」的行（内存、磨砂强度、下载并发、游戏内各滑杆…）
+     在窄屏一律上下排：滑杆独占整行才好拖（原来挤成 ~100px，手指一滑就过头）。
+     `row-label` 那种把滑杆放进 <label> 里的写法也一并覆盖。 */
+  .tune-row,
+  .mem-row,
+  .row-label {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .tune-row .app-slider-wrap,
+  .mem-row .app-slider-wrap,
+  .row-label .app-slider-wrap,
+  .tune-block .app-slider-wrap {
+    width: 100%;
+  }
+  .tune-val,
+  .mem-val {
+    text-align: right;
   }
 }
 /* 自定主题色的原生取色器：铺满那个圆环，点哪都能唤起系统调色盘 */
