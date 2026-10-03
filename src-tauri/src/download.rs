@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,95 @@ pub async fn download_file(
     expected_sha1: Option<String>,
 ) -> Result<DownloadProgress> {
     download_file_with_cancel(url, dest, expected_sha1, None).await
+}
+
+/// 分片并发下载的阈值：小于这个大小分片反而得不偿失（多连接握手 + 落盘开销）
+const CHUNK_THRESHOLD: u64 = 8 * 1024 * 1024;
+/// 大文件分片并发数。移动网络 4 条是甜点：再高互相抢带宽，单流反而更慢。
+const CHUNK_THREADS: usize = 4;
+
+/// 用 HTTP Range 分片并发下载一个大文件，返回是否成功。
+///
+/// 桌面版（`QookiX-Launcher/src-tauri/src/download.rs`）早就有这套：单文件开多条连接
+/// 各下一段，CDN/国内镜像对单连接限速时提升非常明显（实测常见 3~5 倍）。
+/// 移植要点：
+///   - 先用轻量 HEAD 探 `Accept-Ranges`，不支持就老实单流（不浪费时间）；
+///   - 每片用 `Range: bytes=start-end`，落到同一文件的对应偏移；
+///   - 校验放在最后（并发写没法边写边算哈希），SHA1 不匹配要删文件重下；
+///   - 任何一片失败 → 整个分片下载作废，调用方回退单流（有些 CDN 嘴上说支持
+///     Range、实际 416/404）。
+async fn try_download_chunked(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    size: u64,
+    cancel: Option<Arc<AtomicBool>>,
+) -> anyhow::Result<bool> {
+    // 探 Range 支持
+    let head = match client.head(url).send().await {
+        Ok(r) => r,
+        Err(_) => return Ok(false),
+    };
+    let accepts = head
+        .headers()
+        .get(reqwest::header::ACCEPT_RANGES)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("bytes"))
+        .unwrap_or(false);
+    if !accepts {
+        return Ok(false);
+    }
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).await.ok();
+    }
+    // 预分配文件（各分片直接按偏移写，不追加）
+    let file = fs::File::create(dest).await?;
+    file.set_len(size).await?;
+
+    let chunk_size = size.div_ceil(CHUNK_THREADS as u64);
+    let mut handles = Vec::new();
+    for i in 0..CHUNK_THREADS {
+        let start = i as u64 * chunk_size;
+        if start >= size {
+            break;
+        }
+        let end = (start + chunk_size - 1).min(size - 1);
+        let client = client.clone();
+        let url = url.to_string();
+        let dest = dest.to_path_buf();
+        let cancel = cancel.clone();
+        handles.push(tokio::spawn(async move {
+            let mut resp = client
+                .get(&url)
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                .send()
+                .await?;
+            if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                anyhow::bail!("分片请求未返回 206: {}", resp.status());
+            }
+            let mut f = fs::OpenOptions::new().write(true).open(&dest).await?;
+            use tokio::io::AsyncSeekExt;
+            f.seek(std::io::SeekFrom::Start(start)).await?;
+            while let Some(chunk) = resp.chunk().await? {
+                if let Some(c) = &cancel {
+                    if c.load(Ordering::Relaxed) {
+                        anyhow::bail!("已取消");
+                    }
+                }
+                f.write_all(&chunk).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }));
+    }
+
+    for h in handles {
+        match h.await {
+            Ok(Ok(())) => {}
+            _ => return Ok(false), // 任一片失败 → 交给调用方回退单流
+        }
+    }
+    Ok(true)
 }
 
 /// 带「所属安装任务取消标志」的下载。
@@ -106,6 +196,80 @@ pub async fn download_file_with_cancel(
     let dest_path = Path::new(dest).to_path_buf();
     let mut last_err: Option<anyhow::Error> = None;
 
+    // 大文件先试**分片并发**（桌面版早就有的能力，Android 之前没接）。
+    // 只在「服务端支持 Range」且内容够大时用；任何一片失败都会回落到下面的单流。
+    // `chunk_note` 记录实际走了哪条路（回传在 message 里，便于真机核对）。
+    let mut chunk_note: &str = "single(small)";
+    for candidate in &urls {
+        // 探「总长度 + 是否支持 Range」：用 1 字节的 Range 请求而不是 HEAD。
+        // 实测 libraries.minecraft.net 等 CDN 的 **HEAD 不返回 Content-Length**（len=0），
+        // 而 `Range: bytes=0-0` 的 206 响应里 `Content-Range: bytes 0-0/总长` 一定带总长。
+        let (len, supports_range) = match client
+            .get(candidate)
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send()
+            .await
+        {
+            Ok(r) if r.status() == reqwest::StatusCode::PARTIAL_CONTENT => {
+                let total = r
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.rsplit('/').next())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0);
+                (total, true)
+            }
+            Ok(r) => (r.content_length().unwrap_or(0), false),
+            Err(_) => {
+                chunk_note = "single(probe-failed)";
+                continue;
+            }
+        };
+        if len < CHUNK_THRESHOLD {
+            chunk_note = Box::leak(format!("single(len={len})").into_boxed_str());
+            continue;
+        }
+        if !supports_range {
+            chunk_note = "single(no-range)";
+            continue;
+        }
+        match try_download_chunked(&client, candidate, &dest_path, len, None).await {
+            Ok(true) => {
+                // 分片下完必须校验：并发写没法边写边算哈希
+                if let Some(expected) = &expected_sha1 {
+                    match fs::read(&dest_path).await {
+                        Ok(content) => {
+                            let mut h = Sha1::new();
+                            h.update(&content);
+                            if format!("{:x}", h.finalize()) != *expected {
+                                let _ = fs::remove_file(&dest_path).await;
+                                chunk_note = "single(bad-hash)";
+                                continue; // 校验不过，当作这个源失败，试下一个
+                            }
+                        }
+                        Err(_) => {
+                            let _ = fs::remove_file(&dest_path).await;
+                            chunk_note = "single(read-failed)";
+                            continue;
+                        }
+                    }
+                }
+                CANCEL_FLAGS.lock().await.remove(&task_id);
+                return Ok(DownloadProgress {
+                    task_id: task_id.clone(),
+                    progress: 100.0,
+                    message: "Downloaded (chunked x4)".to_string(),
+                    total_bytes: len as i64,
+                    downloaded_bytes: len as i64,
+                });
+            }
+            Ok(false) => chunk_note = "single(range-unsupported)",
+            Err(_) => chunk_note = "single(chunk-error)",
+        }
+    }
+    let chunk_note = chunk_note.to_string();
+
     // 逐候选源下载：单个源失败（网络中断/超时/SHA1 不符）时尝试下一个
     for mapped_url in &urls {
         match stream_to_file(
@@ -116,6 +280,7 @@ pub async fn download_file_with_cancel(
             &task_id,
             &cancel,
             install_cancel.as_ref(),
+            &chunk_note,
         )
         .await
         {
@@ -151,6 +316,61 @@ pub async fn download_file_with_cancel(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Failed to download: {}", url)))
 }
 
+/// 并发下载一组文件（文件级并发）。
+///
+/// 之前 `download_libraries` / 安装流程里的库循环是**串行**的：几百个 jar 一个接一个，
+/// 每次都要等一次 HTTPS 往返 + SHA1 校验，手机/移动网络下装一个实例要等很久
+/// （游戏资源那部分是并发的，只有库和本体是串行 —— 这块被漏掉了）。
+/// 现在按 `concurrency` 并发下载，行为与串行版一致（同样校验 SHA1、同样支持取消）。
+///
+/// 并发数保守取 4：移动网络下再高会互相抢带宽，反而更慢。
+pub async fn download_files_concurrent(
+    items: &[(String, String, Option<String>)], // (url, 目标路径, sha1)
+    concurrency: usize,
+    install_cancel: Option<Arc<AtomicBool>>,
+) -> anyhow::Result<()> {
+    let n = concurrency.max(1);
+    let items = items.to_vec();
+    let install_cancel = install_cancel.clone();
+    let failed = std::sync::atomic::AtomicUsize::new(0);
+    let failed_ref = &failed;
+
+    futures::stream::iter(items.into_iter().map(|(url, dest, sha1)| {
+        let install_cancel = install_cancel.clone();
+        let failed_ref = failed_ref;
+        async move {
+            // 取消后不再发起新请求
+            if let Some(c) = &install_cancel {
+                if c.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+            if let Some(parent) = Path::new(&dest).parent() {
+                let _ = fs::create_dir_all(parent).await;
+            }
+            if let Err(e) = download_file_with_cancel(
+                &url,
+                &dest,
+                sha1.clone(),
+                install_cancel.clone(),
+            )
+            .await
+            {
+                failed_ref.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!("并发下载失败 {url}: {e}");
+            }
+        }
+    }))
+    .buffer_unordered(n)
+    .collect::<Vec<()>>()
+    .await;
+
+    if failed.load(Ordering::Relaxed) > 0 {
+        anyhow::bail!("{} 个文件下载失败", failed.load(Ordering::Relaxed));
+    }
+    Ok(())
+}
+
 /// 下载**单个**源：边下边写边算 SHA1，并节流回写进度。
 ///
 /// 三个修复（对比旧实现）：
@@ -166,6 +386,7 @@ async fn stream_to_file(
     task_id: &str,
     cancel: &Arc<AtomicBool>,
     install_cancel: Option<&Arc<AtomicBool>>,
+    chunk_note: &str,
 ) -> std::result::Result<DownloadProgress, StreamFail> {
     let mut response = client
         .get(url)
@@ -240,7 +461,8 @@ async fn stream_to_file(
     let task = DownloadProgress {
         task_id: task_id.to_string(),
         progress,
-        message: format!("Downloaded {downloaded} bytes"),
+        // 带上「实际走了哪条路」，真机核对分片是否生效就靠这个（见 chunk_note）
+        message: format!("Downloaded {downloaded} bytes [{chunk_note}]"),
         total_bytes: total_size,
         downloaded_bytes: downloaded,
     };
@@ -300,29 +522,22 @@ pub async fn download_libraries(
 ) -> Result<()> {
     let libraries_dir = Path::new(data_dir).join("libraries");
 
-    for lib in libraries {
-        if let Some(downloads) = &lib.downloads {
-            if let Some(artifact) = &downloads.artifact {
-                let lib_path = libraries_dir.join(&artifact.path);
-                
-                if let Some(parent) = lib_path.parent() {
-                    fs::create_dir_all(parent).await.ok();
-                }
-
-                // Skip if already exists
-                if lib_path.exists() {
-                    continue;
-                }
-
-                download_file(
-                    &artifact.url,
-                    &lib_path.to_string_lossy(),
-                    Some(artifact.sha1.clone())
-                ).await
-                .with_context(|| format!("Failed to download library: {}", lib.name))?;
+    // 串行 → 4 并发（与安装流程同一套逻辑，见 download_files_concurrent 的注释）
+    const LIB_CONCURRENCY: usize = 4;
+    let jobs: Vec<(String, String, Option<String>)> = libraries
+        .iter()
+        .filter_map(|lib| {
+            let a = lib.downloads.as_ref()?.artifact.as_ref()?;
+            let path = libraries_dir.join(&a.path);
+            // Skip if already exists
+            if path.exists() {
+                return None;
             }
-        }
-    }
+            Some((a.url.clone(), path.to_string_lossy().to_string(), Some(a.sha1.clone())))
+        })
+        .collect();
 
-    Ok(())
+    download_files_concurrent(&jobs, LIB_CONCURRENCY, None).await
 }
+
+

@@ -480,31 +480,27 @@ pub async fn install_version_tracked(
     // Download libraries
     counter.set_phase("libraries");
     if let Some(libraries) = &version_info.libraries {
+        // 手机上装实例慢的主因：原来几百个库是**串行**下的（一个接一个等往返）。
+        // 现在 4 并发（`LIB_CONCURRENCY`），SHA1 校验与取消语义保持不变。
+        const LIB_CONCURRENCY: usize = 4;
+        let lib_dir = Path::new(&data_dir).join("libraries");
+        let jobs: Vec<(String, String, Option<String>)> = libraries
+            .iter()
+            .filter_map(|lib| {
+                let a = lib.downloads.as_ref()?.artifact.as_ref()?;
+                Some((
+                    a.url.clone(),
+                    lib_dir.join(&a.path).to_string_lossy().to_string(),
+                    Some(a.sha1.clone()),
+                ))
+            })
+            .collect();
+        crate::download::download_files_concurrent(&jobs, LIB_CONCURRENCY, install_cancel.clone())
+            .await
+            .map_err(|e| cancelled_or(e, ctx, "下载依赖库"))?;
         for lib in libraries {
-            // 每个文件之前检查一次：取消后不再继续发起新请求
-            if let Some(c) = ctx {
-                c.check_cancelled()?;
-            }
-            if let Some(downloads) = &lib.downloads {
-                if let Some(artifact) = &downloads.artifact {
-                    let lib_path = Path::new(&data_dir)
-                        .join("libraries")
-                        .join(&artifact.path);
-                    
-                    if let Some(parent) = lib_path.parent() {
-                        fs::create_dir_all(parent).await.ok();
-                    }
-                    
-                    crate::download::download_file_with_cancel(
-                        &artifact.url,
-                        &lib_path.to_string_lossy(),
-                        Some(artifact.sha1.clone()),
-                        install_cancel.clone(),
-                    )
-                    .await
-                    .map_err(|e| cancelled_or(e, ctx, &format!("下载依赖库 {}", lib.name)))?;
-                    counter.tick(&lib.name, artifact.size.max(0) as u64);
-                }
+            if let Some(a) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
+                counter.tick(&lib.name, a.size.max(0) as u64);
             }
         }
     }
