@@ -28,6 +28,8 @@ src-tauri/.cargo/config.toml
 # 预编译资产，是构建的必需输入，忽略掉就再也编不出能跑的包了。
 src-tauri/gen/android/app/src/main/jniLibs/*/libqookix_lib.so
 app/src/main/jniLibs/*/libqookix_lib.so
+# 误提交过一份到 src-tauri/ 根目录（215MB，debug 产物）——正确位置是 target/ 与 jniLibs/，都在上面被忽略
+src-tauri/libqookix_lib.so
 
 # 本机编译「插件」用的中间资产：**不入库**。
 # 一旦入库，CI 的 checkout 里也会有它们 → 会被 Gradle 打进 APK，
