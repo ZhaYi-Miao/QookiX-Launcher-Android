@@ -22,6 +22,10 @@ class GameService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // 游戏起来了：写标记并起「:guard」独立进程守护。
+        // 作用：游戏内「强制关闭」会让游戏 JVM 调 System.exit(0) → os::exit()
+        // 把**整个进程**带走，启动器会跟着消失；守护进程负责把它拉回来。
+        GameGuardService.arm(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -64,6 +68,9 @@ class GameService : Service() {
 
     /** 结束游戏；JVM 不在时兜底杀进程，保证不留孤儿。 */
     private fun killGameAndProcess() {
+        // 用户主动结束（通知栏「停止」/ 从最近任务划掉）：这是**有意**关掉，
+        // 守护服务不能又把启动器拉回来。
+        GameGuardService.disarm(this)
         val killed = try {
             com.zhayi.qookix.tauri.TauriBridge.killGame()
         } catch (e: Throwable) {

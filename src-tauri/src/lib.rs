@@ -16,6 +16,7 @@ mod renderer_health;
 mod storage;
 mod natives;
 mod jvm_launcher;
+mod terracotta;
 mod render_bridge;
 mod input_bridge;
 mod browse;
@@ -56,6 +57,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+    terracotta::terracotta_ping,
+    terracotta::terracotta_request,
             // Version commands
             commands::get_version_list,
             commands::get_version_manifest,

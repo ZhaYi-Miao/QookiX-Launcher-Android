@@ -127,6 +127,25 @@
                 android:value="保持 Minecraft Java 版游戏进程在前台存活，避免切到后台被系统回收" />
         </service>
 
+        <!-- 启动器守护：**必须跑在独立进程**（:guard）。
+             游戏 JVM 与启动器同进程，而游戏内「强制关闭」会让游戏 JVM 调
+             System.exit(0) → os::exit() 把整个进程带走，启动器跟着消失、
+             用户被送回桌面。这个守护进程独立于主进程，主进程被带走时它还活着，
+             检测到就把启动器重新拉起来（详见 GameGuardService 的注释）。 -->
+        <!-- 陶瓦联机隧道：**独立进程**（:tunnel），`libterracotta.so` 只在这里加载。
+             之所以不放在主进程：Terracotta 是 AGPL-3.0，其 README 给了例外
+             （未修改二进制 + 不链接，或 IPC 交互 + 界面署名）。我们用「独立进程 + localhost HTTP」，
+             启动器不链接它，可保持 GPL-3.0。署名见设置页「第三方声明」。 -->
+        <service
+            android:name=".tunnel.TerracottaTunnelService"
+            android:exported="false"
+            android:process=":tunnel" />
+
+        <service
+            android:name=".services.GameGuardService"
+            android:exported="false"
+            android:process=":guard" />
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"

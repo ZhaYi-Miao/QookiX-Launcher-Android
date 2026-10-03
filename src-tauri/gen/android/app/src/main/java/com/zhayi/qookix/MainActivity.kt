@@ -37,6 +37,8 @@ class MainActivity : TauriActivity() {
 
     applyStoredOrientation()
     requestNotificationPermission()
+    // 启动陶瓦联机隧道（独立进程 :tunnel，.so 只在那里加载，主进程不链接）
+    startTunnelService()
     disableWebViewZoom()
     setupBackNavigation()
   }
@@ -349,7 +351,27 @@ class MainActivity : TauriActivity() {
   }
 
   /** 启动时读取 settings.json 里的方向设置并应用，让上次的选择立刻生效。 */
-  private fun applyStoredOrientation() {
+      /**
+     * 启动陶瓦联机隧道服务（独立进程 `:tunnel`）。
+     *
+     * 为什么不直接在这里加载 `libterracotta.so`：Terracotta 是 AGPL-3.0，
+     * 但其 README 给了例外——「打包未修改二进制而不链接」或「IPC 交互 + 界面署名」
+     * 均不被 AGPL 涵盖。把 .so 放进独立进程、主进程只走 localhost HTTP，
+     * 就满足例外条件，启动器可保持 GPL-3.0。详见 TerracottaTunnelService 的注释。
+     */
+    private fun startTunnelService() {
+        try {
+            val intent = Intent(this, com.zhayi.qookix.tunnel.TerracottaTunnelService::class.java)
+            // 注意：这里必须用 startService 而不是 startForegroundService ——
+            // startForegroundService 启动后若 5 秒内不调 startForeground，系统会直接杀进程
+            // （实测隧道进程秒死）。开房时由服务自己晋升前台（带通知），那时才需要前台身份。
+            startService(intent)
+        } catch (e: Throwable) {
+            android.util.Log.w("MainActivity", "隧道服务启动失败", e)
+        }
+    }
+
+    private fun applyStoredOrientation() {
     try {
       val file = File(filesDir, "settings.json")
       if (!file.isFile) return

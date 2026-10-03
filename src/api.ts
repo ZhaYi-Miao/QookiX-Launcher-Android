@@ -651,6 +651,14 @@ export const api = {
   terracottaLaunch: () => invoke<TerracottaLaunch>("terracotta_launch", undefined, { silent: true }),
   terracottaStop: () => invoke<void>("terracotta_stop", undefined, { silent: true }),
   terracottaStatus: () => invoke<Record<string, unknown>>("terracotta_status", undefined, { silent: true }),
+
+  // ── 陶瓦联机隧道（Android 专用，走独立进程 :tunnel 的本地 HTTP）──────────
+  // 为什么不复用上面那三个：那是桌面版「启动 Terracotta.exe 外部进程」的接口，
+  // Android 上我们把 .so 放进 :tunnel 进程，主进程只发 HTTP（见 src-tauri/src/terracotta.rs）。
+  /** 隧道是否已就绪 */
+  terracottaTunnelPing: () => invoke<boolean>("terracotta_ping", undefined, { silent: true }),
+  /** 调隧道接口，返回原始 JSON 字符串。path 形如 /state、/host?player=xxx */
+  terracottaTunnelRequest: (path: string) => invoke<string>("terracotta_request", { path }, { silent: true }),
   terracottaCreateRoom: (player?: string) =>
     invoke<Record<string, unknown>>("terracotta_create_room", { player: player ?? null }, { silent: true }),
   terracottaJoinRoom: (room: string, player?: string) =>
