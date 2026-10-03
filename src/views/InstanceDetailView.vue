@@ -93,7 +93,7 @@ async function launch() {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 4px 12px 0;
+  padding: 4px 16px 0;
   gap: 10px;
 }
 .head {

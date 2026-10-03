@@ -94,6 +94,21 @@ const DIAG = `(async () => {
       if (lr.bottom > pr.bottom + 2) out.issues.push({ kind: 'under-tabbar', detail: '末元素超出 ' + Math.round(lr.bottom - pr.bottom) + 'px' });
     }
   }
+  // 6) 贴边：可见内容离屏幕左右边 < 12px（手机上会显得"顶着屏边"）
+  const edgeEls = [...document.querySelectorAll('.page *')].filter(e => {
+    const r = e.getBoundingClientRect();
+    const cs = getComputedStyle(e);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (r.width < 8 || r.height < 8) return false;
+    if (r.width >= vw - 2) return false;           // 通栏容器（背景/分组）不算
+    const leaf = e.children.length === 0;
+    if (!leaf && !(e.textContent || '').trim()) return false;
+    return r.left < 12 || r.right > vw - 12;
+  }).slice(0, 5).map(e => {
+    const r = e.getBoundingClientRect();
+    return e.tagName.toLowerCase() + '.' + String(e.className).slice(0, 22) + ' l=' + Math.round(r.left) + ' r=' + Math.round(vw - r.right) + ' "' + (e.textContent || '').trim().slice(0, 10) + '"';
+  });
+  if (edgeEls.length) out.issues.push({ kind: 'edge-hug', detail: edgeEls.length + ' 处', els: edgeEls });
   out.tabs = [...document.querySelectorAll('.van-tabbar-item')].map(e => (e.className.includes('--active') ? '*' : '') + e.textContent.trim()).join(',');
   out.title = (document.querySelector('.top .title') || {}).textContent || '';
   return JSON.stringify(out);

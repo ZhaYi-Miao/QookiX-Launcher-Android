@@ -132,7 +132,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 4px 12px 12px;
+  padding: 4px 16px 12px;
 }
 .head {
   display: flex;

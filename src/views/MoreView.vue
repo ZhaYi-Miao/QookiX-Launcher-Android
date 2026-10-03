@@ -51,7 +51,7 @@ const entries = computed(() => {
   flex-direction: column;
   gap: 14px;
   /* 与设置页等其它页一致的左右留白：卡片不再顶着屏幕边 */
-  padding: 4px 12px 16px;
+  padding: 4px 16px 16px;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
