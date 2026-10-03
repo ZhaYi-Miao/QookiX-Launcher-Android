@@ -2526,7 +2526,9 @@ textarea.text-input {
   border: none;
   background: transparent;
   color: var(--text-3);
-  padding: 6px 13px;
+  /* 手机：6px 上下内边距只有 29px 高，抬到 38px 与其它控件的触控标准一致 */
+  min-height: 38px;
+  padding: 0 15px;
   border-radius: 7px;
   font-size: 12px;
   font-weight: 600;
@@ -2544,8 +2546,10 @@ textarea.text-input {
   flex-wrap: wrap;
 }
 .color-swatch {
-  width: 22px;
-  height: 22px;
+  /* 手机：色板是常点的目标，22px 手指点不准 —— 直接放大到 34px。
+     （不用「透明 padding 撑点击区」那套：那样选中圆环会跟着变成 40px，观感不对。） */
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 2px solid transparent;
   background: transparent;
@@ -2694,7 +2698,9 @@ textarea.text-input {
 .dep-link {
   font-size: 11px;
   font-family: inherit;
-  padding: 3px 8px;
+  /* 手机：这两个字的小胶囊原来只有 23px 高，手指点不准 → 抬到 30px */
+  min-height: 30px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
@@ -2702,6 +2708,10 @@ textarea.text-input {
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
+}
+.dep-link {
+  display: inline-flex;
+  align-items: center;
 }
 .dep-link:hover {
   border-color: var(--accent);
@@ -2959,8 +2969,8 @@ textarea.text-input {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -3158,7 +3168,9 @@ textarea.text-input {
 .mirror-btn {
   font-size: 12px;
   color: var(--text-2);
-  padding: 4px 10px;
+  /* 手机：原来 27px 高，抬到 34px 与其它小按钮一致 */
+  min-height: 34px;
+  padding: 0 12px;
   border-radius: 7px;
   border: 1px solid var(--border);
   flex-shrink: 0;

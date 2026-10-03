@@ -38,7 +38,7 @@ async function cancel(t: TaskEntry) {
       <van-tab name="active" :title="$t('downloads.in-progress')" />
       <van-tab name="finished" :title="$t('downloads.finished')" />
     </van-tabs>
-    <p v-if="!list.length" class="empty">{{ $t("log-viewer.no-logs") }}</p>
+    <p v-if="!list.length" class="empty">{{ $t("downloads.no-tasks") }}</p>
     <div v-for="t in list" :key="t.id" class="task glass">
       <div class="row">
         <div class="name">
