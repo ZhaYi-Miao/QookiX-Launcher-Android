@@ -808,13 +808,13 @@ pub async fn get_offline_skin(uuid: String) -> Result<Option<Value>, String> {
 
 #[command]
 pub async fn list_servers(instance_id: String) -> Result<Value, String> {
-    let list = servers::list_servers(&instance_id).await?;
+    let list = servers::list_remote_servers(&instance_id).await?;
     Ok(json!({ "servers": list }))
 }
 
 #[command]
 pub async fn ping_mc_server(address: String) -> ServerStatus {
-    servers::ping_server(&address).await
+    servers::ping_remote_server(&address).await
 }
 
 // ==================== World Backup (世界存档备份) ====================

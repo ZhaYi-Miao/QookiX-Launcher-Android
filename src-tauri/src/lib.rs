@@ -57,6 +57,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+    servers::list_hosted_servers,
+    servers::get_hosted_server,
+    servers::create_hosted_server,
+    servers::update_hosted_server,
+    servers::delete_hosted_server,
+    servers::suggest_server_memory,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,
             // Version commands

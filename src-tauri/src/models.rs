@@ -686,3 +686,81 @@ pub struct CrashDiagnosis {
     pub details: Vec<CrashDetail>,
     pub confidence: u32,
 }
+
+// ── 托管服务器（多人游戏开服）────────────────────────────────────────
+// 字段与桌面版 QookiX-Launcher 保持一致，这样 server.json 两端通用、也能手动编辑。
+
+/// 服务端核心类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerCore {
+    Vanilla,
+    Paper,
+    Fabric,
+    Forge,
+    NeoForge,
+}
+
+impl ServerCore {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ServerCore::Vanilla => "vanilla",
+            ServerCore::Paper => "paper",
+            ServerCore::Fabric => "fabric",
+            ServerCore::Forge => "forge",
+            ServerCore::NeoForge => "neoforge",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "vanilla" | "原版" => Some(ServerCore::Vanilla),
+            "paper" | "paper1.20.5+" | "papermc" => Some(ServerCore::Paper),
+            "fabric" | "fabricmc" => Some(ServerCore::Fabric),
+            "forge" => Some(ServerCore::Forge),
+            "neoforge" | "neo-forge" => Some(ServerCore::NeoForge),
+            _ => None,
+        }
+    }
+}
+
+/// 端口默认值
+fn default_server_port() -> u16 {
+    25565
+}
+/// 内存默认按「手机可用内存的 40%、上限 2GB」在创建时计算，这里只做兜底
+fn default_server_max_mem() -> u32 {
+    1024
+}
+fn default_server_min_mem() -> u32 {
+    512
+}
+fn default_server_motd() -> String {
+    "A QookiX Server".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub id: String,
+    pub name: String,
+    pub core: ServerCore,
+    pub mc_version: String,
+    #[serde(default = "default_server_port")]
+    pub port: u16,
+    #[serde(default = "default_server_max_mem")]
+    pub max_memory_mb: u32,
+    #[serde(default = "default_server_min_mem")]
+    pub min_memory_mb: u32,
+    #[serde(default = "default_server_motd")]
+    pub motd: String,
+    #[serde(default)]
+    pub eula: bool,
+    pub created: u64,
+    #[serde(default)]
+    pub last_started: Option<u64>,
+    #[serde(default)]
+    pub java_path: Option<String>,
+    #[serde(default)]
+    pub jvm_args: Option<String>,
+    #[serde(default)]
+    pub stop_command: Option<String>,
+}
