@@ -7,6 +7,12 @@ body,
 #app {
   height: 100%;
   background: var(--bg-0);
+  /* 默认文字色必须在这里给一次。
+     浏览器默认是黑色（canvastext），而弹层内容（Teleport 到 #van-layer）里
+     很多元素没显式设 color —— 之前它们全部继承到黑色，深色主题下就是「黑字」，
+     表现为弹层标题看不清（实例卡操作面板、账号面板的标题都中过招）。
+     给了这行之后，没设色的文字自动跟随主题（浅色主题也跟着变）。 */
+  color: var(--text-1);
   margin: 0;
   padding: 0;
   overflow: hidden;

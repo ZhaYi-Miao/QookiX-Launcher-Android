@@ -12,6 +12,23 @@ const activeTab = ref<"active" | "finished">("active");
 const cancelling = ref<number[]>([]);
 const list = computed(() => tasks.taskList.filter((t) => (activeTab.value === "active" ? !t.finished : t.finished)));
 
+/**
+ * 左右滑动切换「进行中 / 已完成」。
+ * 阈值给 56px：太小的位移会把「点一下取消」之类的点击误判成滑动。
+ */
+let touchX = 0;
+let touchY = 0;
+function onTouchStart(e: TouchEvent) {
+  touchX = e.touches[0].clientX;
+  touchY = e.touches[0].clientY;
+}
+function onTouchEnd(e: TouchEvent) {
+  const dx = e.changedTouches[0].clientX - touchX;
+  const dy = e.changedTouches[0].clientY - touchY;
+  if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  activeTab.value = activeTab.value === "active" ? "finished" : "active";
+}
+
 function pct(t: TaskEntry): number {
   if (t.bytesTotal > 0) return Math.min(100, Math.round((t.bytesDone / t.bytesTotal) * 100));
   if (t.stepTotal > 0) return Math.min(100, Math.round((t.stepDone / t.stepTotal) * 100));
@@ -34,10 +51,20 @@ async function cancel(t: TaskEntry) {
 
 <template>
   <div class="dl">
+    <!-- 手机：tab 容器原来是直角（Vant 默认无圆角），改成圆角胶囊；
+         另外接上左右滑动切换（手机上滑一下切 tab 比点更顺手）。
+         滑动自己实现而不开 Vant 的 swipeable —— 列表在 tabs 之外，
+         swipeable 只对 pane 内容生效，这里 pane 是空的。 -->
+    <div
+      class="tab-swipe"
+      @touchstart="onTouchStart"
+      @touchend="onTouchEnd"
+    >
     <van-tabs v-model:active="activeTab" class="tabs">
       <van-tab name="active" :title="$t('downloads.in-progress')" />
       <van-tab name="finished" :title="$t('downloads.finished')" />
     </van-tabs>
+    </div>
     <p v-if="!list.length" class="empty">{{ $t("downloads.no-tasks") }}</p>
     <div v-for="t in list" :key="t.id" class="task glass">
       <div class="row">
@@ -102,5 +129,17 @@ async function cancel(t: TaskEntry) {
   font-weight: 400;
   font-size: 12px;
   color: var(--text-3);
+}
+/* tab 条：Vant 默认直角，手机上太硬 —— 改成圆角胶囊 */
+.tab-swipe {
+  margin-bottom: 4px;
+}
+.tabs :deep(.van-tabs__wrap) {
+  border-radius: 12px;
+  overflow: hidden;
+}
+.tabs :deep(.van-tab) {
+  min-height: 42px;
+  align-items: center;
 }
 </style>
