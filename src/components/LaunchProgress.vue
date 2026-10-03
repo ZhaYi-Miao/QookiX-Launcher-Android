@@ -12,9 +12,13 @@ let unlistenProgress: (() => void) | null = null;
 let unlistenLog: (() => void) | null = null;
 let unlistenExit: (() => void) | null = null;
 let doneTimer: ReturnType<typeof setTimeout> | null = null;
+/** 本次启动的游戏进程是否已经退出（退出后到达的日志行不算「启动成功」） */
+let exited = false;
 
 onMounted(async () => {
   unlistenProgress = await listen<{ step: string; progress: number }>("launch://progress", (e) => {
+    // 新一次启动开始：解除「已退出」锁
+    exited = false;
     if (done.value) return;
     visible.value = true;
     step.value = e.payload.step;
@@ -22,6 +26,10 @@ onMounted(async () => {
   });
 
   unlistenLog = await listen<{ line: string }>("launch://log", () => {
+    // 游戏已经退出后，日志 tail 还会再吐几行（收尾输出）。
+    // 之前这里不判断，于是「已退出」又被当成「启动成功」——
+    // 表现为游戏强制关闭后，启动器底部又冒出「正在启动 / 启动成功」的进度条。
+    if (exited) return;
     if (!visible.value || done.value) return;
     done.value = true;
     step.value = $t("launch-progress.listen");
@@ -33,6 +41,7 @@ onMounted(async () => {
   });
 
   unlistenExit = await listen("launch://exit", () => {
+    exited = true;
     visible.value = false;
     done.value = false;
     if (doneTimer) { clearTimeout(doneTimer); doneTimer = null; }

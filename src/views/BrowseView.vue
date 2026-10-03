@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { useMessage } from "../composables/message";
 import { List as VanList, Empty as VanEmpty, Search as VanSearch } from "vant";
@@ -29,6 +29,41 @@ const version = ref("");
 /** 游戏版本筛选的选项：官方 manifest 里的正式版（与创建实例页同一接口） */
 const versionOptions = ref<{ label: string; value: string }[]>([]);
 const showFilter = ref(false);
+/** 加载器筛选（fabric/forge/…）：后端 browse 接口本来就支持 loader，之前一直没传 */
+const loader = ref("");
+/** 按实例筛选：只记实例 id，实际生效靠 setInstanceFilter 带出版本+加载器 */
+const instanceFilter = ref("");
+
+const LOADERS = [
+  { value: "", label: $t("browse.all-loaders") },
+  { value: "vanilla", label: "Vanilla" },
+  { value: "fabric", label: "Fabric" },
+  { value: "forge", label: "Forge" },
+  { value: "neoforge", label: "NeoForge" },
+  { value: "quilt", label: "Quilt" },
+];
+
+/** 筛选按钮的高亮：任何一项筛选生效就该亮（之前只看版本，用户以为没生效） */
+const hasFilter = computed(() => !!(version.value || loader.value || instanceFilter.value || type.value !== "mod"));
+
+/** 选实例 → 带出它的游戏版本与加载器（等价于「只看这个实例能用的内容」） */
+function setInstanceFilter(id: string) {
+  instanceFilter.value = id;
+  const inst = id ? instances.get(id) : null;
+  version.value = inst?.mc_version ?? "";
+  loader.value = inst?.loader ?? "";
+  void load(true);
+}
+
+/** 单独改加载器时，若它和所选实例冲突就清掉实例选择（避免两边打架看不出为什么没结果） */
+function setLoader(next: string) {
+  loader.value = next;
+  if (instanceFilter.value) {
+    const inst = instances.get(instanceFilter.value);
+    if (inst && inst.loader !== next) instanceFilter.value = "";
+  }
+  void load(true);
+}
 const showInstall = ref(false);
 const installTarget = ref<ProjectHit | null>(null);
 
@@ -48,7 +83,7 @@ async function load(reset = true) {
   }
   loading.value = true;
   try {
-    const r = await api.browse(provider.value, query.value, type.value, "", page.value, version.value || undefined, undefined, undefined, 20);
+    const r = await api.browse(provider.value, query.value, type.value, "", page.value, version.value || undefined, loader.value || undefined, undefined, 20);
     hits.value = reset ? r.hits : [...hits.value, ...r.hits];
     page.value += 1;
     if (!r.hits.length || hits.value.length >= r.total) done.value = true;
@@ -85,7 +120,7 @@ onMounted(async () => {
   <div class="bv">
     <div class="bar">
       <van-search v-model="query" :placeholder="$t('browse.search-placeholder')" class="q" @search="onSearch" />
-      <button class="ftype" :class="{ on: version || type !== 'mod' }" @click="showFilter = true">
+      <button class="ftype" :class="{ on: hasFilter }" @click="showFilter = true">
         <IconSliders /> {{ $t("browse.filter") }}
       </button>
     </div>
@@ -101,6 +136,40 @@ onMounted(async () => {
         <div class="chips">
           <button v-for="t in TYPES" :key="t.value" class="chip" :class="{ on: type === t.value }" @click="type = t.value; load(true)">
             {{ t.label }}
+          </button>
+        </div>
+      </div>
+      <div class="fgroup">
+        <label>{{ $t("browse.instance-filter") }}</label>
+        <!-- 按实例筛选：后端 browse 接口没有「实例」参数，这里用「选中实例 →
+             自动带出它的游戏版本 + 加载器」来实现等价效果（内容中心给某个实例找模组
+             本来就是这个意思）。选「全部实例」= 不按实例收窄。 -->
+        <div class="chips">
+          <button class="chip" :class="{ on: !instanceFilter }" @click="setInstanceFilter('')">
+            {{ $t("browse.all-instances") }}
+          </button>
+          <button
+            v-for="inst in instances.instances"
+            :key="inst.id"
+            class="chip"
+            :class="{ on: instanceFilter === inst.id }"
+            @click="setInstanceFilter(inst.id)"
+          >
+            {{ inst.name }}
+          </button>
+        </div>
+      </div>
+      <div class="fgroup">
+        <label>{{ $t("browse.loader-filter") }}</label>
+        <div class="chips">
+          <button
+            v-for="l in LOADERS"
+            :key="l.value"
+            class="chip"
+            :class="{ on: loader === l.value }"
+            @click="setLoader(l.value)"
+          >
+            {{ l.label }}
           </button>
         </div>
       </div>
