@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useMessage } from "../composables/message";
 import {
@@ -30,6 +30,8 @@ const address = ref<string | null>(null);
 /** 控制台输入 */
 const consoleInput = ref("");
 const consoleOut = ref("");
+/** 日志滚动容器（用于自动追尾） */
+const logPane = ref<HTMLElement | null>(null);
 
 const server = computed(() => servers.byId(serverId));
 const running = computed(() => (server.value ? servers.isRunning(server.value.id) : false));
@@ -48,6 +50,10 @@ function startPolling() {
         const addr = await api.hostedServerAddress(s.id);
         if (addr !== address.value) address.value = addr;
       }
+      // 日志页签打开且正在运行 → 自动追尾刷新。
+      // 服务端在另一个进程里跑，不轮询的话日志就停在打开那一刻，
+      // 用户看到的是「死」的日志，还以为服务器挂了。
+      if (tab.value === "logs" && now) await loadLogs();
     } catch {
       /* 忽略：下一轮再试 */
     }
@@ -147,6 +153,10 @@ async function save() {
 async function loadLogs() {
   try {
     logs.value = await api.readHostedServerLog(serverId);
+    // 自动追尾：新日志在数组末尾，不滚到底部就等于没刷新
+    await nextTick();
+    const pane = logPane.value;
+    if (pane) pane.scrollTop = pane.scrollHeight;
   } catch (e) {
     message.error(String(e));
   }
@@ -253,7 +263,7 @@ onUnmounted(() => {
       <van-button block type="primary" :loading="busy === 'save'" @click="save">{{ $t("common.save") }}</van-button>
     </div>
     <div v-else-if="tab === 'files'" class="pane"><ServerFileManager :server-id="serverId" /></div>
-    <div v-else-if="tab === 'logs'" class="pane logs">
+    <div v-else-if="tab === 'logs'" ref="logPane" class="pane logs">
       <pre v-for="(l, i) in logs" :key="i" class="ln">{{ l }}</pre>
       <p v-if="!logs.length" class="empty">{{ $t("log-viewer.no-logs") }}</p>
     </div>

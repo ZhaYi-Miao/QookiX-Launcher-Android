@@ -12,6 +12,7 @@ mod accounts;
 mod modpack;
 mod servers;
 mod server_process;
+mod server_files;
 mod rcon;
 mod crash;
 mod renderer_health;
@@ -66,6 +67,11 @@ pub fn run() {
     servers::delete_hosted_server,
     servers::suggest_server_memory,
     servers::install_hosted_server_core,
+    server_files::list_hosted_server_dir,
+    server_files::read_hosted_server_file,
+    server_files::write_hosted_server_file,
+    server_files::list_hosted_server_config_files,
+    server_files::open_hosted_server_folder,
     servers::start_hosted_server,
     servers::is_hosted_server_running,
     servers::read_hosted_server_log,
