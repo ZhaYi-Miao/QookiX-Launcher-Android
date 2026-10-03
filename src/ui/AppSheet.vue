@@ -1,18 +1,16 @@
 <script setup lang="ts">
 /**
- * 统一弹层壳：手机的「底部弹层」形态（Vant Popup），替代原来 20 处 `n-modal preset="card"`。
+ * 统一弹层壳：手机的「底部弹层」形态（Vant Popup）。
  *
- * 为什么统一收口：
+ * 为什么统一收口（这里曾是 20 处居中卡片弹窗，naive 时代全部迁到这一个壳）：
  * - 手机上居中卡片弹窗是典型的桌面交互（拇指够不到、遮住大半个屏、按钮小）；
  *   底部弹层落在拇指区、内容可滚、关闭键固定，是安卓/ios 的通用形态。
  * - 统一壳还顺带解决了三个老问题：弹层层叠上下文（见 AppPopup 的注释）、
- *   `n-modal` Teleport 到 body 脱离界面缩放、以及每个弹窗各写一套 max-height 补丁
- *   （styles.css 里那段 `.n-card.n-modal` 的手机限高规则可以退休了）。
+ *   旧库把弹层 Teleport 到 body 导致脱离界面缩放、以及每个弹窗各写一套 max-height 补丁。
  *
- * 用法：把 `<n-modal preset="card" :title="t" :show="s" @update:show="...">` 换成
- * `<app-sheet :title="t" :show="s" @update:show="...">`，内部内容原样保留
- * （内层控件后续逐页换成 Vant）。`closable=false` + `mask-closable=false` 用于
- * 「必须显式处理」的流程（如首启准备、服务器安装中）。
+ * 用法：`<app-sheet :title="t" :show="s" @update:show="...">` + 内部内容。
+ * `closable=false` + `mask-closable=false` 用于「必须显式处理」的流程
+ * （如首启准备、服务器安装中）。
  */
 import AppPopup from "./AppPopup.vue";
 import { IconClose } from "../components/icons";

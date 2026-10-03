@@ -299,10 +299,8 @@ a:active {
   transform: translateY(-6px) scale(0.995);
 }
 
-/* 加载条贴在 40px 标题栏下方（与 TitleBar 高度一致） */
-.n-loading-bar-container {
-  top: 40px !important;
-}
+/* 说明：加载条原来借用旧库的容器类贴在 40px 标题栏下方。现在是自研的
+   `#qk-loading-bar`（loadingBar.ts 自管 DOM），位置由它自己控制。 */
 
 /* ── 触屏：把「悬停才出现」的操作按钮改为常显 ──────────────────────────
    这些按钮默认 opacity:0，只在 :hover 时显示 —— 手机上永远等不到 hover。
@@ -396,31 +394,9 @@ a:active {
   }
 }
 
-/* ── 所有 preset="card" 的弹窗：手机端统一限高 + 内容内部滚动 ──────────
-   这些弹窗都是从桌面端移植的，只限了宽度（640/560/420px…）、**没限高度**。
-   而手机横屏视口只有约 390 CSS px 高，内容一长（版本列表、图标网格、日志…）
-   就直接溢出屏幕，底部按钮和列表项根本点不到。
-   naive-ui 的卡片弹窗元素同时带 `n-card` 与 `n-modal` 两个类，用它一次覆盖全部。
-   头部与底部保持固定，只让中间内容区滚动。 */
-@media (max-width: 1100px), (pointer: coarse) {
-  .n-card.n-modal {
-    /* 这里**不能**除以 --ui-scale：n-modal 被 Teleport 到 <body>，
-       不在 `#app` 的 zoom 子树里。除了它方向正好反 ——
-       60% 缩放下上限变成 153vh（等于取消限高），150% 时只剩 61vh。 */
-    max-height: 92vh;
-    display: flex;
-    flex-direction: column;
-  }
-  .n-card.n-modal > .n-card-header,
-  .n-card.n-modal > .n-card-footer,
-  .n-card.n-modal > .n-card__footer {
-    flex-shrink: 0;
-  }
-  .n-card.n-modal > .n-card-content {
-    overflow-y: auto;
-    min-height: 0;
-  }
-}
+/* 说明：原先这里有一大段「所有 preset=card 弹窗统一限高」的规则（针对旧库的
+   `.n-card.n-modal`）。弹层已经全部改走 `ui/AppSheet.vue`（自带 88vh 限高 +
+   内容区滚动 + 粘底操作行），这段补丁随之退休。 */
 /* ── 界面缩放：`#app` 上挂 zoom ──────────────────────────────────
    这里**不能**再除以 --ui-scale。
 
@@ -441,27 +417,11 @@ a:active {
   zoom: var(--ui-scale, 1);
 }
 
-/* ── naive 单选按钮组：允许换行 + 放开写死的高度 ────────────────────────
-   `n-radio-group--button-group` 把 height 定成「单个按钮高」（假定永远单行）。
-   一旦我们让控件换行（竖屏下的设置项就这么干），第二行会压住下面的文字。
-   这里统一兜底：height:auto + 允许换行，组的高度由内容决定。 */
-.n-radio-group--button-group {
-  height: auto;
-  flex-wrap: wrap;
-  row-gap: 6px;
-}
-
-/* ── UI 库滑杆 / 取色器：把触摸手势从浏览器手里拿回来 ────────────────────
-   原生 `<input type="range">` 自带触摸手势处理（浏览器知道「在滑杆上横滑＝拖值」）。
-   换成 naive-ui 的 `n-slider` 后，安卓 WebView 会把横滑判定成页面滚动手势，
-   发 `pointercancel` 把拖动掐断 —— 实测真机 `input swipe` 完全拖不动
-   （原生 input 同一个坐标能拖）。给滑杆显式声明 `touch-action: none`，
-   手势就不会被滚动/双击缩放抢走。 */
-.n-slider,
-.n-slider__rail,
-.n-slider-handle {
-  touch-action: none;
-}
+/* 说明：原先这里有两段针对旧库的补丁 ——
+   ① n-radio-group--button-group 写死高度导致折行压字（现改用自研 `ui/AppSeg.vue`）；
+   ② n-slider 需要显式 `touch-action: none`，否则安卓 WebView 把横滑判成页面滚动、
+   发 pointercancel 掐断拖动。Vant 的 `van-slider` 自身已声明 touch-action，故删除。
+   若将来换成别的滑杆实现，记得先验证「按住拖动会不会被页面滚动抢走」。 */
 
 /* ── 触控目标大小：**可选档位**，默认不干预 ──────────────────────────────
    项目里的按钮本来就是桌面尺寸（审计：实例页 47 个、内容页 12 个、皮肤页 8 个
@@ -503,24 +463,24 @@ a:active {
   align-items: center;
   justify-content: center;
 }
-/* UI 库控件的热区（naive 的 select 输入区实测只有 21px 高） */
-:root[data-touch="standard"] :is(.n-input, .n-base-selection, .n-base-selection-input, .n-base-selection-label),
-:root[data-touch="large"] :is(.n-input, .n-base-selection, .n-base-selection-input, .n-base-selection-label) {
+/* UI 库控件的热区（Vant 的表单行/单元格本来按手机做，这里仍按档位兜一层） */
+:root[data-touch="standard"] :is(.van-field, .van-cell),
+:root[data-touch="large"] :is(.van-field, .van-cell) {
   min-height: var(--touch-min);
 }
 /* 多行输入要更高（40px 只放得下一行半） */
-:root[data-touch="standard"] :is(.n-input.n-input--textarea, .n-input.n-input--textarea .n-input__textarea-el),
-:root[data-touch="large"] :is(.n-input.n-input--textarea, .n-input.n-input--textarea .n-input__textarea-el) {
+:root[data-touch="standard"] textarea.van-field__control,
+:root[data-touch="large"] textarea.van-field__control {
   min-height: 66px;
 }
-/* 下拉选项：手机上比桌面更容易点错 */
-:root[data-touch="standard"] .n-base-select-option,
-:root[data-touch="large"] .n-base-select-option {
+/* 选择器选项：手机上比桌面更容易点错 */
+:root[data-touch="standard"] .van-picker__option,
+:root[data-touch="large"] .van-picker__option {
   min-height: calc(var(--touch-min) + 2px);
 }
-/* 开关的热区（n-switch 只有 20px 高） */
-:root[data-touch="standard"] .n-switch,
-:root[data-touch="large"] .n-switch {
+/* 开关的热区 */
+:root[data-touch="standard"] .van-switch,
+:root[data-touch="large"] .van-switch {
   min-height: 32px;
 }
 /* ── 顶部加载条（src/loadingBar.ts 自管 DOM）──────────────────────────

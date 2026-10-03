@@ -132,6 +132,10 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 14px;
+  /* 允许换行：150% 缩放下可用宽度只有 ~256px，图标+信息+启动+切换放不下一行，
+     原来的 fixed 单行会把信息列挤到 ~30px，meta 直接**画到启动键上**
+     （cdp_scan 在 150% 下实测到重叠）。窄了就换行，不靠「刚好放得下」。 */
+  flex-wrap: wrap;
 }
 .hero-icon {
   width: 56px;
@@ -146,7 +150,9 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .hero-main {
-  flex: 1;
+  /* 不能是裸的 `flex: 1`（= 1 1 0%）：那样它会被压到 0 宽，内容溢出盖到按钮上。
+     给一个真实的最小基准，空间不足时由外层 flex-wrap 换行解决。 */
+  flex: 1 1 140px;
   min-width: 0;
 }
 .hero-name {
@@ -163,6 +169,8 @@ onMounted(() => {
   margin-top: 4px;
   font-size: 12px;
   color: var(--text-3);
+  /* 版本 + 加载器 + 上次游玩三截字，窄屏自己折行，别横向溢出容器 */
+  flex-wrap: wrap;
 }
 .badge {
   background: var(--accent-16);

@@ -249,12 +249,18 @@ ws.onopen = async () => {
     for (const tab of SETTINGS_TABS) {
       await goto("/settings");
       await sleep(1500);
+      // 设置页在手机化后是「分组列表 + 页内子页」：一级是 van-cell 行，点击行切到子页。
+      // 注意：同一路由重复 goto 不会重挂载组件，所以上一轮的子页状态还在 ——
+      // 先按子页里的「取消」回到分组列表，才能找到下一项。
+      await evaluate(
+        `(function(){const b=document.querySelector(".back .van-button");` +
+          `if(b){b.click(); return "reset";} return "list";})()`
+      );
+      await sleep(900);
       const clicked = await evaluate(
-        `(function(){const nav=document.querySelector(".settings-nav");` +
-          `if(!nav) return "no-nav";` +
-          `const el=[...nav.querySelectorAll("button,a,div,span")]` +
-          `.find(e=>e.textContent.trim()===${JSON.stringify(tab)});` +
-          `if(!el) return "no-tab"; el.click(); return "ok";})()`
+        `(function(){const cells=[...document.querySelectorAll(".van-cell")];` +
+          `const el=cells.find(e=>e.textContent.trim()===${JSON.stringify(tab)});` +
+          `if(!el) return cells.length ? "no-tab" : "no-cell"; el.click(); return "ok";})()`
       );
       if (clicked !== "ok") {
         console.log(`跳过设置页「${tab}」：${clicked}`);
