@@ -8,13 +8,13 @@ import { api } from "../api";
 import { Button as VanButton, Empty as VanEmpty, Search as VanSearch } from "vant";
 import { pickFile } from "../composables/filePicker";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { usePageAction } from "../composables/usePageAction";
+/* 顶栏右上动作已废弃（那个位置切页时会跳变），上传皮肤按钮在页面内容里已有 */
 
 const accounts = useAccountsStore();
 const message = useMessage();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const renderer = useSkinRenderer(canvas);
-const pageAction = usePageAction();
+
 
 
 const skins = ref<{ name: string; filename: string }[]>([]);
@@ -98,7 +98,6 @@ async function upload() {
 }
 
 onMounted(async () => {
-  pageAction.value = { text: $t("skins.upload-skin"), run: () => void upload() };
   if (currentAccount.value) {
     try {
       const s = await api.getOfflineSkin(currentAccount.value.uuid);
@@ -135,6 +134,11 @@ const ANIMS: { key: AnimationKind; label: string }[] = [
         <button class="m" :class="{ on: model === 'slim' }" @click="model = 'slim'; renderer.setModel('slim')">{{ $t('skins.slim') }}</button>
       </div>
       <van-button type="primary" class="apply" :loading="busy" :disabled="!currentSrc" @click="apply">{{ $t('skins.applied') }}</van-button>
+    </div>
+    <!-- 「上传皮肤」原来挂在顶栏（那个位置切页时按钮会消失、把账号块挤得跳），
+         顶栏取消动作按钮后，入口挪到这里。 -->
+    <div class="row">
+      <van-button class="grow" :loading="busy" @click="upload">{{ $t("skins.upload-skin") }}</van-button>
     </div>
     <div class="row">
       <van-search v-model="playerInput" :placeholder="$t('skins.fetch-by-name')" class="grow" @search="fetchPlayer" />

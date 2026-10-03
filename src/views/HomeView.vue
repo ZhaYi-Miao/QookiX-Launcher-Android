@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
@@ -10,8 +10,9 @@ import { useMessage } from "../composables/message";
 import { Button as VanButton, Swipe as VanSwipe, SwipeItem as VanSwipeItem } from "vant";
 import { loaderBadge } from "../utils/format";
 import AppIcon from "../components/AppIcon.vue";
+import AppPopup from "../ui/AppPopup.vue";
 import { IconPlay, IconRepeat, IconPlus } from "../components/icons";
-import type { Ref } from "vue";
+
 
 
 const router = useRouter();
@@ -20,7 +21,10 @@ const instances = useInstancesStore();
 const accounts = useAccountsStore();
 const pins = usePinsStore();
 
-const pageAction = inject<Ref<{ text: string; run: () => void } | null>>("pageAction");
+/**
+ * 页面右上动作已废弃：那个位置的按钮会在切页时出现/消失，把账号块挤得左右跳。
+ * 现在「切换实例」由首页卡片上的切换按钮 + 内容里的按钮承担（都走下面的切换面板）。
+ */
 
 const STORAGE_KEY = "qookix.home.selected";
 const selectedId = ref<string | null>(localStorage.getItem(STORAGE_KEY));
@@ -29,6 +33,12 @@ const showPicker = ref(false);
 
 const selected = computed(() => (selectedId.value ? instances.get(selectedId.value) : null) ?? instances.instances[0] ?? null);
 watch(selected, (v) => { if (v) localStorage.setItem(STORAGE_KEY, v.id); });
+
+/** 选一个实例作为首页主卡片（切换实例面板 / 卡片上的切换按钮都走它） */
+function pickInstance(id: string) {
+  selectedId.value = id;
+  showPicker.value = false;
+}
 
 /** 固定到首页的快捷项（实例被删后自动消失） */
 const pinsHere = computed(() => pins.items.filter((p) => p.target === "home" && instances.get(p.instanceId)));
@@ -61,15 +71,38 @@ async function launch(instId: string, world?: string, address?: string) {
 }
 
 onMounted(() => {
-  if (pageAction) {
-    pageAction.value = { text: $t("home.switch-instance"), run: () => (showPicker.value = true) };
-  }
+  // 拉一次实例列表（切换面板要列全部实例；原来只靠 pageAction 按钮，列表可能是旧的）
+  void instances.refresh();
 });
 </script>
 
 <template>
   <div class="home">
     <p class="greet">{{ greeting }}</p>
+
+    <!-- 切换实例面板：原来只把 showPicker 置 true，模板里没有任何东西绑定它，
+         所以右上角「切换实例」和卡片上的切换按钮点了都没反应。 -->
+    <app-popup
+      :show="showPicker"
+      position="bottom"
+      round
+      @update:show="(v: boolean) => (showPicker = v)"
+    >
+      <div v-if="instances.instances.length" class="picker">
+        <div class="picker-title">{{ $t("home.switch-instance") }}</div>
+        <button
+          v-for="inst in instances.instances"
+          :key="inst.id"
+          class="picker-row"
+          :class="{ on: inst.id === selected?.id }"
+          @click="pickInstance(inst.id)"
+        >
+          <AppIcon :name="inst.icon" class="picker-icon" />
+          <span class="picker-name">{{ inst.name }}</span>
+          <span class="picker-meta">{{ inst.mc_version }}</span>
+        </button>
+      </div>
+    </app-popup>
 
     <template v-if="instances.instances.length">
       <section class="hero glass">
@@ -242,5 +275,56 @@ onMounted(() => {
   flex-direction: column;
   gap: 12px;
   align-items: center;
+}
+/* ── 切换实例面板（手机底部弹层）── */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.picker-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 2px;
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+.picker-row.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.picker-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
 }
 </style>

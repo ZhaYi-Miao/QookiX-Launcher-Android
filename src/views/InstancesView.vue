@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, inject, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import { useMessage } from "../composables/message";
@@ -10,12 +10,13 @@ import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
 import { IconPlus } from "../components/icons";
 import type { Instance, InstanceGroup } from "../types";
-import type { Ref } from "vue";
+
 
 const router = useRouter();
 const message = useMessage();
 const instances = useInstancesStore();
-const pageAction = inject<Ref<{ text: string; run: () => void } | null>>("pageAction");
+/* 「新建实例」原来挂在顶栏右上角 —— 那个位置会在切页时出现/消失，
+   把旁边的账号块挤得左右跳（用户反馈）。现在改成页面内容里的按钮。 */
 
 const PALETTE = ["#e89a4b", "#5ab0ff", "#7ad08a", "#c78aff", "#ff7a90", "#ffd166", "#4ecdc4", "#a0a4b8"];
 const FILTER_KEY = "qookix.instances.filter";
@@ -77,7 +78,7 @@ async function moveTo(groupId: string | null) {
 }
 
 onMounted(() => {
-  if (pageAction) pageAction.value = { text: $t("router.plus"), run: () => router.push("/create") };
+  void instances.refresh();
 });
 </script>
 
@@ -86,6 +87,13 @@ onMounted(() => {
     <div v-if="instances.loading" class="loading">{{ $t("file-manager.loading") }}</div>
 
     <template v-else-if="totalCount">
+      <!-- 「新建实例」放进页面内容（原来在顶栏，切页时按钮消失会让账号块左右跳） -->
+      <div class="iv-top">
+        <span class="iv-count">{{ $t("router.grid") }} · {{ totalCount }}</span>
+        <button class="iv-new" @click="router.push('/create')">
+          <IconPlus />{{ $t("router.plus") }}
+        </button>
+      </div>
       <div class="chips">
         <button class="chip" :class="{ active: filter === 'all' }" @click="setFilter('all')">
           {{ $t("install-dialog.all") }}<span class="cc">{{ totalCount }}</span>
@@ -266,5 +274,31 @@ onMounted(() => {
 .mv.cur {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* 页面内的新建实例行（顶栏按钮下移到这里）*/
+.iv-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.iv-count {
+  font-size: 13px;
+  color: var(--text-3);
+}
+.iv-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
 }
 </style>
