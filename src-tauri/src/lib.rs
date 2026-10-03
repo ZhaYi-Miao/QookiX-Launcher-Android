@@ -63,6 +63,8 @@ pub fn run() {
     servers::update_hosted_server,
     servers::delete_hosted_server,
     servers::suggest_server_memory,
+    servers::install_hosted_server_core,
+    servers::hosted_server_core_installed,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,
             // Version commands

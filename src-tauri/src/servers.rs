@@ -420,3 +420,195 @@ struct ServerNbt {
     #[serde(default)]
     icon: Option<String>,
 }
+
+// ── 服务端核心下载 ────────────────────────────────────────────────────
+
+/// PaperMC 官方 fill API（v3）。**必须带 User-Agent**，否则 403。
+const PAPERMC_API: &str = "https://fill.papermc.io/v3/projects";
+const PAPERMC_UA: &str =
+    "QookiX-Launcher/1.1.0 (https://github.com/weimosheng/QookiX-Launcher)";
+
+/// 原版服务端核心的下载 URL：走官方 version manifest。
+/// Android 侧没有 mcmeta 模块，这里直接用 piston 元数据。
+const PISTON_META: &str = "https://piston-meta.mojang.com/v1/packages";
+
+async fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(PAPERMC_UA)
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/** 流式下载到文件（服务端核心用；失败删半截文件） */
+async fn download_to(url: &str, dest: &Path, client: &reqwest::Client) -> Result<(), String> {
+    if let Some(p) = dest.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败: HTTP {}", resp.status()));
+    }
+    let mut f = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| e.to_string())?;
+    use tokio::io::AsyncWriteExt;
+    let mut resp = resp;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("下载中断: {e}"))?
+    {
+        f.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    drop(f);
+    Ok(())
+}
+
+/**
+ * 下载 Paper 核心。
+ *
+ * API：`GET /v3/projects/paper/versions/{mc}/builds` → 取 STABLE 通道的
+ * `downloads["server:default"].url`。v3 的 body 直接是数组（老 v2 有 {ok, builds} 包装）。
+ */
+async fn download_paper(
+    client: &reqwest::Client,
+    id: &str,
+    mc_version: &str,
+) -> Result<String, String> {
+    let url = format!("{PAPERMC_API}/paper/versions/{mc_version}/builds");
+    let body: serde_json::Value = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("获取 Paper 版本信息失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析失败: {e}"))?;
+
+    let builds = body
+        .as_array()
+        .ok_or_else(|| "Paper API 返回格式异常".to_string())?;
+    if builds.is_empty() {
+        return Err(format!("Paper 暂无 {mc_version} 的构建"));
+    }
+    let build = builds
+        .iter()
+        .rev()
+        .find(|b| b.get("channel").and_then(|v| v.as_str()) == Some("STABLE"))
+        .or_else(|| builds.last())
+        .unwrap();
+    let dl = build
+        .get("downloads")
+        .and_then(|d| d.get("server:default"))
+        .and_then(|d| d.get("url"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "该构建没有服务端核心".to_string())?
+        .to_string();
+
+    let dest = server_dir(id)?.join("server.jar");
+    download_to(&dl, &dest, client).await?;
+    Ok(dl)
+}
+
+/** 下载原版服务端核心（Mojang 官方 piston 元数据） */
+async fn download_vanilla(client: &reqwest::Client, id: &str, mc_version: &str) -> Result<(), String> {
+    let pkg: serde_json::Value = client
+        .get(format!("{PISTON_META}/{mc_version}"))
+        .send()
+        .await
+        .map_err(|e| format!("获取版本信息失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析失败: {e}"))?;
+    let dl = pkg
+        .get("downloads")
+        .and_then(|d| d.get("server"))
+        .and_then(|d| d.get("url"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("版本 {mc_version} 没有官方服务端核心"))?
+        .to_string();
+    download_to(&dl, &server_dir(id)?.join("server.jar"), client).await
+}
+
+/** Fabric 服务端安装器（官方 meta API） */
+async fn download_fabric(
+    client: &reqwest::Client,
+    id: &str,
+    mc_version: &str,
+) -> Result<(), String> {
+    let meta: serde_json::Value = client
+        .get("https://meta.fabricmc.net/v2/versions/installer")
+        .send()
+        .await
+        .map_err(|e| format!("获取 Fabric 版本信息失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析失败: {e}"))?;
+    let url = meta
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.get("url"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Fabric 安装器列表为空".to_string())?
+        .to_string();
+    let dir = server_dir(id)?;
+    download_to(&url, &dir.join("fabric-installer.jar"), client).await?;
+    // 顺便写一份 server.properties 里的推荐项（Fabric 也认）
+    Ok(())
+}
+
+/// 核心是否已就绪（能否启动）
+pub fn core_installed(id: &str) -> bool {
+    let Ok(dir) = server_dir(id) else { return false };
+    dir.join("server.jar").exists() || fabric_launcher_jar(&dir).is_some()
+}
+
+fn fabric_launcher_jar(dir: &Path) -> Option<String> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with("fabric-server-launch") && n.ends_with(".jar") {
+            return Some(n);
+        }
+    }
+    None
+}
+
+// ── Tauri 命令：核心安装 ───────────────────────────────────────────────
+
+/// 下载/安装服务端核心。Paper 与原版是单文件；Fabric 先下安装器（Stage 3 再接安装流程）。
+#[tauri::command]
+pub async fn install_hosted_server_core(id: String) -> Result<String, String> {
+    let s = get_server(&id)?;
+    let client = http_client().await?;
+    let res = match s.core {
+        ServerCore::Paper => download_paper(&client, &id, &s.mc_version).await?,
+        ServerCore::Vanilla => {
+            download_vanilla(&client, &id, &s.mc_version).await?;
+            "server.jar".to_string()
+        }
+        ServerCore::Fabric => {
+            download_fabric(&client, &id, &s.mc_version).await?;
+            "fabric-installer.jar".to_string()
+        }
+        other => {
+            return Err(format!(
+                "{} 核心还在开发中，先用 Paper 或原版",
+                other.as_str()
+            ))
+        }
+    };
+    // 核心到位后补一次 EULA/配置（端口/motd 可能刚改过）
+    ensure_server_files(&id, &s)?;
+    Ok(res)
+}
+
+#[tauri::command]
+pub fn hosted_server_core_installed(id: String) -> bool {
+    core_installed(&id)
+}
