@@ -74,10 +74,16 @@ const DIAG = `(() => {
 })()`;
 
 ws.onopen = async () => {
+  let bad = 0;
   try {
     await send("Runtime.enable", {});
     await send("Page.enable", {});
     await evaluate("document.querySelectorAll('.van-overlay').forEach(o=>o.click()); 'ok'");
+    // 设置分组只在 /settings 下才有，先确保在这页
+    if (mode === "settings") {
+      await evaluate("(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.$router; await r.push('/settings'); return 'ok'})()");
+      await sleep(1800);
+    }
     for (let i = 0; i < STEPS.length; i++) {
       const label = STEPS[i];
       // 点「分组行」（设置首页）或「tab」（实例详情）；找不到就跳过
@@ -99,6 +105,7 @@ ws.onopen = async () => {
       const file = path.join(outDir, mode + "-" + String(i + 1).padStart(2, "0") + "-" + label + ".png");
       fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
       const d = JSON.parse(diag.result.value);
+      if (d.issues.length) bad++;
       console.log((d.issues.length ? "!! " : "   ") + label + (d.issues.length ? "  " + d.issues.map((i) => i.kind + "(" + (i.els || []).join(" ; ") + ")").join("  |  ") : ""));
       // 回到列表（设置有返回键；实例详情用 tab 直接切，不用返回）
       if (mode === "settings") {
@@ -110,6 +117,8 @@ ws.onopen = async () => {
     console.error("WALK_ERROR:", e.message);
     process.exitCode = 1;
   } finally {
+    // 有问题就返回非 0（npm run ui:audit 据此判失败）
+    if (bad) process.exitCode = 1;
     ws.close();
     setTimeout(() => process.exit(), 200);
   }

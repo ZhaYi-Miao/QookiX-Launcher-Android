@@ -132,11 +132,15 @@ ws.onopen = async () => {
     }
     fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(report, null, 2));
     console.log("\n=== 体检结果 ===");
+    let bad = 0;
     for (const r of report) {
       const iss = (r.issues || []).map((i) => i.kind + "(" + i.detail + ")");
+      if (iss.length || (r.errs || []).length) bad++;
       console.log((iss.length ? "!! " : "   ") + r.page + "  " + r.title + "  " + (r.tabs || "") + (iss.length ? "\n      " + iss.join("\n      ") : ""));
       if (r.errs && r.errs.length) console.log("      运行错误: " + r.errs.join(" ; "));
     }
+    // 有问题就返回非 0，便于 npm run ui:audit / CI 直接看出失败
+    if (bad) process.exitCode = 1;
   } catch (e) {
     console.error("WALK_ERROR:", e.message);
     process.exitCode = 1;
