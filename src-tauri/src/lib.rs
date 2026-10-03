@@ -72,6 +72,8 @@ pub fn run() {
     servers::server_console_command,
     servers::hosted_server_runtime,
     servers::hosted_server_log,
+    servers::hosted_server_address,
+    servers::hosted_server_addresses,
     servers::hosted_server_core_installed,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,

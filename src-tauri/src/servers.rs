@@ -1267,3 +1267,32 @@ pub fn hosted_server_log(id: String, lines: Option<usize>) -> Result<Vec<String>
         .map(|s| s.to_string())
         .collect())
 }
+
+/// 取得本机在局域网里的地址，用于显示「朋友用这个地址连进来」。
+///
+/// 优先 wlan0（WiFi）；数据网（移动网络）没法让人直连，所以只给 WiFi 地址。
+#[tauri::command]
+pub fn hosted_server_address(id: String) -> Option<String> {
+    let s = get_server(&id).ok()?;
+    let ip = local_wifi_ip()?;
+    Some(format!("{ip}:{}", s.port))
+}
+
+/// 读 wlan0 的 IPv4（拿不到就 None，UI 显示「未连接 WiFi」）
+fn local_wifi_ip() -> Option<String> {
+    // 应用沙盒里没有 `ip` 命令，必须走 JNI 问 NetworkInterface
+    #[cfg(target_os = "android")]
+    {
+        crate::android_bridge::wifi_ipv4()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+/// 列出本机所有 IPv4（非 127.0.0.1），用于排查「该用哪个地址连」
+#[tauri::command]
+pub fn hosted_server_addresses() -> Vec<String> {
+    local_wifi_ip().into_iter().collect()
+}

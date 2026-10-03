@@ -614,4 +614,24 @@ class MainActivity : TauriActivity() {
     /** Pojav 控制层读的那份 SharedPreferences 文件名（LauncherPreferences 里定的）。 */
     const val PREFS_POJAV = "launcher_preferences"
   }
+    /**
+     * WiFi 网卡的 IPv4 地址（服务器联机地址用）。
+     *
+     * 必须在 Kotlin 侧取：Rust 从原生线程 `FindClass("java/net/NetworkInterface")`
+     * 会抛 Java 异常（系统类加载器上下文看不到），所以走 Activity 实例方法。
+     */
+    fun wifiIpv4(): String? {
+        return try {
+            java.net.NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.name.startsWith("wlan") }
+                .flatMap { iface -> iface.inetAddresses.toList() }
+                .mapNotNull { addr ->
+                    val h = addr.hostAddress ?: return@mapNotNull null
+                    if (h.contains(':')) null else h.substringBefore('%')
+                }
+                .firstOrNull { it.isNotEmpty() && it != "127.0.0.1" }
+        } catch (e: Exception) {
+            null
+        }
+    }
 }

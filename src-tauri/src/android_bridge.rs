@@ -81,11 +81,27 @@ pub fn stop_server_process(_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 读 WiFi IPv4（供服务器联机地址显示）
+///
+/// 走 Activity 实例方法（`MainActivity.wifiIpv4`）：**不能**在 Rust 里
+/// `find_class("java/net/NetworkInterface")` —— attach 上来的原生线程用系统类
+/// 加载器 FindClass 会抛 Java 异常（实测 "Java exception was raised"），
+/// `Class.forName` 也不可靠。让应用侧取好字符串回传是唯一稳定的做法。
+#[cfg(target_os = "android")]
+pub fn wifi_ipv4() -> Option<String> {
+    android::call_activity_str("wifiIpv4", "()Ljava/lang/String;").filter(|s| !s.is_empty())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn wifi_ipv4() -> Option<String> {
+    None
+}
+
 /// 强制结束 `:server` 进程（RCON 停服失败时的兜底：世界可能没存盘）。
 #[cfg(target_os = "android")]
 pub fn force_stop_server(_id: &str) -> Result<(), String> {
-    // 直接杀整个 :server 进程：JVM 随之消失，服也就停了。
-    // 这里不发 /stop —— 那个请求会让 JVM 走 System.exit，属于同一条不优雅的路。
+    // 直接结束整个 `:server` 服务：JVM 随之消失，服也就停了。
+    // 故意不发 /stop —— 那个请求内部是 System.exit，属于同一条不优雅的路。
     android::stop_server_process_any()
 }
 
@@ -607,6 +623,32 @@ mod android {
             _ => 0,
         }
     }
+
+    /// **无参数、取回字符串结果**的版本。
+    ///
+    /// 用于「应用侧自己算好再回传」的场景（如 MainActivity.wifiIpv4 读网卡 IP）。
+    /// 之前只有 `call_activity_str2`（两参数），这类需求只能自己拼 JNI，
+    /// 而在原生线程里 FindClass 又拿不到系统类 —— 走实例方法是唯一稳的路。
+    pub fn call_activity_str(name: &str, sig: &str) -> Option<String> {
+        let vm = java_vm()?;
+        let mut env = vm.attach_current_thread_as_daemon().ok()?;
+        let obj = activity()?;
+        let result = env.call_method(&obj, name, sig, &[]).ok()?;
+        match result {
+            jni::objects::JValueOwned::Object(ret) => {
+                if ret.is_null() {
+                    return None;
+                }
+                let jstr = jni::objects::JString::from(ret);
+                env.get_string(&jstr)
+                    .ok()
+                    .map(|s| s.to_string_lossy().into_owned())
+            }
+            jni::objects::JValueOwned::Int(v) => Some(v.to_string()),
+            _ => None,
+        }
+    }
+
 
     /// 两个字符串参数、**并取回字符串结果**的版本。
     ///
