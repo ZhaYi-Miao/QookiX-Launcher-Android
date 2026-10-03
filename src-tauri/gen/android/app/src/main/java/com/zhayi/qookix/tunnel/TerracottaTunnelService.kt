@@ -45,6 +45,8 @@ class TerracottaTunnelService : Service() {
     private var serverSocket: ServerSocket? = null
     private var ready = false
     private var lastError: String? = null
+    /** 房间码是否已经写进通知（只写一次，避免每次轮询都更新通知） */
+    private var roomNotified = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -132,6 +134,37 @@ class TerracottaTunnelService : Service() {
         runCatching { stopForeground(true) }
     }
 
+    /** 从状态 JSON 里抠出房间码（字段名各版本不同，挨个试） */
+    private fun extractRoomCode(stateJson: String): String? {
+        for (key in listOf("\"room\"", "\"code\"", "\"room_code\"", "\"roomCode\"")) {
+            val i = stateJson.indexOf(key)
+            if (i < 0) continue
+            val colon = stateJson.indexOf(':', i + key.length)
+            if (colon < 0) continue
+            val rest = stateJson.substring(colon + 1).trimStart()
+            if (!rest.startsWith('"')) continue
+            val end = rest.indexOf('"', 1)
+            if (end <= 1) continue
+            val v = rest.substring(1, end)
+            if (v.isNotBlank()) return v
+        }
+        return null
+    }
+
+    /** 把通知换成「房间码 xxx」，这样玩家在游戏里也能看到并念给朋友 */
+    private fun updateNotificationWithRoom(code: String) {
+        runCatching {
+            val n = android.app.Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("联机房间 $code")
+                .setContentText("把这个房间码发给朋友即可加入")
+                .setOngoing(true)
+                .build()
+            startForeground(NOTIFICATION_ID, n)
+            Log.i(TAG, "房间码已就绪: $code")
+        }.onFailure { Log.w(TAG, "更新房间码通知失败", it) }
+    }
+
     override fun onDestroy() {
         shutdownTerracotta()
         super.onDestroy()
@@ -160,7 +193,17 @@ class TerracottaTunnelService : Service() {
                 val body: String = try {
                     withState {
                         when {
-                            path == "/state" -> TerracottaAndroidAPI.getState()
+                            path == "/state" -> {
+                                val s = TerracottaAndroidAPI.getState()
+                                // 状态里出现房间码就把通知更新掉（用户在游戏里只看得到通知栏）
+                                if (s.contains("host") && !roomNotified) {
+                                    extractRoomCode(s)?.let { code ->
+                                        roomNotified = true
+                                        updateNotificationWithRoom(code)
+                                    }
+                                }
+                                s
+                            }
                             path == "/host" -> {
                                 // 开房时才需要「一直活着」：晋升为前台服务（带通知），
                                 // 否则切后台被系统回收，房间就断了。
@@ -180,6 +223,14 @@ class TerracottaTunnelService : Service() {
                                 TerracottaAndroidAPI.setWaiting()
                                 demoteForeground()
                                 "{\"ok\":true,\"state\":\"waiting\"}"
+                            }
+                            path == "/autohost" -> {
+                                // 游戏启动时调用：直接进开房扫描。这样用户**不用回启动器点按钮**
+                                // —— 在游戏里「开放局域网世界」即可，房间码会出现在通知栏。
+                                val name = query["player"]
+                                promoteToForeground()
+                                TerracottaAndroidAPI.setScanning(name, name)
+                                "{\"ok\":true,\"state\":\"host-scanning\"}"
                             }
                             path == "/logs" -> tailLogs()
                             path == "/ping" -> "{\"ok\":true,\"ready\":$ready}"

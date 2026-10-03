@@ -26,6 +26,57 @@ class GameService : Service() {
         // 作用：游戏内「强制关闭」会让游戏 JVM 调 System.exit(0) → os::exit()
         // 把**整个进程**带走，启动器会跟着消失；守护进程负责把它拉回来。
         GameGuardService.arm(this)
+        autoStartTunnelHosting()
+    }
+
+    /**
+     * 游戏一起来就让陶瓦联机进入「开房扫描」状态。
+     *
+     * 为什么必须自动：陶瓦要把「游戏里开放局域网世界」这件事暴露给远端朋友，
+     * 而那一步发生在**游戏界面里**——用户没法先回启动器点「开启房间」。
+     * 所以这里在游戏启动的瞬间就进扫描态，等用户在游戏里开放世界后，
+     * 房间码会自动出现在通知栏（唯一在游戏里能看到的地方）。
+     */
+    private fun autoStartTunnelHosting() {
+        Thread {
+            try {
+                // 等隧道进程把端口文件写出来（最多等 8 秒）
+                val portFile = java.io.File(filesDir, "tunnel_port")
+                var waited = 0
+                while (!portFile.exists() && waited < 80) {
+                    Thread.sleep(100); waited++
+                }
+                if (!portFile.exists()) return@Thread
+                val port = portFile.readText().trim().toIntOrNull() ?: return@Thread
+                val player = currentPlayerName()
+                // 端口会变，所以每次重新读；/autohost 幂等
+                val conn = java.net.URL("http://127.0.0.1:$port/autohost?player=$player")
+                    .openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.outputStream.use { it.write("{}".toByteArray()) }
+                conn.inputStream.use { it.readBytes() }
+                conn.disconnect()
+                android.util.Log.i("GameService", "已自动进入开房扫描（player=$player）")
+            } catch (t: Throwable) {
+                android.util.Log.w("GameService", "自动开房失败（不影响游戏）", t)
+            }
+        }.start()
+    }
+
+    /** 取当前游玩账号名作为房间里的玩家标识（拿不到就用 device 前缀） */
+    private fun currentPlayerName(): String {
+        return try {
+            val dir = java.io.File(filesDir, "accounts")
+            val f = dir.listFiles()?.firstOrNull { it.name.endsWith(".json") } ?: return "player"
+            val txt = f.readText()
+            val m = Regex("\"username\"\\s*:\\s*\"([^\"]+)\"").find(txt)
+            m?.groupValues?.get(1) ?: "player"
+        } catch (t: Throwable) {
+            "player"
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
