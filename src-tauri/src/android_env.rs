@@ -359,6 +359,47 @@ fn short_name(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
+/// 从 `jre_home`（`<data>/runtimes/JRE-xx`）往上找同级的 `natives/` 目录。
+fn find_natives_dir(jre_home: &Path) -> Option<std::path::PathBuf> {
+    let mut cur = jre_home;
+    for _ in 0..4 {
+        cur = cur.parent()?;
+        let cand = cur.join("natives");
+        if cand.join("libc++_shared.so").exists() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// 把 `<data>/natives/libc++_shared.so` 按绝对路径挂进全局符号表（RTLD_GLOBAL）。
+///
+/// JRE 的 `libjvm.so` / `libnio.so` 都依赖 `libc++_shared.so`，而它**只存在于 natives 目录**
+/// （`runtimes/JRE-xx/lib` 下没有这一份）。安卓 linker 找依赖只认「已加载列表」里的 soname，
+/// 所以必须先把它挂进来；否则会连锁 `dlopen failed: library "libc++_shared.so" not found`，
+/// `libjvm.so` 加载不了 → JVM 起不来 → 游戏秒退（启动器只报得出「退出码 -6」）。
+/// 典型触发时机：**装完新 APK 后的第一次启动** —— 那时 `natives/` 正在全量重抽。
+///
+/// 只挂 C++ 运行时，不碰 `libterracotta.so` 等（它们有自己的 `JNI_OnLoad`，不该在这里被拉起）。
+fn preload_native_core(natives_dir: &Path) -> bool {
+    use libloading::os::unix::{Library as UnixLibrary, RTLD_GLOBAL, RTLD_NOW};
+
+    let core = natives_dir.join("libc++_shared.so");
+    if !core.exists() {
+        return false;
+    }
+    match unsafe { UnixLibrary::open(Some(&core), RTLD_NOW | RTLD_GLOBAL) } {
+        Ok(lib) => {
+            std::mem::forget(lib); // 常驻到进程结束
+            true
+        }
+        Err(e) => {
+            crate::util::log_line(&format!("挂载 libc++_shared.so 失败：{e}"));
+            false
+        }
+    }
+}
+
 /// 预加载 JRE 自身的 `lib/*.so`。
 ///
 /// 安卓的 linker 不会去 JRE 的 `lib/` 目录找依赖（`LD_LIBRARY_PATH` 在进程启动时
@@ -382,6 +423,12 @@ pub fn preload_jre_libraries(jre_home: &Path) -> usize {
         !SKIP.contains(&name)
     });
 
+    // 关键一步：先把 natives 里的 C++ 运行时挂进全局表，否则 libjvm.so 会因为
+    // 找不到 libc++_shared.so 而整批加载失败（详见 preload_native_core 的注释）。
+    let natives_ok = find_natives_dir(jre_home)
+        .map(|d| preload_native_core(&d))
+        .unwrap_or(false);
+
     let mut loaded = 0usize;
     let mut last_error = String::new();
     // 必须用 RTLD_GLOBAL：
@@ -390,6 +437,10 @@ pub fn preload_jre_libraries(jre_home: &Path) -> usize {
     //  - JLI 之后要 `dlsym(RTLD_DEFAULT, "JVM_FindClassFromBootLoader")`，
     //    只有全局符号表里才有，否则报「A JNI error has occurred」。
     // 多轮加载：依赖未就绪的先跳过，下一轮再试（通常 2 轮收敛）。
+    // 外层再套一层重试：natives 正在全量重抽时，核心库可能晚几百毫秒才变得可加载。
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
     for _ in 0..4 {
         let mut next = Vec::new();
         let mut progressed = false;
@@ -412,15 +463,39 @@ pub fn preload_jre_libraries(jre_home: &Path) -> usize {
             break;
         }
     }
+        if pending.is_empty() {
+            break;
+        }
+        // 只有核心库还卡着才值得重试（多半是 natives 正在重抽）；零头失败不影响启动
+        let core_stuck = pending.iter().any(|p| {
+            matches!(
+                p.file_name().and_then(|n| n.to_str()),
+                Some("libjvm.so") | Some("libjava.so")
+            )
+        });
+        if !core_stuck || attempt >= 3 {
+            break;
+        }
+        crate::util::log_line(&format!(
+            "JRE 核心库仍未就绪（{} 个），第 {} 次重试前先重挂 C++ 运行时",
+            pending.len(),
+            attempt
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(d) = find_natives_dir(jre_home) {
+            preload_native_core(&d);
+        }
+    }
 
     crate::util::log_line(&format!(
-        "预加载 JRE 内部库 {loaded} 个（剩余 {} 个未就绪，最后错误：{}）",
+        "预加载 JRE 内部库 {loaded} 个（剩余 {} 个未就绪，最后错误：{}）｜C++ 运行时：{}",
         pending.len(),
         if last_error.is_empty() {
             "无"
         } else {
             last_error.as_str()
-        }
+        },
+        if natives_ok { "已挂载" } else { "未找到" }
     ));
     loaded
 }
