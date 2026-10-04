@@ -28,5 +28,15 @@
 -keep class com.kdt.** { *; }
 -keep class org.lwjgl.glfw.** { *; }
 -keep class com.zhayi.qookix.** { *; }
+# SDL（libSDL3.so）：JNI_OnLoad 会反查 org.libsdl.app.SDLActivity 上的 native 方法
+# （nativeGetVersion 等）。没这条 keep 时这些方法名会被 R8 改掉 → 启动游戏时
+# System.loadLibrary("SDL3") 直接 abort：真机现象就是「点启动 → 退出码 -6」，
+# 崩在 GameActivity.onCreate → MinecraftGLSurface.setupSDL。debug 不复现。
+-keep class org.libsdl.app.** { *; }
+# 陶瓦联机：libterracotta.so 的 JNI_OnLoad 会反查 TerracottaAndroidAPI（及
+# VpnServiceCallback / Metadata 等内部类）。没这条 keep 时 release 会把它们改名，
+# JNI_OnLoad 里找不到类 → Rust 侧直接 abort：真机现象是「启动游戏 → 退出码 -6」，
+# 崩在 :tunnel 进程的 tc-init 线程（也就是 System.loadLibrary("terracotta") 那行）。
+-keep class net.burningtnt.terracotta.** { *; }
 # Java 层被 JNI 调用的方法名同样要保留（GetMethodID 按名字查找）
 -keepclasseswithmembernames class * { native <methods>; }
