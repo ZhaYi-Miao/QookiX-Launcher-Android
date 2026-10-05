@@ -65,10 +65,17 @@
           在应用进程内通过 JNI 创建的（libqookix_lib.so 持有 JVM 与 Surface 桥），
           拆到独立进程会让两边拿到各自的 pojav_environ / 输入队列，直接失去输入与渲染。
         -->
+        <!-- 2026-10-05 实测项：给游戏界面一个独立 taskAffinity。
+             不写时它与 MainActivity 共用「包名 affinity」→ 最近任务里只有一条卡，
+             进了游戏就再也切不回启动器。独立 affinity 后 recents 会出现两条
+             （启动器 / 游戏），可以互相切换、也能切回启动器。
+             仍是 singleTask → 从启动器再点一次「启动游戏」照样复用同一个实例，
+             不会开出第二个 GameActivity 去抢 Surface / JVM。 -->
         <activity
             android:name=".GameActivity"
             android:exported="false"
             android:launchMode="singleTask"
+            android:taskAffinity="com.zhayi.qookix.game"
             android:documentLaunchMode="intoExisting"
             android:screenOrientation="sensorLandscape"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"

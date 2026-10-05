@@ -1397,5 +1397,18 @@
   "settings.current-badge": "（当前 v{p1}）",
   "settings.apk-downloaded": "安装包已下载：{p1}",
   "settings.resume-reminder": "恢复 v{p1} 的提醒",
-  "skins.total-count": "共 {p1} 个"
+  "skins.total-count": "共 {p1} 个",
+  "create-instance.loader-version-none": "没找到 {p2} 可用的 {p1} 版本",
+  "create-instance.loader-version-failed": "加载器版本获取失败：{p1}",
+  "create-instance.loader-version-loading": "正在获取加载器版本…",
+  "create-instance.select-loader-version": "选择加载器版本",
+  "instance-detail.files-incomplete": "游戏文件不完整（已就绪 {p1}/{p2}）",
+  "instance-detail.repair-files": "补全游戏文件",
+  "instance-detail.repairing": "正在补全游戏文件…",
+  "instance-detail.repair-done": "游戏文件已补全",
+  "instance-settings.check-files": "启动前检查游戏文件",
+  "instance-settings.check-files-hint": "启动游戏前自动检查并补全缺失文件，关闭后不再检查",
+  "multiplayer.servers-count": "共 {p1} 台服务器",
+  "stores.instances.fixing-files": "正在补全缺失文件…",
+  "downloads.no-file-detail": "暂无文件明细"
 }

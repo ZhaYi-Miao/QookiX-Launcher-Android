@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useMessage } from "../composables/message";
-import { Button as VanButton } from "vant";
+import { Button as VanButton, Progress as VanProgress } from "vant";
 import { api } from "../api";
 import type { InstanceFileReport } from "../types";
 import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
-import { loaderBadge } from "../utils/format";
+import { useTasksStore } from "../stores/tasks";
+import { fmtBytes, fmtSpeed, loaderBadge } from "../utils/format";
 import AppIcon from "../components/AppIcon.vue";
 import ContentTab from "../components/instance/ContentTab.vue";
 import SavesTab from "../components/instance/SavesTab.vue";
@@ -28,6 +29,49 @@ const accounts = useAccountsStore();
 const instanceId = String(route.params.id);
 const tab = ref("content");
 const launching = ref(false);
+
+const tasks = useTasksStore();
+
+/**
+ * 这个实例当前有没有「在跑的文件任务」。
+ *
+ * 创建实例后的后台安装、点「补全游戏文件」、以及内容安装都会把任务挂到
+ * `instanceId` 上；只要它还在跑，就不该显示「需要补全游戏文件」那条警告 ——
+ * 否则用户刚建完实例点进来，会以为启动器出问题了（其实文件正在下）。
+ */
+const installTask = computed(
+  () => tasks.taskList.find((t) => t.instanceId === instanceId && !t.finished),
+);
+
+/** 进度百分比：优先按字节，其次文件数，最后按安装步骤 */
+const installPct = computed(() => {
+  const t = installTask.value;
+  if (!t) return 0;
+  if (t.bytesTotal > 0) return Math.min(100, Math.round((t.bytesDone / t.bytesTotal) * 100));
+  if (t.fileTotal > 0) return Math.min(100, Math.round((t.fileDone / t.fileTotal) * 100));
+  if (t.stepTotal > 0) return Math.min(100, Math.round((t.stepDone / t.stepTotal) * 100));
+  return 0;
+});
+
+const cancelling = ref(false);
+async function cancelInstall() {
+  const t = installTask.value;
+  if (!t || cancelling.value) return;
+  cancelling.value = true;
+  try {
+    await api.cancelInstall(t.id);
+    message.info($t("downloads.cancel-requested"));
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    cancelling.value = false;
+  }
+}
+
+// 下载结束后重新体检一次：这时才该决定要不要显示「补全」提示
+watch(installTask, (now, before) => {
+  if (before && !now) void checkFiles();
+});
 
 const inst = computed(() => instances.get(instanceId));
 
@@ -120,7 +164,25 @@ async function launch() {
       <van-button type="primary" class="go" :loading="launching" @click="launch"><IconPlay /></van-button>
     </div>
 
-    <div v-if="fileReport" class="guard">
+    <!-- 游戏文件正在下载：显示进度 + 取消。
+         这种时候**不能**显示下面那条「需要补全游戏文件」——用户刚建完实例点进来
+         看到「缺 4 项，点补全」，会以为启动器坏了（其实后台正在下）。 -->
+    <div v-if="installTask" class="guard guard-run">
+      <div class="guard-txt">
+        <div class="guard-title">{{ installTask.message || installTask.stage }}</div>
+        <van-progress :percentage="installPct" :show-pivot="false" />
+        <div class="guard-advice run-meta">
+          <span v-if="installTask.bytesTotal">{{ fmtBytes(installTask.bytesDone) }} / {{ fmtBytes(installTask.bytesTotal) }}</span>
+          <span v-else-if="installTask.fileTotal">{{ installTask.fileDone }} / {{ installTask.fileTotal }}</span>
+          <span v-if="installTask.speed > 0">{{ fmtSpeed(installTask.speed) }}</span>
+        </div>
+      </div>
+      <van-button size="small" class="guard-btn" :loading="cancelling" @click="cancelInstall">
+        {{ $t("common.cancel") }}
+      </van-button>
+    </div>
+
+    <div v-else-if="fileReport" class="guard">
       <div class="guard-txt">
         <div class="guard-title">
           {{ $t("instance-detail.files-incomplete", { p1: fileReport.ok, p2: fileReport.total }) }}

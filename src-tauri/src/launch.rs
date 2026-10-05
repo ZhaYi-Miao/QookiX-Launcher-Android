@@ -247,11 +247,23 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
         // 也就是 zink/Turnip 那条链路）。驱动/渲染器插件的目录必须排在最前，
         // 否则命名空间里只会命中 APK 里随包那份，插件等于没装。
         // 该变量只有这一处消费者，放冒号分隔的列表是它本来就支持的用法。
-        let mut native_search_dirs: Vec<String> = vendor
-            .extra_library_dirs
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let mut native_search_dirs: Vec<String> = Vec::new();
+        // LWJGL 3.4.1 组件带来的 natives **必须排最前**。
+        // Android 加载 .so 是按「linker 命名空间里的 soname」找的，`java.library.path`
+        // 基本不参与（见 build_android_jvm_args 里的注释）——而 APK 的 jniLibs 与
+        // `files/natives` 里还躺着老的 3.3.x `liblwjgl*.so`。不塞进这里的话会命中旧的：
+        // 现象就是 LWJGL 直接报
+        // `[LWJGL] [ERROR] Incompatible Java and native library versions detected.`
+        // 随后启动中断（26.3 在全新安装的机器上实测）。
+        if let Some(dir) = &vendor.lwjgl_natives {
+            native_search_dirs.push(dir.to_string_lossy().to_string());
+        }
+        native_search_dirs.extend(
+            vendor
+                .extra_library_dirs
+                .iter()
+                .map(|p| p.to_string_lossy().to_string()),
+        );
         native_search_dirs.push(natives_dir.to_string_lossy().to_string());
         env_map.insert(
             "POJAV_NATIVEDIR".to_string(),
