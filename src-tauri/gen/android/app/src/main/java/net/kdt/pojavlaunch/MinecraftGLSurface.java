@@ -11,6 +11,8 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.InputDevice;
@@ -44,6 +46,8 @@ import org.libsdl.app.SDL;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 import org.lwjgl.glfw.CallbackBridge;
+
+import java.io.File;
 
 /**
  * Class dealing with showing minecraft surface and taking inputs to dispatch them to minecraft
@@ -161,6 +165,123 @@ public class MinecraftGLSurface extends View implements GrabListener, DirectGame
         Log.i("MGLSurface", "已把 Surface 交给 SDL：" + mNativeSurface);
     }
 
+    // ------------------------------------------------------------ 渲染自愈看门狗
+
+    /**
+     * 治「切出去再回来偶发全黑」（SDL 仍在往已死的渲染目标上画，且没人再叫它重建）。
+     *
+     * 判据不靠猜：原生侧每出一帧就把快照写进 `files/cache/perf.txt`
+     * （{@code com.zhayi.qookix.PerfOverlayView} 也读它，无更新超 2 秒即视为过期）。
+     * 于是判黑就两条同时成立：**本次游戏见过新鲜快照**（确实在出过帧）
+     * 且**现在快照过期**（1.2 秒没有新帧）。
+     *
+     * 命中后不猜原因，直接把「回前台重绑链」重跑一遍：
+     * `setupBridgeWindow`（原生侧据此 eglMakeCurrent 换到新 surface）
+     * + `setNativeSurface`（SDL 拿到新 ANativeWindow）
+     * + 连报两次尺寸（逼 SDL 重建 EGLSurface，尺寸没变它不重建）。
+     * 最多连续重试 {@link #MAX_KICKS} 次，成功出帧后计数自动清零。
+     */
+    private static final long PERF_FRESH_MS = 2000L;   // 与 PerfOverlayView 的过期口径一致
+    private static final int MAX_KICKS = 3;
+    private static final long WATCHDOG_INTERVAL_MS = 1000L;
+    private static Handler sWatchdogHandler;
+    private static File sPerfFile;
+    private static boolean sSawFreshFrame;
+    private static int sKickCount;
+    private static int sKickSeq;
+
+    /** 游戏回前台时启动；见 {@link com.zhayi.qookix.GameActivity#onResume()}。 */
+    public static void startRenderWatchdog(Context context) {
+        // 注意：这里**不能**判 sdlEnabled 提前 return —— 回前台时它多半还是 false
+        // （SDL 支持是游戏侧 SDL_Init 回调 notifyLauncher 才置位的）。踢不踢由 tick 里判。
+        sPerfFile = new File(context.getFilesDir(), "cache/perf.txt");
+        stopRenderWatchdog();
+        sSawFreshFrame = false;
+        sKickCount = 0;
+        sWatchdogHandler = new Handler(Looper.getMainLooper());
+        sWatchdogHandler.postDelayed(sWatchdogTick, WATCHDOG_INTERVAL_MS);
+        Log.i("MGLSurface", "渲染自愈看门狗已启动（perf=" + sPerfFile + "）");
+    }
+
+    /** 游戏退到后台时停止（见 {@link com.zhayi.qookix.GameActivity#onPause()}）。 */
+    public static void stopRenderWatchdog() {
+        if (sWatchdogHandler != null) {
+            sWatchdogHandler.removeCallbacksAndMessages(null);
+            sWatchdogHandler = null;
+        }
+    }
+
+    private static final Runnable sWatchdogTick = new Runnable() {
+        @Override
+        public void run() {
+            final Handler handler = sWatchdogHandler;
+            if (handler == null) return;
+            // 只有"快照文件确实存在"时才有可靠信号 —— 26.3 走 SDL 时原生侧没有换帧计数点
+            // （见 jni/perf_counters.c 注释），文件可能压根不存在；这种情况什么都不做，
+            // 免得健康时瞎重绑。26.3 的兜底走"Surface 重建后重试"那条路（scheduleRebindRetries）。
+            final boolean known = sPerfFile != null && sPerfFile.isFile();
+            long age = known ? System.currentTimeMillis() - sPerfFile.lastModified() : Long.MAX_VALUE;
+            if (!known) {
+                // 无信号，保持沉默
+            } else if (age < PERF_FRESH_MS) {
+                sSawFreshFrame = true;   // 在出帧，健康
+                sKickCount = 0;
+            } else if (sSawFreshFrame && sdlEnabled) {
+                if (sKickCount < MAX_KICKS) {
+                    sKickCount++;
+                    Log.w("MGLSurface", "疑似渲染卡黑（perf 快照 " + age + "ms 未更新），第 "
+                            + sKickCount + "/" + MAX_KICKS + " 次重绑 Surface");
+                    rebindSurfaceToSDL();
+                } else if (sKickCount == MAX_KICKS) {
+                    sKickCount++;   // 只报一次，别刷屏
+                    Log.w("MGLSurface", "连续重绑 " + MAX_KICKS + " 次仍无新帧，等下次切前台再救");
+                }
+            }
+            handler.postDelayed(this, WATCHDOG_INTERVAL_MS);
+        }
+    };
+
+    /**
+     * 重绑链本体（看门狗与切前台共用）。顺序有讲究：
+     * 先让原生侧换 surface（eglMakeCurrent），再把 Surface 交给 SDL，最后逼它重建。
+     */
+    private static void rebindSurfaceToSDL() {
+        final Surface surface = mNativeSurface;
+        if (surface == null || !surface.isValid()) {
+            Log.w("MGLSurface", "重绑跳过：Surface 不可用（" + surface + "）");
+            return;
+        }
+        sKickSeq++;
+        try {
+            JREUtils.setupBridgeWindow(surface);
+            if (SDLActivity.getSDLSurface() != null) {
+                SDLSurface.setNativeSurface(surface);
+                int w = Tools.currentDisplayMetrics.widthPixels;
+                int h = Tools.currentDisplayMetrics.heightPixels;
+                SDLActivity.getSDLSurface().surfaceChanged(null, 0, w - 2, h - 2);
+                SDLActivity.getSDLSurface().surfaceChanged(null, 0, w, h);
+            }
+            Log.i("MGLSurface", "第 " + sKickSeq + " 次重绑完成（surface=" + surface + "）");
+        } catch (Throwable t) {
+            Log.w("MGLSurface", "重绑失败", t);
+        }
+    }
+
+    /**
+     * Surface 重建（切后台 / 锁屏 / 浮窗回来）之后的"再补两脚"。
+     *
+     * 现有实现在重建回调里只重绑**一次** ✗，而 SDL 重建 EGLSurface 是有竞态的：
+     * 回调那一刻游戏侧的渲染桥/尺寸可能还没就绪 → 那次重绑落空 → 之后没人再叫它 →
+     * 一直黑（用户报的正是这个：切出去再回来偶发全黑、且不会自己好）。
+     * 这里在 0.8s / 2.5s 再各补一次。成本极低 —— 实测连踢 3 次也不会把画面搞坏。
+     */
+    private static void scheduleRebindRetries() {
+        if (!sdlEnabled) return;
+        final Handler handler = new Handler(Looper.getMainLooper());
+        handler.postDelayed(MinecraftGLSurface::rebindSurfaceToSDL, 800L);
+        handler.postDelayed(MinecraftGLSurface::rebindSurfaceToSDL, 2500L);
+    }
+
     public void start(boolean isAlreadyRunning, AbstractTouchpad touchpad){
         if(Tools.isAndroid8OrHigher()) setUpPointerCapture(touchpad);
         mInGUIProcessor.setAbstractTouchpad(touchpad);
@@ -192,6 +313,8 @@ public class MinecraftGLSurface extends View implements GrabListener, DirectGame
                             SDLActivity.getSDLSurface().surfaceChanged(null, 0, w, h);
                         }
                         refreshSize(true);
+                        // 这一次重绑有竞态（游戏侧渲染桥可能还没就绪）→ 0.8s / 2.5s 再各补一次
+                        scheduleRebindRetries();
                         return;
                     }
                     isCalled = true;

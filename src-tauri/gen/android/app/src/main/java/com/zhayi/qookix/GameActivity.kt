@@ -792,12 +792,43 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         super.onStop()
     }
 
+    /**
+     * 复用实例时系统把新 Intent 交到这里。
+     *
+     * 场景：启动器「换版本」后进程重启，系统可能把旧任务恢复出来 → 新 Intent 落在这个
+     * 被复用的实例上（本类原先没有重写这个方法，于是目标实例被悄悄忽略 ✗，实测踩过）。
+     * 这里采信新的目标实例：本进程**还没起 JVM** 就按新实例重来；已经在跑则只记日志
+     * （一个进程只能有一个游戏 JVM，换版本由启动器侧的「先结束再启动」负责）。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val newId = intent.getStringExtra(EXTRA_INSTANCE_ID) ?: return
+        if (newId == instanceId) return
+        android.util.Log.i("GameActivity", "复用实例上收到新目标实例：$instanceId → $newId")
+        setIntent(intent)
+        instanceId = newId
+        accountUuid = intent.getStringExtra(EXTRA_ACCOUNT_UUID).orEmpty()
+        val running = try {
+            TauriBridge.isGameRunning()
+        } catch (e: Throwable) {
+            android.util.Log.w("GameActivity", "查询游戏状态失败，按在运行处理", e)
+            true
+        }
+        if (!running) {
+            gameStarted = false   // 让 startGameOnce() 用新实例再跑一遍
+            recreate()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (LauncherPreferences.PREF_ENABLE_GYRO) mGyroControl?.enable()
         // SDL（26.3+）是嵌入使用的：surface 销毁时它把渲染线程暂停了（PAUSED），
         // 回到前台必须显式恢复，否则就是"进程活着但画面全黑"（锁屏/切任务回来的黑屏）。
         if (MinecraftGLSurface.sdlEnabled) SDLActivity.notifyAppResume()
+        // 自愈看门狗：SDL 有时会继续往已死的渲染目标上画（表现=切回来全黑且不自恢复）。
+        // 它盯着原生侧的出帧快照，发现"曾经出过帧但现在 1.2 秒没动静"就重绑一次 Surface。
+        MinecraftGLSurface.startRenderWatchdog(this)
         setWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 1)
     }
 
@@ -811,6 +842,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         mQuickSettingSideDialog?.cancel()
         // 同步把 SDL 渲染线程暂停（surface 马上要销毁，别让它继续画）。
         if (MinecraftGLSurface.sdlEnabled) SDLActivity.notifyAppPause()
+        MinecraftGLSurface.stopRenderWatchdog()
         setWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 0)
         super.onPause()
     }

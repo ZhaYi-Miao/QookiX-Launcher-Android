@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -12,6 +13,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
@@ -34,6 +37,20 @@ class MainActivity : TauriActivity() {
     TauriBridge.attach(this)
     // 给 Pojav 输入桥（org.lwjgl.glfw.CallbackBridge）准备剪贴板等平台能力
     PojavShim.init(this)
+
+    // 上一次「结束当前游戏 → 换版本」留下的待启动：进程是被守护服务自动拉回来、
+    // 被用户点「游戏已退出」通知、还是用户自己重开，都会走到这里 —— 把用户当时
+    // 点的那一版接上（consume 即清空，只生效一次）。
+    PendingLaunch.consume(this)?.let { (pendingId, pendingUuid) ->
+      Log.i(TAG, "接上次未完成的启动：实例 $pendingId")
+      Handler(Looper.getMainLooper()).postDelayed({
+        // 先清掉"上一个游戏"残留的任务记录，否则新 Intent 会被投给被系统恢复出来的旧实例，
+        // 结果启动的还是上一次那个版本（实测踩过 ✗，见 removeStaleGameTask 注释）。
+        removeStaleGameTask()
+        runCatching { GameActivity.start(this, pendingId, pendingUuid) }
+          .onFailure { Log.e(TAG, "接续启动失败，已清空记录", it) }
+      }, 600L)
+    }
 
     applyStoredOrientation()
     requestNotificationPermission()
@@ -319,12 +336,86 @@ class MainActivity : TauriActivity() {
    */
   fun startGameActivity(instanceId: String, accountUuid: String) {
     runOnUiThread {
+      // 已有游戏在跑、而且用户点的是**另一个实例** → 不能直接拉起：
+      // `singleTask` 会把旧实例拉到前台、Rust 也会拒第二次启动（见 PendingLaunch 注释）。
+      // 所以先问用户「结束当前的、换成这个吗」。
+      val runningId = runningInstanceId()
+      if (runningId != null && runningId != instanceId) {
+        Log.i(TAG, "当前跑的是 $runningId，用户点了 $instanceId → 需要先结束再换")
+        confirmSwitchInstance(instanceId, accountUuid)
+        return@runOnUiThread
+      }
       try {
         GameActivity.start(this, instanceId, accountUuid)
       } catch (e: Exception) {
         Log.e(TAG, "启动游戏界面失败", e)
       }
     }
+  }
+
+  /**
+   * 清掉残留的"游戏任务"记录。
+   *
+   * `GameActivity` 带 `documentLaunchMode="intoExisting"`，任务记录**不随进程消失**：
+   * 进程被游戏退出带走后，system_server 仍记着这个任务，下次会把旧实例恢复出来。
+   * 于是「换版本」时新 Intent 会被投给那个旧实例（`singleTask` 复用、且没人重写
+   * `onNewIntent`）→ 启动的还是上一次那版（2026-10-05 实测踩到 ✗）。
+   * `getAppTasks()` 只返回本应用自己的任务，不需要任何权限。
+   */
+  private fun removeStaleGameTask() {
+    try {
+      val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+      am.appTasks?.forEach { task ->
+        val cmp = task.taskInfo?.baseIntent?.component
+        if (cmp?.className == GameActivity::class.java.name) {
+          Log.i(TAG, "清理残留的游戏任务：taskId=${task.taskInfo?.taskId}")
+          task.finishAndRemoveTask()
+        }
+      }
+    } catch (e: Throwable) {
+      Log.w(TAG, "清理残留游戏任务失败（不影响启动）", e)
+    }
+  }
+
+  /** 当前正在运行的实例 id；没在跑 / 查不到都返回 null（查不到时按"没在跑"处理，别拦用户）。 */
+  private fun runningInstanceId(): String? = try {
+    if (!TauriBridge.isGameRunning()) null
+    else JSONObject(TauriBridge.gameStatus()).optString("instance_id").ifEmpty { null }
+  } catch (e: Throwable) {
+    Log.w(TAG, "查询当前实例失败，按未运行处理", e)
+    null
+  }
+
+  /**
+   * 「结束当前游戏并换成用户点的那版」确认框。
+   *
+   * 为什么必须重启进程：一个进程只能有一个游戏 JVM（见 [PendingLaunch] 注释）。
+   * 这里只做三件事：记下待启动 → 优雅结束游戏（走 Rust，会落存档/日志）→ 让进程被带走。
+   * `GameGuardService` 会把启动器拉回来（后台拉起被系统拦时发「游戏已退出」通知兜底），
+   * [onCreate] 再消费那条记录，自动进入用户点的那一版。
+   */
+  private fun confirmSwitchInstance(instanceId: String, accountUuid: String) {
+    AlertDialog.Builder(this, R.style.QookixAlertDialog)
+      .setTitle("需要先结束当前游戏")
+      .setMessage("一个进程里只能跑一个游戏，已经有一个版本在运行了。\n\n要结束它并启动你刚点的这个版本吗？")
+      .setNegativeButton(android.R.string.cancel, null)
+      .setPositiveButton("结束并启动") { _, _ -> relaunchIntoInstance(instanceId, accountUuid) }
+      .show()
+  }
+
+  private fun relaunchIntoInstance(instanceId: String, accountUuid: String) {
+    PendingLaunch.save(this, instanceId, accountUuid)
+    // 故意**不**调 GameGuardService.disarm：就是要它把启动器拉回来。
+    Thread {
+      runCatching { TauriBridge.killGame() }
+        .onFailure { Log.w(TAG, "结束当前游戏失败", it) }
+    }.start()
+    // 兜底：JVM 若没把进程带走，用户会停在"点了按钮却没反应"的界面上，5 秒后自己收尾
+    // （守护服务同样会拉回启动器，待启动记录也还在，重开也能接上）。
+    Handler(Looper.getMainLooper()).postDelayed({
+      Log.w(TAG, "结束游戏后进程仍在，主动收尾（守护服务会拉回启动器）")
+      runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
+    }, 5000L)
   }
 
   /** 26.3+ 的 SDL 窗口层需要启动器侧的整合（由 Rust 在启动前调用）。
