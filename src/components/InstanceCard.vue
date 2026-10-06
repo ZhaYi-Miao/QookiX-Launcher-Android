@@ -14,7 +14,7 @@ import type { Instance } from "../types";
 
 /** 手机形态的实例卡：竖版（图标/名称/版本在上，启动键通栏在下），
  *  其余操作收进「更多」底部弹层 —— 桌面的悬停菜单、右键菜单在手机上都没法用。 */
-const props = defineProps<{ instance: Instance }>();
+const props = defineProps<{ instance: Instance; movable?: boolean }>();
 const emit = defineEmits<{ move: [instance: Instance] }>();
 
 const router = useRouter();
@@ -83,7 +83,7 @@ async function remove() {
       <div class="sheet">
         <div class="stitle">{{ instance.name }}</div>
         <button class="act" @click="openDetail">{{ $t("instance-detail.files") }}</button>
-        <button class="act" @click="move">{{ $t("instance-card.move-to-group") }}</button>
+        <button v-if="movable !== false" class="act" @click="move">{{ $t("instance-card.move-to-group") }}</button>
         <button class="act danger" @click="remove">{{ $t("instance-card.delete-instance") }}</button>
       </div>
     </app-popup>

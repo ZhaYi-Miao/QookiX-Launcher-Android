@@ -387,9 +387,13 @@ pub struct Settings {
     /// `serde(default)`：旧 settings.json 没有这个字段也能正常读。
     #[serde(default = "default_ui_scale")]
     pub ui_scale: i32,
-    pub show_home_hero: bool,
     pub show_sidebar_collapse_btn: bool,
     pub show_news: bool,
+    /// 首页分区总开关：有下载任务时的进度卡片 / 最近游玩 / 游玩统计。
+    /// 这三个分区本来就只在「有数据」时出现，这些开关让用户能彻底关掉。
+    pub show_home_downloads: bool,
+    pub show_home_recent: bool,
+    pub show_home_stats: bool,
     pub dismissed_update_version: Option<String>,
     pub auto_update: bool,
     pub update_source: String,
@@ -397,41 +401,6 @@ pub struct Settings {
     /// 启动器默认锁定横屏：竖屏下桌面式侧边栏会把内容挤到只剩一条缝。
     #[serde(default = "default_orientation")]
     pub orientation: String,
-    /// 手机导航栏（首页/实例/内容/…/下载/账号）的摆放位置：
-    /// "bottom"（默认，屏幕底部横条）| "left"（屏幕左侧竖栏）。
-    /// 横屏手机可用高度只有 384px 左右，底栏会吃掉约 70px；
-    /// 挪到左侧能把这段高度还给内容区，而横向空间本来就用不完。
-    #[serde(default = "default_nav_position")]
-    pub nav_position: String,
-    /// 左侧导航栏相对屏幕左缘的避让宽度（px，0 = 紧贴边缘）。
-    /// 每台机器的挖孔/刘海位置与宽度都不一样，自动读取的安全区不一定符合
-    /// 用户审美（有人宁可让图标被挡住一点也要贴边），所以交给用户拖滑块自己对齐。
-    #[serde(default = "default_nav_offset")]
-    pub nav_offset: i32,
-    /// 左侧导航栏里「挖孔空档」的起始位置（px，相对栏顶。0 = 不启用）。
-    /// 栏体贴边后图标分两段：挖孔区上下各一段，中空的一块给摄像头让位。
-    /// 位置由用户在栏右侧的把手上**竖向拖动**决定。
-    #[serde(default = "default_nav_gap_top")]
-    pub nav_gap_top: i32,
-    /// 挖孔空档的高度（px，0 = 不挖）。
-    #[serde(default = "default_nav_gap_h")]
-    pub nav_gap_h: i32,
-    /// 挖孔 / 刘海的类型（用户按**竖屏**方向描述，横竖屏换算由前端做）：
-    ///   "auto"    默认：完全跟随系统 env() 安全区（大多数机型够用）；
-    ///   "none"    强制 0（系统误报时用）；
-    ///   "center"  中置挖孔；"topleft" 左上角打孔；"topright" 右上角打孔；
-    ///   "notch"   刘海 —— 长短不一，避让宽度用 `nav_offset`（用户自定）。
-    /// 打孔的尺寸彼此都差不多，统一让开 44px（约一个图标的位置）即可，
-    /// 不必让用户抠像素；只有刘海需要自定义宽度。
-    #[serde(default = "default_nav_cutout")]
-    pub nav_cutout: String,
-    /// 触控目标大小档位：
-    ///   "compact"（默认）保持项目原有的紧凑尺寸，不做任何干预；
-    ///   "standard" 交互元素最小 40px；"large" 48px。
-    /// 手机上手点不准时让用户自己放大 —— 规则见前端 `styles.css` 的
-    /// `:root[data-touch=...]` 一段，值由 App.vue 写到 <html> 上。
-    #[serde(default = "default_touch_target")]
-    pub touch_target: String,
 }
 
 fn default_translate_provider() -> String {
@@ -444,30 +413,6 @@ fn default_ui_scale() -> i32 {
 
 fn default_orientation() -> String {
     "landscape".to_string()
-}
-
-fn default_nav_position() -> String {
-    "bottom".to_string()
-}
-
-fn default_nav_offset() -> i32 {
-    0
-}
-
-fn default_nav_cutout() -> String {
-    "auto".to_string()
-}
-
-fn default_touch_target() -> String {
-    "compact".to_string()
-}
-
-fn default_nav_gap_top() -> i32 {
-    0
-}
-
-fn default_nav_gap_h() -> i32 {
-    0
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -71,7 +71,9 @@ fn count_files(dir: &std::path::Path) -> usize {
 pub async fn check_instance_files(instance_id: String) -> Result<InstanceFileReport, String> {
     crate::fsutil::validate_id(&instance_id, "实例")?;
     let dir = data_dir().await?;
-    let inst_dir = dir.join("instances").join(&instance_id);
+    let inst_dir = crate::settings::instance_dir(&instance_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let json_path = inst_dir.join("instance.json");
     if !json_path.exists() {
         return Err("实例不存在".to_string());

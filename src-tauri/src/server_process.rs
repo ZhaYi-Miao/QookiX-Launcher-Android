@@ -210,7 +210,7 @@ pub fn inspect_server_core_manifest(id: String) -> String {
  * `org.bukkit.craftbukkit.v1_21_R1.Main`）。硬编码列表必然漏。
  * 读 manifest 是唯一稳定做法。
  */
-fn read_main_class(jar: &Path) -> Option<String> {
+pub(crate) fn read_main_class(jar: &Path) -> Option<String> {
     let file = std::fs::File::open(jar).ok()?;
     let mut zip = zip::ZipArchive::new(file).ok()?;
     let mut mf = zip.by_name("META-INF/MANIFEST.MF").ok()?;
@@ -607,11 +607,25 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                 "-Dfile.encoding=UTF-8".to_string(),
                 // 服务端不需要窗口
                 "-Djava.awt.headless=true".to_string(),
+                // **让 Paper 跳过它自己的 Java 版本校验**。新版 Paper（26.x）会检查运行时的
+                // 版本串是不是「正式发布版」，而安卓这套自带 JRE 报的是 `25.0.5-internal`
+                // 这种自定义后缀，于是直接被拒：
+                //   Unsupported Java detected (25.0.5-internal) … Only general availability
+                //   versions of Java are supported.
+                // （真机 26.3 实测。）这个属性是 Paper 提供的官方开关，设置后它只警告不拦。
+                // 老版本核心没有这个检查，属性无副作用。
+                "-DPaper.IgnoreJavaVersion=true".to_string(),
             ];
             // JvmLauncher::launch 成功时会把自己的 jre_home 写进内部 state，
             // /stop 时 JvmLauncher::shutdown() 直接从那里取，不用在这里传。
             let mut all_jvm = vec![format!("-Duser.dir={}", spec2.work_dir)];
             all_jvm.extend(jvm_args);
+
+            // 注意：**不要**给 paperclip 加 `-javaagent:<paperclip.jar>`。
+            // 它看起来是对的（paperclip 的报错就是这么提示的），但在 JRE-25 安卓版上
+            // 会在 `libinstrument.so` 里 SIGSEGV（Fatal signal 11），整个 :server 进程
+            // 带崩且不留任何日志。正确做法是让 paperclip 跑完「打补丁」这一步，然后
+            // 直接用 `cache/patched_*.jar` 启动 —— 见 servers.rs::patched_core_jar。
 
             tracing::info!("[server] 启动 JVM: {} -cp jar {}", spec2.jre_home, main_class);
             let r = crate::jvm_launcher::JvmLauncher::launch(

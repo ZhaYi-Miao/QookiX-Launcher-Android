@@ -24,6 +24,21 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // 签名：密钥经环境变量注入（QOOKIX_KEYSTORE 等 4 个；CI 由 GitHub Secrets 提供）。
+    // **debug 也复用同一把钥匙是有意的**：这样 debug 包能直接 `adb install -r`
+    // 覆盖已装的 release 包，不必先卸载 —— 卸载会连带清掉 /data 下的实例与存档。
+    // 没有注入密钥时两边都退回默认 debug 签名（本机新环境/他人克隆仓库行为不变）。
+    val ciKeyStorePath = System.getenv("QOOKIX_KEYSTORE") ?: ""
+    signingConfigs {
+        if (ciKeyStorePath.isNotEmpty() && file(ciKeyStorePath).exists()) {
+            create("ci") {
+                storeFile = file(ciKeyStorePath)
+                storePassword = System.getenv("QOOKIX_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("QOOKIX_KEY_ALIAS")
+                keyPassword = System.getenv("QOOKIX_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -35,6 +50,7 @@ android {
                 jniLibs.keepDebugSymbols.add("*/x86/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
             }
+            signingConfigs.findByName("ci")?.let { signingConfig = it }
         }
         getByName("release") {
             isMinifyEnabled = true
@@ -43,20 +59,7 @@ android {
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
                     .toList().toTypedArray()
             )
-            // CI 签名：密钥经 GitHub Secrets 注入（QOOKIX_KEYSTORE 等 4 个环境变量）；
-            // 本地/无密钥环境退回 debug 签名，保证产物可直接安装。
-            // 密钥文件绝不入库 —— 只存在于本机 ~/.android 与 CI 的临时目录。
-            val ksPath = System.getenv("QOOKIX_KEYSTORE") ?: ""
-            if (ksPath.isNotEmpty() && file(ksPath).exists()) {
-                signingConfig = signingConfigs.create("ci") {
-                    storeFile = file(ksPath)
-                    storePassword = System.getenv("QOOKIX_KEYSTORE_PASSWORD")
-                    keyAlias = System.getenv("QOOKIX_KEY_ALIAS")
-                    keyPassword = System.getenv("QOOKIX_KEY_PASSWORD")
-                }
-            } else {
-                signingConfig = signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.findByName("ci") ?: signingConfigs.getByName("debug")
         }
     }
     // 原生库压缩打包：APK 里的 .so 默认是**不压缩**存储的（为了直接 mmap），

@@ -127,15 +127,18 @@ pub fn create_hosted_server(
     core: String,
     mc_version: String,
 ) -> Result<ServerConfig, String> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("请填写服务器名称".into());
-    }
     let core_parsed = ServerCore::parse(&core).ok_or_else(|| "不支持的服务端核心".to_string())?;
     let version = mc_version.trim().to_string();
     if version.is_empty() {
         return Err("请选择游戏版本".into());
     }
+    // 名称留空是允许的：前端输入框的提示就是「留空则自动命名」，
+    // 这里与 `instances::create_instance` 用同一套约定 —— 兜底成游戏版本号，
+    // 否则会建出一个名字为空的服务器，列表里看着像空白项。
+    let name = match name.trim() {
+        "" => version.clone(),
+        given => given.to_string(),
+    };
     // id 用时间戳+名随机段，避免重名冲突
     let id = format!("srv_{}_{}", now_secs(), uuid::Uuid::new_v4().simple());
     let (min_mem, max_mem) = suggest_memory_mb();
@@ -358,7 +361,6 @@ pub fn launch_jar_name(dir: &Path, core: ServerCore) -> String {
 }
 
 // ── 局域网「别人的服务器」列表与 ping（沿用原模块，改名避免与上面的 list_servers 冲突）──
-use crate::settings::get_data_dir;
 use serde_json::Value;
 use std::io::Read;
 use tokio::fs;
@@ -366,8 +368,9 @@ use tokio::fs;
 /// 读取某个实例的多人服务器列表（servers.json 优先，回退到 servers.dat）
 pub async fn list_remote_servers(instance_id: &str) -> Result<Vec<ServerEntry>, String> {
     crate::fsutil::validate_id(instance_id, "实例")?;
-    let data_dir = get_data_dir().await.map_err(|e| e.to_string())?;
-    let dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let dir = crate::settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 现代 Minecraft (1.20.5+) 使用 servers.json
     let json_path = dir.join("servers.json");
@@ -461,6 +464,59 @@ const PAPERMC_API: &str = "https://fill.papermc.io/v3/projects";
 const PAPERMC_UA: &str =
     "QookiX-Launcher/1.1.0 (https://github.com/weimosheng/QookiX-Launcher)";
 
+/// Paper 支持的 MC 版本（新→旧，只留正式版）。
+///
+/// v3 项目接口把版本**按小版本分组**返回：
+///   `{"1.21": ["1.21.11", "1.21.11-rc3", …, "1.21"], "1.8": ["1.8.8"], …}`
+/// 组间与组内都是新→旧，但 `serde_json` 的 Map 默认按 key 排序 —— 所以这里自己按
+/// 版本号数值段重排一遍，免得下拉里出现「1.10 排在 1.9 后面」这种顺序。
+///
+/// **为什么要这份清单**：Paper 并不支持所有 MC 版本，1.8 那条线只有 `1.8.8`
+/// （`1.8.9` 不存在；两者客户端协议相同，1.8.9 的客户端照样能进 1.8.8 服务器）。
+/// 拿 1.8.9 去问 builds 接口只会 404，所以创建服务器时用这份清单限制下拉，
+/// 从源头上就选不到「没有构建」的版本。
+#[tauri::command]
+pub async fn list_paper_versions() -> Result<Vec<String>, String> {
+    let meta = meta_client().await?;
+    let url = format!("{PAPERMC_API}/paper");
+    let body = get_json_retry(&meta, &url, 4)
+        .await
+        .map_err(|e| format!("获取 Paper 版本列表失败: {e}"))?;
+    let mut out: Vec<String> = Vec::new();
+    if let Some(groups) = body.get("versions").and_then(|v| v.as_object()) {
+        for arr in groups.values() {
+            let Some(list) = arr.as_array() else { continue };
+            for v in list {
+                if let Some(s) = v.as_str() {
+                    // rc / pre 不是开服该选的版本
+                    if !s.contains('-') {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("Paper 没有返回任何版本".to_string());
+    }
+    out.sort_by(|a, b| ver_key(b).cmp(&ver_key(a)));
+    out.dedup();
+    Ok(out)
+}
+
+/// 版本号 → 可比较的数字段（`"1.21.11"` → `[1, 21, 11]`）。
+/// 直接比字符串会把 `1.9` 排在 `1.21` 后面。
+fn ver_key(v: &str) -> Vec<i64> {
+    v.split('.').map(|p| p.parse::<i64>().unwrap_or(-1)).collect()
+}
+
+/// Paper 支持版本里与 `want` 同一条小版本线的那个（`1.8.9` → `1.8.8`）。
+async fn nearest_paper_version(want: &str) -> Option<String> {
+    let list = list_paper_versions().await.ok()?;
+    let (minor, _) = want.rsplit_once('.')?;
+    list.into_iter().find(|v| v.starts_with(&format!("{minor}.")))
+}
+
 /// 原版服务端核心的下载 URL：走官方 version manifest。
 /// Android 侧没有 mcmeta 模块，这里直接用 piston 元数据。
 const PISTON_META: &str = "https://piston-meta.mojang.com/v1/packages";
@@ -538,20 +594,71 @@ async fn get_json_retry(
  * - **断点续传**：既然每次连接只给 ~1.8MB，就用 `Range: bytes=N-` 一段段接上，
  *   而不是每次从 0 开始（那样永远下不完）。
  */
+/// 算文件的 sha256（下载校验 / 「已经下好就跳过」都用它）。
+/// 同步读，核心 jar 也就几十 MB。
+fn file_sha256(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read as _;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut rf = std::fs::File::open(path)?;
+    loop {
+        let n = rf.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+
+/// 算文件的 sha1（官方原版核心只给 sha1）
+fn file_sha1(path: &Path) -> std::io::Result<String> {
+    use sha1::{Digest, Sha1};
+    use std::io::Read as _;
+    let mut h = Sha1::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut rf = std::fs::File::open(path)?;
+    loop {
+        let n = rf.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+
 async fn download_verified(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
     expect_sha: Option<&str>,
 ) -> Result<u64, String> {
-    use sha2::{Digest, Sha256};
     use std::io::Write as _;
     use tokio::io::AsyncWriteExt;
 
     if let Some(p) = dest.parent() {
-        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(p).map_err(|e| format!("创建下载目录失败: {e}"))?;
     }
     let part = dest.with_extension("part");
+
+    // 已经下好且校验通过就不要再下一遍：用户点两次「安装核心」，或建服后台自动装完
+    // 用户又点一次，都不该重下几十 MB。顺手把可能残留的 .part 清掉。
+    if let Some(want) = expect_sha {
+        if let Ok(meta) = std::fs::metadata(dest) {
+            let ok = meta.len() > 0
+                && file_sha256(dest)
+                    .map(|h| h.eq_ignore_ascii_case(want))
+                    .unwrap_or(false);
+            if ok {
+                tracing::info!("[core] 目标已存在且 sha256 匹配（{} 字节），跳过下载", meta.len());
+                let _ = std::fs::remove_file(&part);
+                return Ok(meta.len());
+            }
+        }
+    }
+
     // 最多 200 段：1.8MB × 200 ≈ 360MB，足够任何核心
     const MAX_CHUNKS: usize = 200;
 
@@ -571,6 +678,19 @@ async fn download_verified(
         };
 
         let status = resp.status();
+        // 416 = 这个 Range 起点不合法（分片已经 ≥ 整个文件大小，通常意味着分片里的内容
+        // 是坏的重下过、或者被别的并发下载动过）。**不能当致命错误** ——
+        // 否则「重试」永远停在「HTTP 416 Range Not Satisfiable」上，用户再也装不成核心。
+        // 删掉分片、下一轮从 0 重下即可；have == 0 时已经是干净的起点，说明这个源
+        // 连 plain Range 都不接受，那才是真失败。
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            if have == 0 {
+                return Err(format!("下载失败: HTTP {status}"));
+            }
+            tracing::warn!("[core] Range bytes={have}- 被拒（416），删掉分片从头重下");
+            let _ = std::fs::remove_file(&part);
+            continue;
+        }
         if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
             return Err(format!("下载失败: HTTP {status}"));
         }
@@ -587,7 +707,7 @@ async fn download_verified(
             .write(true)
             .open(&part)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("打开分片失败: {e}"))?;
         let mut resp = resp;
         let mut got = 0u64;
         // **关键**：连接中途断开（`error decoding response body`）是这里的常态，
@@ -634,20 +754,9 @@ async fn download_verified(
         // 有 sha256 就以它为准判完成
         if let Some(want) = expect_sha {
             if total > 0 {
-                let mut h = Sha256::new();
-                let mut buf = vec![0u8; 256 * 1024];
-                let mut rf = std::fs::File::open(&part).map_err(|e| e.to_string())?;
-                use std::io::Read as _;
-                loop {
-                    let n = rf.read(&mut buf).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
-                    }
-                    h.update(&buf[..n]);
-                }
-                let got_sha = format!("{:x}", h.finalize());
+                let got_sha = file_sha256(&part).map_err(|e| format!("校验分片失败: {e}"))?;
                 if got_sha.eq_ignore_ascii_case(want) {
-                    std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+                    std::fs::rename(&part, dest).map_err(|e| format!("重命名分片失败: {e}"))?;
                     return Ok(total);
                 }
                 tracing::warn!(
@@ -663,7 +772,7 @@ async fn download_verified(
             return Err("下载中断：服务器没有返回任何数据".to_string());
         } else if total > 0 && !append {
             // 无 sha256 可校验时，用「本次读完了整个响应」作为完成判据
-            let _ = std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+            let _ = std::fs::rename(&part, dest).map_err(|e| format!("重命名分片失败: {e}"))?;
             return Ok(total);
         }
     }
@@ -684,9 +793,22 @@ async fn download_paper(
 ) -> Result<String, String> {
     let url = format!("{PAPERMC_API}/paper/versions/{mc_version}/builds");
     let meta = meta_client().await?;
-    let body = get_json_retry(&meta, &url, 4)
-        .await
-        .map_err(|e| format!("获取 Paper 版本信息失败: {e}"))?;
+    let body = match get_json_retry(&meta, &url, 4).await {
+        Ok(b) => b,
+        Err(e) => {
+            // Paper 没有这个版本时 builds 接口返回 404。别把「HTTP 404 Not Found」
+            // 原样甩给用户 —— 说清是「这个版本没有构建」，并指出最接近的可用版本
+            // （1.8.9 → 1.8.8 是最常见的一例：1.8 那条线只有 1.8.8）。
+            return Err(if e.contains("404") {
+                match nearest_paper_version(mc_version).await {
+                    Some(n) => format!("Paper 没有 {mc_version} 的构建，最接近的可用版本是 {n}"),
+                    None => format!("Paper 没有 {mc_version} 的构建，换个版本或改用原版核心"),
+                }
+            } else {
+                format!("获取 Paper {mc_version} 的构建信息失败: {e}")
+            });
+        }
+    };
 
     let builds = body
         .as_array()
@@ -833,14 +955,26 @@ async fn download_sha1(
     dest: &Path,
     want: Option<&str>,
 ) -> Result<(), String> {
-    use sha1::{Digest, Sha1};
-    use std::io::{Read, Write};
     use tokio::io::AsyncWriteExt;
 
     if let Some(p) = dest.parent() {
-        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(p).map_err(|e| format!("创建下载目录失败: {e}"))?;
     }
     let part = dest.with_extension("part");
+    // 已经下好且校验通过就跳过（同 download_verified：重复点「安装核心」不该重下几十 MB）
+    if let Some(w) = want {
+        if let Ok(meta) = std::fs::metadata(dest) {
+            let ok = meta.len() > 0
+                && file_sha1(dest)
+                    .map(|h| h.eq_ignore_ascii_case(w))
+                    .unwrap_or(false);
+            if ok {
+                tracing::info!("[core] 原版核心已存在且 sha1 匹配，跳过下载");
+                let _ = std::fs::remove_file(&part);
+                return Ok(());
+            }
+        }
+    }
     for attempt in 1..=200u32 {
         let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
         let resp = client
@@ -850,6 +984,15 @@ async fn download_sha1(
             .await
             .map_err(|e| format!("下载失败: {e}"))?;
         let status = resp.status();
+        // 416：分片起点不合法（分片 ≥ 整个文件）→ 删掉重下，别当致命错误（见 download_verified）
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            if have == 0 {
+                return Err(format!("HTTP {status}"));
+            }
+            tracing::warn!("[core] 原版 Range bytes={have}- 被拒（416），删掉分片从头重下");
+            let _ = std::fs::remove_file(&part);
+            continue;
+        }
         if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
             return Err(format!("HTTP {status}"));
         }
@@ -863,7 +1006,7 @@ async fn download_sha1(
             .write(true)
             .open(&part)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("打开分片失败: {e}"))?;
         let mut resp = resp;
         let mut got = 0u64;
         loop {
@@ -884,19 +1027,9 @@ async fn download_sha1(
             return Err("服务器没有返回数据".to_string());
         }
         if let Some(w) = want {
-            let mut h = Sha1::new();
-            let mut buf = vec![0u8; 256 * 1024];
-            let mut rf = std::fs::File::open(&part).map_err(|e| e.to_string())?;
-            loop {
-                let n = rf.read(&mut buf).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                h.update(&buf[..n]);
-            }
-            let got_sha = format!("{:x}", h.finalize());
+            let got_sha = file_sha1(&part).map_err(|e| format!("校验分片失败: {e}"))?;
             if got_sha.eq_ignore_ascii_case(w) {
-                std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+                std::fs::rename(&part, dest).map_err(|e| format!("重命名分片失败: {e}"))?;
                 return Ok(());
             }
             tracing::warn!("[core] 原版 sha1 不符，续传（{total} 字节）");
@@ -904,7 +1037,7 @@ async fn download_sha1(
                 let _ = std::fs::remove_file(&part);
             }
         } else {
-            std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+            std::fs::rename(&part, dest).map_err(|e| format!("重命名分片失败: {e}"))?;
             return Ok(());
         }
     }
@@ -953,9 +1086,21 @@ fn fabric_launcher_jar(dir: &Path) -> Option<String> {
 
 // ── Tauri 命令：核心安装 ───────────────────────────────────────────────
 
+lazy_static::lazy_static! {
+    /// 核心安装**串行化**（同一时间只跑一个）。
+    ///
+    /// 两条并发的安装会抢同一个 `server.part`：A 下完把分片 rename 成 `server.jar` 之后，
+    /// B 再去 rename 同一个分片就拿到「No such file or directory (os error 2)」。
+    /// 真机上很好触发 —— 建服时前端会**后台自动装**一次（`void servers.installCore()`，
+    /// 不 await、失败也不提示），用户进服务器详情页看到「安装核心」按钮又会点第二次。
+    /// 后进来的这次会等前一次结束，再靠「已经下好就跳过」瞬间返回。
+    static ref INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+}
+
 /// 下载/安装服务端核心。Paper 与原版是单文件；Fabric 先下安装器（Stage 3 再接安装流程）。
 #[tauri::command]
 pub async fn install_hosted_server_core(id: String) -> Result<String, String> {
+    let _guard = INSTALL_LOCK.lock().await;
     let s = get_server(&id)?;
     let client = http_client().await?;
     let res = match s.core {
@@ -1185,8 +1330,21 @@ fn ipc_status(port: u16, token: &str) -> Option<String> {
 pub fn hosted_server_log(id: String, lines: Option<usize>) -> Result<Vec<String>, String> {
     let dir = server_dir(&id)?;
     // Paper 1.17+ 的日志布局
-    let path = dir.join("logs").join("latest.log");
-    let path = if path.exists() { path } else { dir.join("latest.log") };
+    let paper = dir.join("logs").join("latest.log");
+    let paper = if paper.exists() { paper } else { dir.join("latest.log") };
+    // Paper 自己的日志**只有服务端真正跑起来才会有**。核心缺少 `-javaagent`、
+    // JRE 不兼容这类「JVM 起来就死」的情况它一行都不写，唯一有内容的是
+    // `server_process.rs` 把 stdout/stderr 重定向出来的 `jvm-stdout.log`。
+    // 不回退到它，用户看到的就是「提示已启动、日志却一片空白」，完全查不到原因。
+    let jvm_out = dir.join("jvm-stdout.log");
+    let has_paper_log = paper.metadata().map(|m| m.len() > 0).unwrap_or(false);
+    let path = if has_paper_log {
+        paper
+    } else if jvm_out.exists() {
+        jvm_out
+    } else {
+        paper
+    };
     let text = std::fs::read_to_string(path).map_err(|e| format!("读日志失败: {e}"))?;
     let n = lines.unwrap_or(200).min(2000);
     let all: Vec<&str> = text.lines().collect();
@@ -1255,14 +1413,38 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
     if !eula.lines().any(|l| l.trim() == "eula=true") {
         return Err("请先在「服务器设置」里勾选同意 Minecraft EULA".to_string());
     }
+    // 启动的唯一判据是 eula.txt（Paper 也只认它），而界面开关读的是 server.json.eula。
+    // 两者可能不一致（手改过 eula.txt、或早期版本写下的），于是出现
+    // 「详情页提示未同意、服务器却正常在跑」这种自相矛盾。以 eula.txt 为准同步回去。
+    if !s.eula {
+        let mut fixed = s.clone();
+        fixed.eula = true;
+        let _ = save_server(&fixed);
+    }
     if server_runtime(&id).map(|r| r.running) == Some(true) {
         return Err("这个服务器已经在运行了".to_string());
     }
+    // 新建的服务器端口都是默认的 25565：另一台在跑时这台一定 bind 失败，而 Paper 只在
+    // 自己的日志深处抛一句 "Address already in use"，用户根本看不出是端口冲突。
+    // 这里提前挑明，并说清去哪儿改。
+    for other in list_servers() {
+        if other.id == id || other.port != s.port {
+            continue;
+        }
+        if server_runtime(&other.id).map(|r| r.running).unwrap_or(false) {
+            return Err(format!(
+                "端口 {} 已被「{}」占用（它正在运行）。\n先停掉它，或在设置里给这台换一个端口。",
+                s.port, other.name
+            ));
+        }
+    }
     ensure_rcon_props(&dir, s.port)?;
+    // 从这一刻起把「正在干什么」报给界面（按钮上直接显示），别让用户对着转圈白等
+    crate::progress::emit_server_stage(&id, "正在检查服务端配置…");
     let jre_home = find_server_jre()?;
-    let jar = dir.join("server.jar");
-    let jar = if jar.exists() {
-        jar
+    let base_jar = dir.join("server.jar");
+    let base_jar = if base_jar.exists() {
+        base_jar
     } else {
         std::fs::read_dir(&dir)
             .ok()
@@ -1277,12 +1459,128 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
             .ok_or_else(|| "找不到服务端核心 jar".to_string())?
     };
     let mem = s.max_memory_mb.clamp(512, 2048);
+
+    // **旧版** paperclip 包装器（主类 `io.papermc.paperclip.Paperclip`，1.8.x~1.16 那批）
+    // 不能直接当服务端跑：它要把「补丁后的服务端 jar」用 Instrumentation 挂进 classpath，
+    // 而我们是「-cp + 主类」启动的，拿不到 Instrumentation 就会退出（日志里那句
+    // "Unable to retrieve Instrumentation API…"）。补丁产物在 `cache/patched_*.jar`，
+    // 那份才是能直接启动的服务端 jar，所以这类核心分两步走：
+    //   ① 先跑一轮 paperclip（它打完补丁会**正常退出**）→ 等补丁 jar 落盘；
+    //   ② 停掉那一轮，用补丁 jar 正式启动。
+    // **别加 `-javaagent:<paperclip.jar>`**（paperclip 的报错就是这么提示的）：实测
+    // JRE-25 安卓版会在 `libinstrument.so` 里 SIGSEGV，整个 :server 进程带崩、什么都不留。
+    //
+    // **新版** paperclip（主类 `io.papermc.paperclip.Main`，26.x 这类）不需要这套：
+    // 它自己就能下原版包、打补丁、再用 `org.bukkit.craftbukkit.Main` 起服（26.3 真机实测）。
+    // 对它走两步纯属白等 —— 它不产出 `cache/patched_*.jar`，会把等待撑满整个超时。
+    let needs_patch = needs_patch_jar(&base_jar);
+    if needs_patch && patched_core_jar(&dir).is_none() {
+        tracing::info!("[core] 首次启动旧版 Paper：先让 paperclip 生成补丁 jar（会多花十几秒）");
+        crate::progress::emit_server_stage(&id, "首次启动：正在生成服务端补丁（约一分钟）…");
+        write_launch_spec(&id, &dir, &jre_home, &base_jar, mem, s.min_memory_mb)?;
+        crate::android_bridge::start_server_process(&id)?;
+        let mut patched: Option<PathBuf> = None;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            if let Some(p) = patched_core_jar(&dir) {
+                patched = Some(p);
+                break;
+            }
+            // 这一轮的 JVM 已经退出（paperclip 打完补丁就退，或者干脆失败）→ 不用把 60 秒等满
+            let exited = std::fs::read_to_string(dir.join("runtime.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok())
+                .map(|i| i.exit.is_some())
+                .unwrap_or(false);
+            if exited {
+                break;
+            }
+        }
+        if patched.is_none() {
+            return Err(start_failed_hint(&id, "核心初始化失败：paperclip 没能生成补丁 jar"));
+        }
+        tracing::info!("[core] 补丁 jar 已生成");
+        // 这一轮的进程即使还活着也不再有用（paperclip 自己起不了服），先停掉再重新拉起。
+        let _ = crate::android_bridge::stop_server_process(&id);
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    }
+
+    // 旧版 paperclip 用补丁 jar 启动；其余核心（原版 / Fabric / 新版 paperclip）直接用原 jar。
+    let jar = if needs_patch {
+        patched_core_jar(&dir).unwrap_or(base_jar)
+    } else {
+        base_jar
+    };
+    write_launch_spec(&id, &dir, &jre_home, &jar, mem, s.min_memory_mb)?;
+    crate::progress::emit_server_stage(&id, "正在启动服务端进程…");
+    let log_mark = last_log_line(&id);
+    crate::android_bridge::start_server_process(&id)?;
+    // 「进程拉起来了」不等于「服能跑」：核心/JRE 不匹配、内存参数非法都会让它几秒内就死。
+    // 原来这里直接返回 pid，前端就弹「服务器已启动」而日志还是空的 —— 用户完全不知道出了什么事。
+    if !wait_server_alive(&id, log_mark.as_deref()).await {
+        return Err(start_failed_hint(&id, "服务端启动后立刻退出了"));
+    }
+    // uuid 与 pid 都从 runtime.json 读（Kotlin 写的）
+    let pid = std::fs::read_to_string(dir.join("runtime.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok())
+        .map(|i| i.pid)
+        .unwrap_or(0);
+    Ok(serde_json::json!({ "pid": pid }))
+}
+
+/// 启动失败时给用户看的**短**消息：一句原因 + 一句指点，最多再带一行关键输出。
+///
+/// 之前把日志尾巴 10 行整段塞进错误里，弹到手机屏幕上根本放不下（用户原话：
+/// 「非常非常长的一个报错」）。完整输出在「日志」页，那里能滚动、能选中复制。
+fn start_failed_hint(id: &str, what: &str) -> String {
+    let line = hosted_server_log(id.to_string(), Some(12))
+        .ok()
+        .and_then(|lines| {
+            // 从后往前找第一句「像错误」的话：跳过空行、纯堆栈行与日志分隔线
+            let skip = |l: &String| {
+                let t = l.trim();
+                t.is_empty()
+                    || t.starts_with("at ")
+                    || t.starts_with("...")
+                    || t.starts_with("===")
+                    || t.starts_with('#')
+            };
+            lines.iter().rev().find(|l| !skip(l)).cloned()
+        })
+        .map(|l| l.trim().chars().take(120).collect::<String>())
+        .unwrap_or_default();
+    if line.is_empty() {
+        format!("{what}。\n完整输出见「日志」页。")
+    } else {
+        format!("{what}。\n{line}\n（完整输出见「日志」页）")
+    }
+}
+
+/// 这个核心是不是**旧版** paperclip 包装器（需要先产出补丁 jar 才能启动）。
+/// 旧版主类最后一段是 `Paperclip`（`io.papermc.paperclip.Paperclip`）；
+/// 新版是 `Main`（`io.papermc.paperclip.Main`），能自己打完补丁接着起服。
+fn needs_patch_jar(jar: &Path) -> bool {
+    crate::server_process::read_main_class(jar)
+        .map(|c| c.rsplit('.').next().unwrap_or("").eq_ignore_ascii_case("paperclip"))
+        .unwrap_or(false)
+}
+
+/// 写 `launch.json`（`:server` 进程启动时读它）
+fn write_launch_spec(
+    id: &str,
+    dir: &Path,
+    jre_home: &str,
+    jar: &Path,
+    xmx_mb: u32,
+    xmin_mb: u32,
+) -> Result<(), String> {
     let spec = crate::server_process::LaunchSpec {
-        id: id.clone(),
-        jre_home,
+        id: id.to_string(),
+        jre_home: jre_home.to_string(),
         jar: jar.to_string_lossy().to_string(),
-        xmx_mb: mem,
-        xmin_mb: s.min_memory_mb,
+        xmx_mb,
+        xmin_mb,
         work_dir: dir.to_string_lossy().to_string(),
         args: vec!["nogui".to_string()],
         token: crate::server_process::new_token(),
@@ -1292,15 +1590,77 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
         serde_json::to_string_pretty(&spec).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    crate::android_bridge::start_server_process(&id)?;
-    // 进程刚拉起，pid 要从 runtime.json 读（Kotlin 写的）
-    let pid = read_runtime_io(&id).map(|_| 0).unwrap_or(0);
-    let pid = std::fs::read_to_string(dir.join("runtime.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok())
-        .map(|i| i.pid)
-        .unwrap_or(pid);
-    Ok(serde_json::json!({ "pid": pid }))
+    // 旧的 runtime.json 属于上一次进程：留着会让「这一轮 JVM 是否已退出 / 是否还活着」
+    // 读到过期状态（比如上一轮的 exit 仍在，等待循环会立刻误判本轮已结束）。
+    let _ = std::fs::remove_file(dir.join("runtime.json"));
+    Ok(())
+}
+
+/// 等本次拉起的 JVM 真的活着。
+///
+/// **不能只看 IPC 通不通**：`:server` 的 IPC 线程在 JVM 之前就起来了（见 server_process.rs），
+/// 所以「端口有响应」只说明进程在，JVM 可能已经崩了。`/status` 里的 `jvm` 字段才是真信号
+/// （0 = JVM 还活着/在启动，1 = 已退出）。最多等约 6 秒 —— 快速崩溃（JRE 不兼容等）
+/// 会在这一窗口里被抓到；慢速崩溃由界面轮询与日志兜住。
+/// `mark`：启动**之前**日志的最后一行。重启一台有历史的服务器时，日志里最新的那行
+/// 其实是上一轮留下的（比如停服时的 "Saving chunks…"），不能当成本次的进展报出去。
+async fn wait_server_alive(id: &str, mark: Option<&str>) -> bool {
+    let mut last = mark.unwrap_or("").to_string();
+    for _ in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        if read_runtime_io(id).map(|(p, t)| ipc_jvm_alive(p, &t)) == Some(true) {
+            return true;
+        }
+        // 顺便把日志里最新一行当作「正在做什么」报出去（"Downloading mojang_26.3.jar"、
+        // "Applying patches"、"Preparing spawn area: 61%"……），比一句「启动中」有信息量得多
+        if let Some(line) = last_log_line(id) {
+            if line != last {
+                last = line.clone();
+                crate::progress::emit_server_stage(id, &format!("启动中：{line}"));
+            }
+        }
+    }
+    false
+}
+
+/// 日志里最后一行有内容的话（跳过空行与分隔线），用于「正在做什么」的实时反馈。
+fn last_log_line(id: &str) -> Option<String> {
+    let lines = hosted_server_log(id.to_string(), Some(4)).ok()?;
+    lines
+        .iter()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty() && !l.starts_with("==="))
+        .map(|l| l.chars().take(80).collect())
+}
+
+/// `/status` 里的 `jvm` 字段：0 = JVM 还活着/启动中，1 = 已退出（含优雅停服）。
+fn ipc_jvm_alive(port: u16, token: &str) -> bool {
+    match ipc_status(port, token) {
+        Some(body) => body.contains("\"jvm\":0"),
+        None => false,
+    }
+}
+
+/// paperclip 打好的补丁 jar（`cache/patched_*.jar`）——真正可直接启动的服务端。
+/// 取体积最大的那个，避免旧版本残留被选中。
+fn patched_core_jar(dir: &Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir.join("cache")).ok()?;
+    let mut best: Option<(u64, PathBuf)> = None;
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if !n.starts_with("patched_") || !n.ends_with(".jar") {
+            continue;
+        }
+        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+        if size == 0 {
+            continue;
+        }
+        if best.as_ref().map(|(s, _)| size > *s).unwrap_or(true) {
+            best = Some((size, e.path()));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// 服务器是否在运行（UI 契约：boolean）

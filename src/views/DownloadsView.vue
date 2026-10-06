@@ -4,6 +4,7 @@ import { computed, ref } from "vue";
 import { useMessage } from "../composables/message";
 import { useTasksStore, type TaskEntry } from "../stores/tasks";
 import { fmtBytes, fmtSpeed } from "../utils/format";
+import { taskPercent } from "../utils/task";
 import { api } from "../api";
 import { Button as VanButton, Progress as VanProgress, Tabs as VanTabs, Tab as VanTab } from "vant";
 const tasks = useTasksStore();
@@ -27,12 +28,6 @@ function onTouchEnd(e: TouchEvent) {
   const dy = e.changedTouches[0].clientY - touchY;
   if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
   activeTab.value = activeTab.value === "active" ? "finished" : "active";
-}
-
-function pct(t: TaskEntry): number {
-  if (t.bytesTotal > 0) return Math.min(100, Math.round((t.bytesDone / t.bytesTotal) * 100));
-  if (t.stepTotal > 0) return Math.min(100, Math.round((t.stepDone / t.stepTotal) * 100));
-  return 0;
 }
 
 /** 单文件百分比（当前正在下的文件自己有字节数） */
@@ -96,7 +91,7 @@ async function cancel(t: TaskEntry) {
         </van-button>
       </div>
       <div class="stage">{{ t.message || t.stage }}</div>
-      <van-progress :percentage="pct(t)" :show-pivot="false" />
+      <van-progress :percentage="taskPercent(t)" :show-pivot="false" />
       <div class="meta">
         <span v-if="t.bytesTotal">{{ fmtBytes(t.bytesDone) }} / {{ fmtBytes(t.bytesTotal) }}</span>
         <span v-else-if="t.fileTotal">{{ $t("downloads.files-progress", { p1: t.fileDone, p2: t.fileTotal }) }}</span>

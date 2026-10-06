@@ -5,12 +5,17 @@ import { useRouter } from "vue-router";
 import { useInstancesStore } from "../stores/instances";
 import { useAccountsStore } from "../stores/accounts";
 import { usePinsStore } from "../stores/pins";
+import { useTasksStore } from "../stores/tasks";
+import { useSettingsStore } from "../stores/settings";
 
 import { useMessage } from "../composables/message";
-import { Button as VanButton, Swipe as VanSwipe, SwipeItem as VanSwipeItem } from "vant";
-import { loaderBadge } from "../utils/format";
+import { Button as VanButton, Progress as VanProgress, Swipe as VanSwipe, SwipeItem as VanSwipeItem } from "vant";
+import { loaderBadge, fmtSpeed } from "../utils/format";
+import { taskPercent } from "../utils/task";
 import AppIcon from "../components/AppIcon.vue";
 import AppPopup from "../ui/AppPopup.vue";
+import InstanceCard from "../components/InstanceCard.vue";
+import PlaytimeCard from "../components/PlaytimeCard.vue";
 import { IconPlay, IconRepeat, IconPlus } from "../components/icons";
 
 
@@ -20,6 +25,13 @@ const message = useMessage();
 const instances = useInstancesStore();
 const accounts = useAccountsStore();
 const pins = usePinsStore();
+const tasks = useTasksStore();
+const settings = useSettingsStore();
+
+/* 三个分区各自有个总开关（设置 → 首页）；默认都开，关掉就彻底不显示 */
+const showDownloads = computed(() => settings.settings?.show_home_downloads ?? true);
+const showRecent = computed(() => settings.settings?.show_home_recent ?? true);
+const showStats = computed(() => settings.settings?.show_home_stats ?? true);
 
 /**
  * 页面右上动作已废弃：那个位置的按钮会在切页时出现/消失，把账号块挤得左右跳。
@@ -42,6 +54,20 @@ function pickInstance(id: string) {
 
 /** 固定到首页的快捷项（实例被删后自动消失） */
 const pinsHere = computed(() => pins.items.filter((p) => p.target === "home" && instances.get(p.instanceId)));
+
+/** 正在下载/安装的任务：有才显示卡片（数据一直在 tasks store 里收，之前首页没渲染） */
+const activeTasks = computed(() => tasks.taskList.filter((t) => !t.finished));
+
+/**
+ * 最近玩过的实例：上面那张主卡片已经展示了当前选中的实例，这里排除掉避免重复，
+ * 按 last_played 倒序取前 4 个（没有游玩记录的实例不出现）。
+ */
+const recentInstances = computed(() =>
+  instances.instances
+    .filter((i) => !!i.last_played && i.id !== selected.value?.id)
+    .sort((a, b) => (b.last_played ?? 0) - (a.last_played ?? 0))
+    .slice(0, 4)
+);
 
 const greeting = computed(() => {
   const h = new Date().getHours();
@@ -120,6 +146,24 @@ onMounted(() => {
         <button class="switch" @click="showPicker = true"><IconRepeat /></button>
       </section>
 
+      <!-- 正在下载：有任务才出现（整卡可点，进下载页看明细） -->
+      <section v-if="showDownloads && activeTasks.length" class="dl glass" @click="router.push('/downloads')">
+        <div class="dl-top">
+          <span class="dl-title">{{ $t("nav.downloading", { count: activeTasks.length }) }}</span>
+          <span v-if="activeTasks[0].speed > 0" class="dl-speed">{{ fmtSpeed(activeTasks[0].speed) }}</span>
+        </div>
+        <div class="dl-name text-ellipsis">{{ activeTasks[0].source ?? activeTasks[0].message }}</div>
+        <van-progress :percentage="taskPercent(activeTasks[0])" :show-pivot="false" />
+      </section>
+
+      <!-- 最近游玩：复用实例卡片；当前实例已在上面那张主卡片里，这里排除掉 -->
+      <section v-if="showRecent && recentInstances.length">
+        <h2 class="sec">{{ $t("home.recent-played") }}</h2>
+        <div class="grid">
+          <InstanceCard v-for="i in recentInstances" :key="i.id" :instance="i" :movable="false" />
+        </div>
+      </section>
+
       <section v-if="pinsHere.length" class="pins">
         <h2 class="sec">{{ $t("nav.pinned") }}</h2>
         <van-swipe :loop="false" :show-indicators="false" class="pin-swipe">
@@ -137,6 +181,9 @@ onMounted(() => {
           </van-swipe-item>
         </van-swipe>
       </section>
+
+      <!-- 游玩统计：没有游玩记录时组件自身不渲染 -->
+      <PlaytimeCard v-if="showStats" />
     </template>
 
     <div v-else class="empty glass">
@@ -326,5 +373,37 @@ onMounted(() => {
   flex-shrink: 0;
   font-size: 12px;
   color: var(--text-3);
+}
+/* ── 正在下载卡片 ── */
+.dl {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.dl-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dl-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.dl-speed {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.dl-name {
+  font-size: 12px;
+  color: var(--text-3);
+}
+/* ── 最近游玩：与实例页同一套网格（160px 起，窄屏自动落成 1~2 列） ── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
+  gap: 10px;
+  grid-auto-rows: max-content;
 }
 </style>

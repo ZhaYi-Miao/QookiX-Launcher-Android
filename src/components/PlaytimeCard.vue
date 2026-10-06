@@ -23,6 +23,9 @@ onMounted(async () => {
   }
 });
 
+/** 没有任何游玩记录时整张卡不出现（首页/游戏库页挂它都不会留一块空壳） */
+const hasData = computed(() => !loading.value && (stats.value?.totalSeconds ?? 0) > 0);
+
 const top3 = computed(() => (stats.value?.byInstance ?? []).filter((i) => i.seconds > 0).slice(0, 3));
 
 /** 近 30 天柱高（0~1），按最大值归一 */
@@ -45,7 +48,7 @@ function dayLabel(day: number): string {
 </script>
 
 <template>
-  <div class="pt-card glass">
+  <div v-if="hasData" class="pt-card glass">
     <div class="pt-total">
       <div class="pt-label">{{ $t("playtime-card.total-playtime") }}</div>
       <div class="pt-value">{{ loading ? "…" : fmtDuration(stats?.totalSeconds ?? 0) }}</div>

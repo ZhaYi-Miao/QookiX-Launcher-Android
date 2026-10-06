@@ -30,6 +30,11 @@
   /* 卡片/弹层这类「实体面」用面板色（has-bg 时自动变毛玻璃） */
   --van-background-2: var(--panel);
   --van-background-3: var(--panel-hover);
+  /* 浮层「底板」色：弹窗 / 吐司 / 选择器这类**独立浮在页面上**的面板用它。
+     不能直接用 --panel（4% 白）—— 那是「叠在卡片上」的玻璃面，当底板时背后页面的
+     文字会透上来和正文叠在一起，完全读不了（2026-10-06 用户报的就是这个）。
+     94% + 保留一点透明，仍有玻璃感但字看得清。 */
+  --van-layer-surface: color-mix(in srgb, var(--bg-2) 94%, transparent);
   --van-overlay-background: rgba(0, 0, 0, 0.55);
 
   /* ── 按钮 ── */
@@ -71,27 +76,13 @@
   --van-tabbar-item-active-background: transparent;
   --van-tabbar-item-line-height: 1;
 
-  /* ── 左侧竖栏（Sidebar，导航栏位置 = 左侧时用） ── */
-  --van-sidebar-width: var(--nav-w, 64px);
-  --van-sidebar-background: transparent;
-  --van-sidebar-text-color: var(--text-3);
-  --van-sidebar-selected-text-color: var(--accent);
-  --van-sidebar-selected-background: color-mix(in srgb, var(--accent) 16%, transparent);
-  --van-sidebar-selected-border-color: var(--accent);
-  --van-sidebar-selected-border-width: 3px;
-  --van-sidebar-selected-border-height: 60%;
-  --van-sidebar-active-color: var(--panel-hover);
-  --van-sidebar-font-size: 11px;
-  --van-sidebar-padding: 4px 4px;
-  --van-sidebar-line-height: 1.2;
-
   /* ── 弹层 / 底部抽屉（Popup） ──
      底板要比面板稍实一点：完全透明时背后页面的文字会透上来（多人页「创建第一个
      服务器」那段就撞在弹窗正文中间，非常难读）。94% + 模糊，保留玻璃感又能看清字。 */
-  --van-popup-background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+  --van-popup-background: var(--van-layer-surface);
   --van-popup-round-radius: 16px;
   /* ── 对话框（确认/输入） ── */
-  --van-dialog-background: var(--panel);
+  --van-dialog-background: var(--van-layer-surface);
   --van-dialog-radius: 16px;
   --van-dialog-confirm-button-text-color: var(--accent);
   --van-dialog-message-text-color: var(--text-2);
@@ -107,8 +98,8 @@
   --van-action-sheet-item-font-size: 15px;
 
   /* ── 选择器（Picker：手机上替代下拉框） ── */
-  --van-picker-background: var(--panel);
-  --van-picker-group-background: var(--panel);
+  --van-picker-background: var(--van-layer-surface);
+  --van-picker-group-background: var(--van-layer-surface);
   --van-picker-option-text-color: var(--text-1);
   --van-picker-confirm-action-color: var(--accent);
   --van-picker-toolbar-height: 46px;
@@ -131,7 +122,7 @@
   --van-tag-primary-color: var(--accent);
   --van-tag-text-color: var(--text-1);
   --van-badge-background: var(--accent);
-  --van-toast-background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+  --van-toast-background: var(--van-layer-surface);
   --van-toast-text-color: var(--text-1);
   --van-notify-primary-background: var(--accent);
   --van-notify-text-color: #fff;
@@ -190,7 +181,6 @@
 
 /* 触屏不要点击高亮蓝框（安卓 WebView 默认会给可点击元素加一层色块） */
 .van-tabbar-item,
-.van-sidebar-item,
 .van-cell,
 .van-button {
   -webkit-tap-highlight-color: transparent;

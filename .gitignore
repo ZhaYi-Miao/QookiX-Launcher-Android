@@ -80,3 +80,7 @@ dist-plugins/
 
 # 补丁脚本的编译产物（每次重跑会重建）
 scripts/lwjgl-glfw-patch/build/
+
+# ── 本机审计/排查笔记（只给自己看，不入库）────────────────────────
+# 前后端接口审计结论：不是项目文档，属于工作笔记
+docs/AUDIT-frontend-backend.md

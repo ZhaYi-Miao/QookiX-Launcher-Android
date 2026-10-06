@@ -91,9 +91,14 @@ pub async fn ms_start() -> Result<Value> {
         ])
         .send()
         .await
-        .context("请求设备码失败")?;
+        // 带上底层原因（anyhow 的 Display 只打上下文，原来只显示「请求设备码失败」，
+        // 是 DNS / TLS / 超时一概看不出来）
+        .map_err(|e| anyhow::anyhow!("请求设备码失败: {e}"))?;
     let status = resp.status();
-    let body: Value = resp.json().await.context("解析设备码响应失败")?;
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("解析设备码响应失败: {e}"))?;
     if !status.is_success() {
         let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
         if err == "invalid_scope" {
@@ -153,9 +158,18 @@ pub async fn ms_poll() -> Result<Account> {
         ])
         .send()
         .await
-        .context("轮询失败")?;
+        // 网络异常**不能**当作登录失败：用户可能已经在浏览器里授权完了，只是这台手机
+        // 在切前后台时把请求掐断了（进程被系统冻结 / 换网 / 连接被重置）。
+        // 按「尚未授权」返回，前端会隔 5 秒继续轮询；真原因写进诊断日志。
+        .map_err(|e| {
+            crate::util::log_line(&format!("MS 轮询网络异常（继续重试）: {e}"));
+            anyhow::anyhow!(ERR_AUTH_PENDING)
+        })?;
     let status = resp.status();
-    let body: Value = resp.json().await.context("解析令牌响应失败")?;
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("解析令牌响应失败: {e}"))?;
     if !status.is_success() {
         let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
         return Err(anyhow::anyhow!(match err {
@@ -335,7 +349,7 @@ async fn ms_access_token(refresh_token: &str, client_id: &str) -> Result<String>
         ])
         .send()
         .await
-        .context("Failed to get access token")?;
+        .map_err(|e| anyhow::anyhow!("MSA 取令牌请求失败: {e}"))?;
     let status = resp.status();
     let text = resp.text().await.context("读取令牌响应失败")?;
     let body: Value = serde_json::from_str(&text).map_err(|e| {

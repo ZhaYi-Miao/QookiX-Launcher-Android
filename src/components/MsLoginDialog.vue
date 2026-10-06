@@ -47,7 +47,12 @@ function close() {
 
 async function retry() {
   accounts.msError = "";
-  await accounts.startMs();
+  try {
+    await accounts.startMs();
+  } catch (e) {
+    // 拉设备码失败（断网/接口异常）时不捕获会变成未处理的 Promise 拒绝，界面上什么都没有
+    accounts.msError = String(e).replace(/^Error:\s*/, "");
+  }
 }
 </script>
 

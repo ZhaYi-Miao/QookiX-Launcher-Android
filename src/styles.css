@@ -48,11 +48,9 @@ code,
      标签不会换行。试过把上下限也折算，150% 时侧栏从 168 视觉像素缩到 137，
      「常规 / 外观」这类双字标签就竖排了、可视项数也变少 —— 反而更难用，已改回。 */
   --rail-w: clamp(112px, calc(16vw / var(--ui-scale, 1)), 156px);
-  /* 手机导航栏（MobileNav）的尺寸。导航自己用它画盒子，内容区与启动提示浮层
-     按它让出空间 —— 所以两套摆放（底部横条 / 左侧竖栏）必须引用同一组值，
+  /* 底部导航栏（Tabbar）高度。内容区与启动提示浮层按它让出空间，
      改尺寸只改这里，不会出现「导航改了、内容区还按旧高度留白」的错位。 */
   --nav-h: 56px;
-  --nav-w: 64px;
   --accent-deep: #d97f33;
   --accent-hover: #f2a860;
   --accent-soft: rgba(232, 154, 75, 0.14);
@@ -79,6 +77,9 @@ code,
   --bg-0: #0b0d12;
   --bg-1: #10131a;
   --bg-2: #151924;
+  /* 页面背景渐变的最底端颜色（.app-bg 用）。单独一个 token 是为了深浅色各自
+     收尾：浅色主题不能再用写死的深色，否则底部会突兀地变黑。 */
+  --bg-bottom: #0d1016;
   --panel: rgba(255, 255, 255, 0.04);
   --panel-hover: rgba(255, 255, 255, 0.07);
   --border: rgba(255, 255, 255, 0.08);
@@ -123,6 +124,7 @@ code,
   --bg-0: #f7f6f4;
   --bg-1: #eceef2;
   --bg-2: #e2e4ea;
+  --bg-bottom: #e4e6ec;
   --panel: rgba(255, 255, 255, 0.55);
   --panel-hover: rgba(255, 255, 255, 0.75);
   --border: rgba(0, 0, 0, 0.09);
@@ -174,7 +176,7 @@ code,
   background:
     radial-gradient(900px 480px at 85% -10%, var(--accent-12), transparent 60%),
     radial-gradient(700px 420px at -10% 110%, rgba(90, 162, 240, 0.08), transparent 55%),
-    linear-gradient(180deg, var(--bg-0), var(--bg-1) 55%, #0d1016);
+    linear-gradient(180deg, var(--bg-0), var(--bg-1) 55%, var(--bg-bottom));
   color: var(--text-1);
 }
 .app-bg::before {
@@ -429,66 +431,6 @@ a:active {
    发 pointercancel 掐断拖动。Vant 的 `van-slider` 自身已声明 touch-action，故删除。
    若将来换成别的滑杆实现，记得先验证「按住拖动会不会被页面滚动抢走」。 */
 
-/* ── 触控目标大小：**可选档位**，默认不干预 ──────────────────────────────
-   项目里的按钮本来就是桌面尺寸（审计：实例页 47 个、内容页 12 个、皮肤页 8 个
-   交互元素的高/宽 < 34px，如 `.tb-action` 89×28、`.icon-btn` 30×30、页签 42×26），
-   手指点不准。但**默认保持原样** —— 紧凑观感是设计的一部分，
-   要不要放大交给用户：「设置 → 外观 → 触控目标大小」（默认「紧凑」）。
-   档位由 App.vue 写到 <html data-touch="standard|large"> 上。 */
-:root[data-touch="standard"] {
-  --touch-min: 40px;
-}
-:root[data-touch="large"] {
-  --touch-min: 48px;
-}
-/* 通用操作按钮：抬到档位高度；图标类再补宽度 */
-:root[data-touch="standard"] :is(
-    .tb-action, .mini-btn, .icon-btn, .chip, .filter-chip, .group-toggle,
-    .seg button, .ftag, .tabs button, .sk-tabs button, .fm-tools .tool,
-    .fm-row .ok, .fm-row .cancel, .type-card button, .view-switch button,
-    .settings-nav .nav-item
-  ),
-:root[data-touch="large"] :is(
-    .tb-action, .mini-btn, .icon-btn, .chip, .filter-chip, .group-toggle,
-    .seg button, .ftag, .tabs button, .sk-tabs button, .fm-tools .tool,
-    .fm-row .ok, .fm-row .cancel, .type-card button, .view-switch button,
-    .settings-nav .nav-item
-  ) {
-  min-height: var(--touch-min);
-}
-:root[data-touch="standard"] :is(.icon-btn, .fm-tools .tool, .view-switch button),
-:root[data-touch="large"] :is(.icon-btn, .fm-tools .tool, .view-switch button) {
-  min-width: var(--touch-min);
-}
-/* 筛选标签里的清除叉（原来 12×12，手指几乎按不到） */
-:root[data-touch="standard"] .ftag-x,
-:root[data-touch="large"] .ftag-x {
-  min-width: 24px;
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-/* UI 库控件的热区（Vant 的表单行/单元格本来按手机做，这里仍按档位兜一层） */
-:root[data-touch="standard"] :is(.van-field, .van-cell),
-:root[data-touch="large"] :is(.van-field, .van-cell) {
-  min-height: var(--touch-min);
-}
-/* 多行输入要更高（40px 只放得下一行半） */
-:root[data-touch="standard"] textarea.van-field__control,
-:root[data-touch="large"] textarea.van-field__control {
-  min-height: 66px;
-}
-/* 选择器选项：手机上比桌面更容易点错 */
-:root[data-touch="standard"] .van-picker__option,
-:root[data-touch="large"] .van-picker__option {
-  min-height: calc(var(--touch-min) + 2px);
-}
-/* 开关的热区 */
-:root[data-touch="standard"] .van-switch,
-:root[data-touch="large"] .van-switch {
-  min-height: 32px;
-}
 /* ── 顶部加载条（src/loadingBar.ts 自管 DOM）──────────────────────────
    视口顶端一条 2px 细线，走网络请求时可见；颜色跟随主题主色，失败转红。
    这里只管外观，宽度/透明度由脚本控制。 */

@@ -47,9 +47,7 @@ pub async fn launch_game(instance_id: &str, account: Option<&Account>) -> Result
     
     let launch_result = async {
         let data_dir = crate::settings::get_data_dir().await?;
-        let instance_dir = Path::new(&data_dir)
-            .join("instances")
-            .join(instance_id);
+        let instance_dir = crate::settings::instance_dir(instance_id).await?;
 
         let instance_file = instance_dir.join("instance.json");
         let content = fs::read_to_string(&instance_file).await
@@ -778,11 +776,14 @@ fn read_instance_log_sync(instance_id: &str, data_dir: &str) -> anyhow::Result<S
     let launcher_log = Path::new(data_dir)
         .join("logs")
         .join(format!("launch-{instance_id}.log"));
-    let game_log = Path::new(data_dir)
-        .join("instances")
-        .join(instance_id)
-        .join("logs")
-        .join("latest.log");
+    // 实例根可能被用户改到外部（见 settings::game_root），这里走同步版。
+    let game_log = match crate::settings::instances_root_sync() {
+        Some(root) => Path::new(&root)
+            .join(instance_id)
+            .join("logs")
+            .join("latest.log"),
+        None => std::path::PathBuf::new(),
+    };
 
     let mut out = String::new();
     let mut found = false;

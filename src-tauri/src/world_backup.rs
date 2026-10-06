@@ -2,7 +2,6 @@
 //! 备份存放于 `instances/<id>/backups/<world>/`，文件名形如 `<world>-<unix>.zip`。
 
 use crate::models::BackupInfo;
-use crate::settings::get_data_dir;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -51,8 +50,10 @@ fn info_from_file(p: &Path) -> Option<BackupInfo> {
 
 async fn instance_dir(instance_id: &str) -> Result<PathBuf, String> {
     crate::fsutil::validate_id(instance_id, "实例")?;
-    let data_dir = get_data_dir().await.map_err(|e| e.to_string())?;
-    Ok(Path::new(&data_dir).join("instances").join(instance_id))
+    // 走统一的实例根：用户可能已把游戏目录改到外部（见 settings::game_root）。
+    crate::settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 列出某个世界的全部备份（按修改时间倒序）

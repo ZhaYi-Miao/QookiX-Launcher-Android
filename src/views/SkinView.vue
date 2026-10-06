@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage } from "../composables/message";
 import { useSkinRenderer, type AnimationKind } from "../composables/useSkinRenderer";
 import { useAccountsStore } from "../stores/accounts";
@@ -24,7 +24,11 @@ const anim = ref<AnimationKind>("idle");
 const playerInput = ref("");
 const busy = ref(false);
 
-const currentAccount = computed(() => accounts.accounts[0] ?? null);
+/**
+ * 当前账号 = 「正在游玩的账号」（store 的 `current`：先看 settings.selected_account，再退回第一个）。
+ * 以前这里取的是 `accounts.accounts[0]` —— 多账号时皮肤中心显示/应用在**错的账号**上。
+ */
+const currentAccount = computed(() => accounts.current);
 const currentSrc = ref<string | null>(null);
 
 async function loadSaved() {
@@ -99,15 +103,36 @@ async function upload() {
   }
 }
 
-onMounted(async () => {
-  if (currentAccount.value) {
-    try {
-      const s = await api.getOfflineSkin(currentAccount.value.uuid);
+/**
+ * 预览当前账号**正在用的**皮肤。
+ *
+ * 正版账号的皮肤保存在官方服务器上，本地那份 `getOfflineSkin` 是空的 ——
+ * 所以以前进皮肤中心，正版账号永远是空白（只有离线账号能显示）。这里按用户名
+ * 从官方查一张拿来预览（顺带用它返回的 model 把细长/经典也切对，免得应用时改错模型）。
+ */
+async function loadCurrentSkin() {
+  const acc = currentAccount.value;
+  if (!acc) return;
+  try {
+    if (acc.type === "microsoft") {
+      const r = await api.fetchPlayerSkin(acc.username);
+      if (r.data_url) {
+        model.value = r.model === "slim" ? "slim" : "default";
+        await preview(r.data_url);
+      }
+    } else {
+      const s = await api.getOfflineSkin(acc.uuid);
       if (s?.src) await preview(s.src);
-    } catch { /* 忽略 */ }
-  }
+    }
+  } catch { /* 取不到就留空（离线名 / 无网络），不打断页面 */ }
+}
+
+onMounted(async () => {
+  await loadCurrentSkin();
   await loadSaved();
 });
+// 在皮肤中心切账号（或从别处切完回来）要跟着换预览
+watch(() => currentAccount.value?.uuid, () => void loadCurrentSkin());
 onBeforeUnmount(() => renderer.dispose());
 
 const ANIMS: { key: AnimationKind; label: string }[] = [
@@ -153,7 +178,8 @@ const ANIMS: { key: AnimationKind; label: string }[] = [
         <span class="sname">{{ s.name }}</span>
       </button>
     </div>
-    <van-empty v-else :description="$t('log-viewer.no-logs')" />
+    <!-- 空状态文案原来复用了日志组件的「暂无日志内容」，皮肤页写日志很奇怪 -->
+    <van-empty v-else :description="$t('skins.no-saved')" />
   </div>
 </template>
 

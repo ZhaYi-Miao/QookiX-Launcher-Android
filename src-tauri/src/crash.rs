@@ -2,21 +2,18 @@
 //! （hs_err_pid*.log），并对文本做规则化的诊断分析。
 
 use crate::models::{CrashCause, CrashDetail, CrashDiagnosis, CrashLogEntry};
-use crate::settings::get_data_dir;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::fs;
 
 /// 游戏非零退出时记录崩溃报告（供 launch 流程调用）。
 pub async fn report_crash(instance_id: &str, exit_code: i32) -> anyhow::Result<()> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = get_data_dir().await?;
     // 必须写进 `instances/<id>/crash-reports/` —— 也就是 list_crash_logs()
     // 实际扫描的目录（Minecraft 自己也把崩溃报告写在这里）。
     // 以前写的是 `<data>/crash-reports/`，于是「详细崩溃分析」里永远看不到
     // 启动器生成的这份退出报告。
-    let crash_dir = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let crash_dir = crate::settings::instance_dir(instance_id)
+        .await?
         .join("crash-reports");
     fs::create_dir_all(&crash_dir).await?;
 
@@ -77,8 +74,9 @@ pub async fn report_crash(instance_id: &str, exit_code: i32) -> anyhow::Result<(
 /// 列出实例目录下的崩溃报告与 JVM 错误日志
 pub async fn list_crash_logs(instance_id: &str) -> Result<Vec<CrashLogEntry>, String> {
     crate::fsutil::validate_id(instance_id, "实例")?;
-    let data_dir = get_data_dir().await.map_err(|e| e.to_string())?;
-    let inst_dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let inst_dir = crate::settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut out: Vec<CrashLogEntry> = Vec::new();
 
     let crash_dir = inst_dir.join("crash-reports");
@@ -135,8 +133,9 @@ async fn resolve_report_path(instance_id: &str, filename: &str) -> Result<PathBu
     if !crate::util::is_safe_filename(filename) {
         return Err("非法的文件名".into());
     }
-    let data_dir = get_data_dir().await.map_err(|e| e.to_string())?;
-    let inst_dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let inst_dir = crate::settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let path = if filename.starts_with("crash-") {
         inst_dir.join("crash-reports").join(filename)
     } else {

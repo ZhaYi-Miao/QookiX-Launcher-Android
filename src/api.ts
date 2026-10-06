@@ -33,6 +33,8 @@ import type {
   PluginSetupStatus,
   ControlButtonInfo,
   ControlLayoutInfo,
+  GameDirOption,
+  GameDirState,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -611,6 +613,9 @@ export const api = {
 
   // hosted game servers
   listHostedServers: () => invoke<ServerConfig[]>("list_hosted_servers"),
+  // Paper 支持的 MC 版本（新→旧）：创建服务器时按核心限制版本下拉。
+  // Paper 并不支持所有版本 —— 1.8 那条线只有 1.8.8，选 1.8.9 装核心会 404。
+  listPaperVersions: () => invoke<string[]>("list_paper_versions"),
   getHostedServer: (id: string) => invoke<ServerConfig>("get_hosted_server", { id }),
   createHostedServer: (name: string, core: string, mcVersion: string) =>
     invoke<ServerConfig>("create_hosted_server", { name, core, mcVersion }),
@@ -686,6 +691,15 @@ export const api = {
   getStorageStats: () => invoke<StorageStats>("get_storage_stats"),
   refreshStorageStats: () => invoke<StorageStats>("refresh_storage_stats"),
   clearCache: () => invoke<CacheClearResult>("clear_cache"),
+
+  // 游戏目录（内部 / 应用专属外部 / 自定义）
+  getGameDirState: () => invoke<GameDirState>("get_game_dir_state"),
+  getGameDirOptions: () => invoke<GameDirOption[]>("get_game_dir_options"),
+  requestAllFilesAccess: () => invoke<void>("request_all_files_access", undefined, { silent: true }),
+  pickGameDir: () => invoke<void>("pick_game_dir", undefined, { silent: true }),
+  takePickedGameDir: () => invoke<string | null>("take_picked_game_dir", undefined, { silent: true }),
+  setGameDir: (root: string | null, migrate: boolean) =>
+    invoke<GameDirState>("set_game_dir", { root, migrate }),
 
   // crash analysis
   crashAnalysis: (instanceId: string) =>

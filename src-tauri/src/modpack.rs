@@ -6,7 +6,6 @@ use serde_json::Value;
 use uuid::Uuid;
 use chrono::Utc;
 use crate::models::*;
-use crate::settings::get_data_dir;
 
 const MODRINTH_API: &str = "https://api.modrinth.com/api/v2";
 const CURSEFORGE_API: &str = "https://api.cfaddon.com/v1";
@@ -368,7 +367,6 @@ fn extract_overrides_sync(
 
 pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
     use std::io::Read;
-    let data_dir = get_data_dir().await?;
 
     // 兜底：安卓文件选择器给的是 SAF 的 `content://` URI，对它 `File::open` 必然 ENOENT。
     // 正常路径上前端已用 `filePicker` 把内容落地成真实文件，这里只保证万一漏掉时
@@ -418,7 +416,7 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
         .to_string();
     let (loader, loader_version) = parse_loader(&modpack_info);
     let instance_id = Uuid::new_v4().to_string();
-    let instance_dir = Path::new(&data_dir).join("instances").join(&instance_id);
+    let instance_dir = crate::settings::instances_root().await?.join(&instance_id);
     fs::create_dir_all(&instance_dir).await.context("Failed to create instance directory")?;
     // `overrides` 字段是**目录名**（默认 "overrides"），不是相对路径，所以前缀是 `{名字}/`。
     // 旧代码拼成 "overrides/overrides"，只靠后面 `starts_with("overrides/")` 兜底才歪打正着。
@@ -557,8 +555,7 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
 pub async fn install_mod(instance_id: &str, mod_id: &str, mod_url: &str, file_name: Option<&str>) -> Result<InstalledContent> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
     crate::fsutil::validate_id(mod_id, "模组").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = get_data_dir().await?;
-    let instance_dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let instance_dir = crate::settings::instance_dir(instance_id).await?;
     let mods_dir = instance_dir.join("mods");
     fs::create_dir_all(&mods_dir).await.context("Failed to create mods directory")?;
     let file_name = file_name.unwrap_or(&format!("{}.jar", mod_id)).to_string();
@@ -576,8 +573,7 @@ pub async fn install_mod(instance_id: &str, mod_id: &str, mod_url: &str, file_na
 
 pub async fn uninstall_mod(instance_id: &str, mod_id: &str) -> Result<()> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = get_data_dir().await?;
-    let instance_dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let instance_dir = crate::settings::instance_dir(instance_id).await?;
     let file_path = instance_dir.join("mods").join(format!("{}.jar", mod_id));
     if file_path.exists() {
         fs::remove_file(&file_path).await.context("Failed to remove mod file")?;
@@ -587,8 +583,7 @@ pub async fn uninstall_mod(instance_id: &str, mod_id: &str) -> Result<()> {
 
 pub async fn get_installed_mods(instance_id: &str) -> Result<Vec<InstalledContent>> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = get_data_dir().await?;
-    let instance_dir = Path::new(&data_dir).join("instances").join(instance_id);
+    let instance_dir = crate::settings::instance_dir(instance_id).await?;
     let mods_dir = instance_dir.join("mods");
     let mut mods = Vec::new();
     let mut entries = fs::read_dir(&mods_dir).await.context("Failed to read mods directory")?;

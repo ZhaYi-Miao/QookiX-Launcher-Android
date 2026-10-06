@@ -18,6 +18,8 @@ mod rcon;
 mod crash;
 mod renderer_health;
 mod storage;
+/// 游戏目录设置（内部 / 应用专属外部 / 自定义）。
+mod game_dir;
 mod natives;
 mod jvm_launcher;
 mod terracotta;
@@ -67,6 +69,7 @@ pub fn run() {
     servers::update_hosted_server,
     servers::delete_hosted_server,
     servers::suggest_server_memory,
+    servers::list_paper_versions,
     instance_files::check_instance_files,
     instance_files::repair_instance_files,
     servers::install_hosted_server_core,
@@ -79,7 +82,6 @@ pub fn run() {
     servers::is_hosted_server_running,
     servers::read_hosted_server_log,
     server_process::inspect_server_core_manifest,
-    servers::start_hosted_server,
     servers::stop_hosted_server,
     servers::server_console_command,
     servers::hosted_server_runtime,
@@ -194,6 +196,15 @@ pub fn run() {
             commands::get_storage_stats,
             commands::refresh_storage_stats,
             commands::clear_cache,
+
+            // 游戏目录（内部 / 应用专属外部 / 自定义）
+            game_dir::get_game_dir_state,
+            game_dir::get_game_dir_options,
+            game_dir::has_all_files_access,
+            game_dir::request_all_files_access,
+            game_dir::pick_game_dir,
+            game_dir::take_picked_game_dir,
+            game_dir::set_game_dir,
 
             // Crash analysis
             commands::list_crash_logs,

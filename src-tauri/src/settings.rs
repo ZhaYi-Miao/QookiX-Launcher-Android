@@ -41,6 +41,31 @@ pub fn data_dir_sync() -> Option<String> {
     }
 }
 
+/// 游戏数据根目录（`instances/` 的父目录）。
+///
+/// 默认 `<data>`（内部私有目录）；用户在「存储 → 游戏目录」里选了外部目录时，
+/// 读 `settings.json` 的 `game_root`。**只影响实例（游戏目录）本身** ——
+/// `libraries/ assets/ versions/ natives/ runtimes/ plugins/` 一律留在内部
+/// （`natives` 要解压 `.so` 再 `dlopen`，SD 卡多为 noexec 挂载，放外面会加载失败）。
+pub fn game_root_sync() -> Option<String> {
+    let map = load_raw_settings_sync();
+    let custom = map
+        .get("game_root")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if !custom.is_empty() {
+        Some(custom.to_string())
+    } else {
+        data_dir_sync()
+    }
+}
+
+/// 同步版实例目录根 = [`game_root_sync`] + `instances`（供无法 `await` 的调用点）。
+pub fn instances_root_sync() -> Option<String> {
+    game_root_sync().map(|r| Path::new(&r).join("instances").to_string_lossy().to_string())
+}
+
 /// 同步读取设置文件原始 JSON（不存在或损坏时返回空表）。
 pub fn load_raw_settings_sync() -> HashMap<String, Value> {
     let Some(dir) = data_dir_sync() else {
@@ -126,45 +151,16 @@ pub async fn get_settings() -> Result<Settings> {
             background_dim: raw_i64(&settings, &["background_dim", "backgroundDim"], 0) as i32,
             glass_blur: raw_i64(&settings, &["glass_blur", "glassBlur"], 0) as i32,
             ui_scale: raw_i64(&settings, &["ui_scale", "uiScale"], 100).clamp(60, 200) as i32,
-            show_home_hero: raw_bool(&settings, &["show_home_hero", "showHomeHero"], true),
             show_sidebar_collapse_btn: raw_bool(&settings, &["show_sidebar_collapse_btn", "showSidebarCollapseBtn"], true),
             show_news: raw_bool(&settings, &["show_news", "showNews"], true),
+            show_home_downloads: raw_bool(&settings, &["show_home_downloads", "showHomeDownloads"], true),
+            show_home_recent: raw_bool(&settings, &["show_home_recent", "showHomeRecent"], true),
+            show_home_stats: raw_bool(&settings, &["show_home_stats", "showHomeStats"], true),
             dismissed_update_version: raw_str(&settings, &["dismissed_update_version", "dismissedUpdateVersion"]),
             auto_update: raw_bool(&settings, &["auto_update", "autoUpdate"], true),
             update_source: raw_str(&settings, &["update_source", "updateSource"]).unwrap_or_else(|| "bucket".into()),
             // 手机上启动器是「清单+操作」型界面，竖屏单列信息密度最合适（游戏自己会转横屏）
             orientation: raw_str(&settings, &["orientation"]).unwrap_or_else(|| "portrait".into()),
-            // 归一化：只认 "left"，其余（含写坏的值）都当 "bottom"，
-            // 免得前端拿到一个不认识的值后两套布局都不生效。
-            nav_position: match raw_str(&settings, &["nav_position", "navPosition"])
-                .unwrap_or_else(|| "bottom".into())
-                .as_str()
-            {
-                "left" => "left".into(),
-                _ => "bottom".into(),
-            },
-            nav_offset: raw_i64(&settings, &["nav_offset", "navOffset"], 0).clamp(0, 120) as i32,
-            nav_gap_top: raw_i64(&settings, &["nav_gap_top", "navGapTop"], 0).clamp(0, 800) as i32,
-            nav_gap_h: raw_i64(&settings, &["nav_gap_h", "navGapH"], 0).clamp(0, 240) as i32,
-            // 归一化：只认五种合法值，其余（含写坏的值）都回落 "auto"，
-            // 免得前端拿到不认识的类型后避让逻辑整段失效。
-            nav_cutout: match raw_str(&settings, &["nav_cutout", "navCutout"])
-                .unwrap_or_else(|| "auto".into())
-                .as_str()
-            {
-                "none" | "center" | "topleft" | "topright" | "notch" => {
-                    raw_str(&settings, &["nav_cutout", "navCutout"]).unwrap()
-                }
-                _ => "auto".into(),
-            },
-            // 触控目标档位：同样只认三个合法值，写坏的值一律回落默认的紧凑档
-            touch_target: match raw_str(&settings, &["touch_target", "touchTarget"])
-                .unwrap_or_else(|| "compact".into())
-                .as_str()
-            {
-                "standard" | "large" => raw_str(&settings, &["touch_target", "touchTarget"]).unwrap(),
-                _ => "compact".into(),
-            },
         })
     } else {
         // Default settings
@@ -200,19 +196,15 @@ pub async fn get_settings() -> Result<Settings> {
             background_dim: 0,
             glass_blur: 0,
             ui_scale: 100,
-            show_home_hero: true,
             show_sidebar_collapse_btn: true,
             show_news: true,
+            show_home_downloads: true,
+            show_home_recent: true,
+            show_home_stats: true,
             dismissed_update_version: None,
             auto_update: true,
             update_source: "bucket".to_string(),
             orientation: "portrait".to_string(),
-            nav_position: "bottom".to_string(),
-            nav_offset: 0,
-            nav_gap_top: 0,
-            nav_gap_h: 0,
-            nav_cutout: "auto".to_string(),
-            touch_target: "compact".to_string(),
         })
     }
 }
@@ -251,9 +243,11 @@ pub async fn update_settings(settings: Settings) -> Result<()> {
     map.insert("background_blur".to_string(), Value::Number(settings.background_blur.into()));
     map.insert("background_dim".to_string(), Value::Number(settings.background_dim.into()));
     map.insert("glass_blur".to_string(), Value::Number(settings.glass_blur.into()));
-    map.insert("show_home_hero".to_string(), Value::Bool(settings.show_home_hero));
     map.insert("show_sidebar_collapse_btn".to_string(), Value::Bool(settings.show_sidebar_collapse_btn));
     map.insert("show_news".to_string(), Value::Bool(settings.show_news));
+    map.insert("show_home_downloads".to_string(), Value::Bool(settings.show_home_downloads));
+    map.insert("show_home_recent".to_string(), Value::Bool(settings.show_home_recent));
+    map.insert("show_home_stats".to_string(), Value::Bool(settings.show_home_stats));
     map.insert("dismissed_update_version".to_string(), Value::String(settings.dismissed_update_version.unwrap_or_default()));
     map.insert("auto_update".to_string(), Value::Bool(settings.auto_update));
     map.insert("update_source".to_string(), Value::String(settings.update_source));
@@ -338,4 +332,57 @@ pub async fn get_data_dir() -> Result<String> {
             .ok_or_else(|| anyhow::anyhow!("Failed to get data directory"))?;
         Ok(dirs.join("Qookix").to_string_lossy().to_string())
     }
+}
+
+/// 只取 `settings.json` 里的 `game_root`（None / 空串 = 用内部目录）。
+pub async fn custom_game_root() -> Option<String> {
+    let map = load_raw_settings().await;
+    let value = map
+        .get("game_root")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// 写入 / 清除 `game_root`（`None` 或空串 = 用内部目录）。
+pub async fn set_game_root(root: Option<&str>) -> Result<()> {
+    let mut map = load_raw_settings().await;
+    match root {
+        Some(p) if !p.trim().is_empty() => {
+            map.insert("game_root".to_string(), Value::String(p.trim().to_string()));
+        }
+        _ => {
+            map.remove("game_root");
+        }
+    }
+    save_raw_settings(&map).await
+}
+
+/// 异步版游戏数据根目录（规则同 [`game_root_sync`]）。
+pub async fn game_root() -> Result<String> {
+    match custom_game_root().await {
+        Some(custom) => Ok(custom),
+        None => get_data_dir().await,
+    }
+}
+
+/// 异步版实例目录根 = [`game_root`] + `instances`。
+///
+/// **所有实例路径都必须走这里**（取代以前散在各文件的
+/// `Path::new(&data_dir).join("instances")`）：用户把游戏目录改到外部后，
+/// 漏改一处就会出现「实例分成两处、界面上看不见」。
+pub async fn instances_root() -> Result<std::path::PathBuf> {
+    Ok(Path::new(&game_root().await?).join("instances"))
+}
+
+/// 单个实例目录 = `instances_root()/<id>`。
+/// ID 的合法性由调用方用 `fsutil::validate_id` 负责（防路径穿越）。
+pub async fn instance_dir(instance_id: &str) -> Result<std::path::PathBuf> {
+    Ok(instances_root().await?.join(instance_id))
 }

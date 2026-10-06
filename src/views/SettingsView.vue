@@ -46,6 +46,7 @@ import {
   IconHeart,
   IconImage,
   IconList,
+  IconPlus,
   IconPackage,
   IconUsers,
   IconRefresh,
@@ -55,6 +56,8 @@ import {
 } from "../components/icons";
 import type {
   ControlButtonInfo,
+  GameDirOption,
+  GameDirState,
   MirrorPreset,
   PluginInfo,
   PluginProgressEvent,
@@ -86,6 +89,7 @@ import AppSwitch from "../ui/AppSwitch.vue";
 import AppSlider from "../ui/AppSlider.vue";
 import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
+import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
 /* ---- 版本徽章彩蛋：长按 v1.2.2 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
@@ -148,8 +152,14 @@ const themeColorPresets = [
   "#4ec9a0",
   "#f5c518",
 ];
-function onThemeColorInput(val: string) {
-  if (val) settings.patch({ theme_color: val });
+/** 当前主题色是不是某个预设（决定自定义色块里画「＋」还是显示当前颜色） */
+const isPresetColor = computed(() => themeColorPresets.includes(settings.settings?.theme_color ?? ""));
+
+/** 自定义取色面板（HSL 三滑杆）—— 系统原生 <input type="color"> 那个对话框跟主题色场景对不上 */
+const showColorPicker = ref(false);
+function applyCustomColor(hex: string) {
+  showColorPicker.value = false;
+  void settings.patch({ theme_color: hex });
 }
 
 // 下载代理 seg 滑动高亮（系统代理 / 直连 / 自定义）
@@ -214,80 +224,6 @@ async function selectProxyMode(id: string) {
   } catch (e) {
     message.error(String(e));
   }
-}
-
-// 导航栏位置 seg（底部 / 左侧）。只影响手机端 —— 导航栏仅在手机断点显示，
-// 桌面端一直是侧边栏。纯 CSS 切换，改完立即生效、无需重启。
-const navPositionSegRef = ref<HTMLElement | null>(null);
-const navPositionModes = [
-  { id: "bottom", label: $t("settings.bottom") },
-  { id: "left", label: $t("settings.left") },
-];
-const { indicatorStyle: navPositionSegStyle, refresh: refreshNavPositionSeg } = useSlidingIndicator(
-  navPositionSegRef,
-  () => Array.from(navPositionSegRef.value?.querySelectorAll<HTMLElement>(".seg button") ?? []),
-  () => Math.max(0, navPositionModes.findIndex((m) => m.id === settings.settings?.nav_position)),
-  { axis: "horizontal" }
-);
-watch(() => settings.settings?.nav_position, () => nextTick(() => refreshNavPositionSeg()));
-
-async function selectNavPosition(id: string) {
-  if (settings.settings?.nav_position === id) return;
-  try {
-    await settings.patch({ nav_position: id });
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-/** 挖孔类型预设：打孔统一让开 44px，刘海用 nav_offset 自定义宽度，「自动」跟随系统。 */
-const navCutoutModes = [
-  { id: "auto", label: $t("common.auto") },
-  { id: "none", label: $t("icon-picker-dialog.none") },
-  { id: "center", label: $t("settings.center") },
-  { id: "topleft", label: $t("settings.topleft") },
-  { id: "topright", label: $t("settings.topright") },
-  { id: "notch", label: $t("settings.notch") },
-] as const;
-
-/**
- * 触控目标大小档位。
- *
- * 项目原本的按钮是桌面尺寸（如 `.tb-action` 89×28、`.icon-btn` 30×30），手指容易点错。
- * 但紧凑观感本身是设计的一部分，所以**默认不动**，只给需要的人一个放大档位：
- * 档位写在 `<html data-touch>` 上，具体规则在 `styles.css`。
- */
-const touchTargetModes = [
-  { id: "compact", label: $t("settings.compact") },
-  { id: "standard", label: $t("settings.standard") },
-  { id: "large", label: $t("settings.large") },
-] as const;
-
-function selectTouchTarget(raw: string | number) {
-  // 分段控件回传 string | number，这里收窄到档位枚举
-  const id = String(raw) as (typeof touchTargetModes)[number]["id"];
-  if (settings.settings) settings.settings.touch_target = id;
-  void settings.patch({ touch_target: id });
-}
-
-function selectNavCutout(id: (typeof navCutoutModes)[number]["id"]) {
-  if (settings.settings) settings.settings.nav_cutout = id;
-  void settings.patch({ nav_cutout: id });
-  // 首次切到某个手动类型时给个合理起点：打孔 44、刘海 64（都不合适可拖下面的滑杆）
-  if (id !== "auto" && id !== "none") {
-    const cur = settings.settings?.nav_offset ?? 0;
-    if (cur < 24) {
-      if (settings.settings) settings.settings.nav_offset = id === "notch" ? 64 : 44;
-      void settings.patch({ nav_offset: settings.settings?.nav_offset ?? 44 });
-    }
-  }
-}
-
-/** 避让宽度滑块：存进 nav_offset（所有手动模式都参与避让推导）。 */
-function onNavOffset(v: number) {
-  if (!Number.isFinite(v)) return;
-  if (settings.settings) settings.settings.nav_offset = v;
-  void settings.patch({ nav_offset: v });
 }
 
 function onCustomProxyInput() {
@@ -729,6 +665,106 @@ function confirmClear() {
   });
 }
 
+/* ── 游戏目录（内部 / 应用专属外部 / 自定义）────────────────────────
+   路径解析在后端 settings::instances_root()；这里只管选择与迁移。
+   自定义目录走系统 SAF 选择器，是**异步**的 → 选完轮询取回结果。 */
+const gameDirState = ref<GameDirState | null>(null);
+const gameDirOptions = ref<GameDirOption[]>([]);
+const gameDirBusy = ref(false);
+let gameDirPoll: number | null = null;
+
+const currentGameRoot = computed(() => gameDirState.value?.root ?? "");
+
+async function loadGameDirs() {
+  try {
+    gameDirState.value = await api.getGameDirState();
+  } catch {
+    gameDirState.value = null;
+  }
+  try {
+    gameDirOptions.value = await api.getGameDirOptions();
+  } catch {
+    gameDirOptions.value = [];
+  }
+}
+
+function stopGameDirPoll() {
+  if (gameDirPoll !== null) {
+    window.clearInterval(gameDirPoll);
+    gameDirPoll = null;
+  }
+}
+
+async function applyGameDir(root: string | null, migrate: boolean) {
+  gameDirBusy.value = true;
+  try {
+    gameDirState.value = await api.setGameDir(root, migrate);
+    message.success($t("settings.game-dir-done"));
+    await loadGameDirs();
+    await refreshStats();
+  } catch (e) {
+    message.error($t("settings.game-dir-failed") + String(e));
+  } finally {
+    gameDirBusy.value = false;
+  }
+}
+
+/** 选一个候选目录：问一下要不要把现有实例一起搬过去。 */
+function chooseGameDir(opt: GameDirOption) {
+  if (opt.path === currentGameRoot.value) return;
+  dialog.warning({
+    title: $t("settings.game-dir-migrate-title"),
+    content: $t("settings.game-dir-migrate-text", { p1: opt.label }),
+    positiveText: $t("settings.game-dir-migrate"),
+    negativeText: $t("settings.game-dir-keep"),
+    onPositiveClick: () => applyGameDir(opt.path, true),
+    onNegativeClick: () => applyGameDir(opt.path, false),
+  });
+}
+
+/** 自定义目录：先弹系统选择器（异步），再轮询取回真实路径。 */
+async function pickCustomGameDir() {
+  if (gameDirState.value && !gameDirState.value.allFilesAccess) {
+    message.warning($t("settings.game-dir-need-permission"));
+    return;
+  }
+  try {
+    await api.pickGameDir();
+  } catch (e) {
+    message.error(String(e));
+    return;
+  }
+  message.info($t("settings.game-dir-picking"));
+  stopGameDirPoll();
+  let tries = 0;
+  gameDirPoll = window.setInterval(async () => {
+    tries += 1;
+    if (tries > 120) {   // 最多等 60 秒
+      stopGameDirPoll();
+      return;
+    }
+    let picked: string | null = null;
+    try {
+      picked = await api.takePickedGameDir();
+    } catch (e) {
+      stopGameDirPoll();
+      message.error($t("settings.game-dir-failed") + String(e));
+      return;
+    }
+    if (!picked) return;   // 还没选完（或用户取消）
+    stopGameDirPoll();
+    await applyGameDir(picked, true);
+  }, 500);
+}
+
+async function grantAllFilesAccess() {
+  try {
+    await api.requestAllFilesAccess();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 /* ── 按键透传（按住这个键时拖动也能转视角）────────────────────────── */
 const controlButtons = ref<ControlButtonInfo[]>([]);
 const controlButtonBusy = ref<number | null>(null);
@@ -892,6 +928,7 @@ onMounted(() => {
   void refreshSystemProxy();
   startPolling();
   loadStats();
+  loadGameDirs();
   void getVersion().then((v) => (appVersion.value = v));
   // 打开「关于」页就顺手查一次（静默失败）；打开「游戏内」页读一次控制布局
   watch(tab, (key) => {
@@ -1044,19 +1081,23 @@ onUnmounted(() => {
                 :title="c" :aria-label="c"
                 @click="settings.patch({ theme_color: c })"
               ></button>
-              <label class="color-custom" :title="$t('settings.custom-color')">
-                <span class="color-custom-ring" :style="{ background: settings.settings.theme_color }"></span>
-                <!-- 自定主题色：用系统原生取色器（安卓会弹系统调色盘）。
-                     原来那个库的取色器是桌面浮层（面板跟随锚点、小色块、还得拖），
-                     手机上既难点又难看；原生控件交给系统，体验一致且零维护。 -->
-                <input
-                  class="color-native"
-                  type="color"
-                  :value="settings.settings.theme_color"
-                  :aria-label="$t('settings.custom-color')"
-                  @input="onThemeColorInput(($event.target as HTMLInputElement).value)"
-                />
-              </label>
+              <!-- 自定义色：比预设小一圈 + 一圈彩虹环，一眼看出是「自定义入口」
+                   而不是第 10 个预设；点开走自研的 HSL 取色面板。 -->
+              <button
+                type="button"
+                class="color-custom"
+                :class="{ active: !isPresetColor }"
+                :title="$t('settings.custom-color')"
+                :aria-label="$t('settings.custom-color')"
+                @click="showColorPicker = true"
+              >
+                <span
+                  class="color-custom-ring"
+                  :style="{ background: isPresetColor ? 'var(--panel-hover)' : settings.settings.theme_color }"
+                >
+                  <IconPlus v-if="isPresetColor" />
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -1079,78 +1120,6 @@ onUnmounted(() => {
                 <div class="mem-val">{{ settings.settings?.ui_scale ?? 100 }}%</div>
               </div>
             </div>
-          <div class="choice-row">
-            <div class="choice-info">
-              <span class="choice-label">{{ $t("settings.nav-position") }}</span>
-              <p class="choice-hint">{{ $t("settings.nav-position-desc") }}</p>
-            </div>
-            <div ref="navPositionSegRef" class="seg">
-              <div class="indicator" :style="navPositionSegStyle"></div>
-              <button
-                v-for="m in navPositionModes"
-                :key="m.id"
-                :class="{ active: (settings.settings.nav_position ?? 'bottom') === m.id }"
-                @click="selectNavPosition(m.id)"
-              >
-                {{ m.label }}
-              </button>
-            </div>
-          </div>
-          <div class="choice-row">
-            <div class="choice-info">
-              <span class="choice-label">{{ $t("settings.notch") }}</span>
-              <p class="choice-hint">{{ $t("settings.notch-desc") }}</p>
-            </div>
-            <div class="seg">
-              <button
-                v-for="m in navCutoutModes"
-                :key="m.id"
-                :class="{ active: (settings.settings.nav_cutout ?? 'auto') === m.id }"
-                @click="selectNavCutout(m.id)"
-              >
-                {{ m.label }}
-              </button>
-            </div>
-          </div>
-          <div class="choice-row">
-            <div class="choice-info">
-              <span class="choice-label">{{ $t("settings.touch-target") }}</span>
-              <p class="choice-hint">{{ $t("settings.touch-target-desc") }}</p>
-            </div>
-            <app-seg
-              :value="settings.settings.touch_target ?? 'compact'"
-              :options="touchTargetModes.map((m) => ({ value: m.id, label: m.label }))"
-              size="small"
-              @update:value="selectTouchTarget"
-            />
-          </div>
-          <div
-            v-if="!['auto', 'none'].includes(settings.settings.nav_cutout ?? 'auto')"
-            class="choice-row"
-          >
-            <div class="choice-info">
-              <span class="choice-label">{{ $t("settings.notch-inset") }}</span>
-              <p class="choice-hint">{{ $t("settings.notch-inset-desc") }}</p>
-            </div>
-            <div class="scale-ctl">
-              <app-slider
-                :value="settings.settings?.nav_offset ?? 44"
-                :min="24"
-                :max="120"
-                :step="2"
-                @update:value="onNavOffset" />
-              <div class="mem-val">{{ settings.settings?.nav_offset ?? 44 }}px</div>
-            </div>
-          </div>
-          <div class="choice-row">
-            <div class="choice-info">
-              <span class="choice-label">{{ $t("settings.hero-card") }}</span>
-              <p class="choice-hint">{{ $t("settings.hero-card-desc") }}</p>
-            </div>
-            <app-switch
-              :value="settings.settings.show_home_hero"
-              @update:value="(v: boolean) => settings.patch({ show_home_hero: v })" />
-          </div>
           <div class="choice-row">
             <div class="choice-info">
               <span class="choice-label">{{ $t("settings.sidebar-collapse-btn") }}</span>
@@ -1185,6 +1154,36 @@ onUnmounted(() => {
                 {{ m.label }}
               </button>
             </div>
+          </div>
+        </div>
+        <div class="card glass">
+          <h3>{{ $t("nav.home") }}</h3>
+          <div class="choice-row">
+            <div class="choice-info">
+              <span class="choice-label">{{ $t("settings.home-downloads") }}</span>
+              <p class="choice-hint">{{ $t("settings.home-downloads-desc") }}</p>
+            </div>
+            <app-switch
+              :value="settings.settings.show_home_downloads ?? true"
+              @update:value="(v: boolean) => settings.patch({ show_home_downloads: v })" />
+          </div>
+          <div class="choice-row">
+            <div class="choice-info">
+              <span class="choice-label">{{ $t("home.recent-played") }}</span>
+              <p class="choice-hint">{{ $t("settings.home-recent-desc") }}</p>
+            </div>
+            <app-switch
+              :value="settings.settings.show_home_recent ?? true"
+              @update:value="(v: boolean) => settings.patch({ show_home_recent: v })" />
+          </div>
+          <div class="choice-row">
+            <div class="choice-info">
+              <span class="choice-label">{{ $t("home.play-stats") }}</span>
+              <p class="choice-hint">{{ $t("settings.home-stats-desc") }}</p>
+            </div>
+            <app-switch
+              :value="settings.settings.show_home_stats ?? true"
+              @update:value="(v: boolean) => settings.patch({ show_home_stats: v })" />
           </div>
         </div>
         <div class="card glass">
@@ -1540,6 +1539,37 @@ onUnmounted(() => {
       <!-- 存储 -->
       <div v-show="tab === 'storage'" class="settings-pane">
         <div class="grid storage-grid">
+          <!-- 游戏目录（实例存放位置） -->
+          <div class="card glass storage-card">
+            <div class="storage-header">
+              <h3>{{ $t("settings.game-dir") }}</h3>
+              <span class="game-dir-root" :title="currentGameRoot">{{ currentGameRoot }}</span>
+            </div>
+            <p class="hint">{{ $t("settings.game-dir-hint") }}</p>
+            <ul class="instance-storage-list">
+              <li v-for="opt in gameDirOptions" :key="opt.path">
+                <span class="instance-name" :title="opt.path">{{ opt.label }}</span>
+                <span class="legend-size">{{ fmtSize(opt.free) }}</span>
+                <span v-if="opt.path === currentGameRoot" class="legend-pct">{{ $t("settings.game-dir-in-use") }}</span>
+                <button v-else class="mini-btn" :disabled="gameDirBusy" @click="chooseGameDir(opt)">
+                  {{ $t("settings.game-dir-use") }}
+                </button>
+              </li>
+            </ul>
+            <div class="storage-footer">
+              <button class="mini-btn" :disabled="gameDirBusy" @click="pickCustomGameDir">
+                {{ $t("settings.game-dir-pick") }}
+              </button>
+              <button
+                v-if="gameDirState && !gameDirState.allFilesAccess"
+                class="mini-btn"
+                @click="grantAllFilesAccess"
+              >
+                {{ $t("settings.game-dir-grant") }}
+              </button>
+            </div>
+          </div>
+
           <div class="card glass storage-card">
             <div class="storage-header">
               <h3>{{ $t("settings.storage-stats") }}</h3>
@@ -2033,6 +2063,13 @@ onUnmounted(() => {
         </div>
       </Transition>
     </Teleport>
+
+    <color-picker-sheet
+      :show="showColorPicker"
+      :value="settings.settings.theme_color"
+      @update:show="(v: boolean) => (showColorPicker = v)"
+      @confirm="applyCustomColor"
+    />
   </div>
 </template>
 
@@ -2258,6 +2295,15 @@ textarea.text-input {
 .storage-header h3 {
   margin: 0;
 }
+.game-dir-root {
+  /* 路径很长（/storage/emulated/0/Android/data/…），必须允许断行，
+     否则会把卡片撑破、右侧出血。 */
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  word-break: break-all;
+}
 .storage-actions {
   display: flex;
   align-items: center;
@@ -2285,6 +2331,18 @@ textarea.text-input {
   display: flex;
   align-items: center;
   gap: 26px;
+}
+/* 窄屏：圆环和图例改上下排。原来左右排时图例那一列被压得只剩「大小 + 百分比」，
+   分组名称（游戏实例 / 库文件 / 资源文件…）被挤成 0 宽，完全看不见。 */
+@container page (max-width: 640px) {
+  .storage-body {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .donut-wrap {
+    align-self: center;
+  }
 }
 .donut-wrap {
   position: relative;
@@ -2607,28 +2665,28 @@ textarea.text-input {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .color-custom {
-  position: relative;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
+  padding: 3px;
+  border: none;
   border-radius: 50%;
   cursor: pointer;
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1px var(--border);
+  /* 彩虹环 = 「自定义」的通用语言，跟 9 个纯色预设区分开 */
+  background: conic-gradient(from 210deg, #ff5f6d, #ffc371, #7ad08a, #4ecdc4, #5aa2f0, #c78aff, #ff5f6d);
+  -webkit-tap-highlight-color: transparent;
 }
 .color-custom-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-}
-.color-custom input[type="color"] {
-  position: absolute;
-  inset: 0;
   width: 100%;
   height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  border: none;
-  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+.color-custom-ring svg {
+  width: 12px;
+  height: 12px;
 }
 .about-license-card {
   grid-column: 1 / -1;
@@ -3590,18 +3648,6 @@ textarea.text-input {
   border-color: var(--accent);
   background: var(--accent);
   box-shadow: inset 0 0 0 3px var(--bg-1, #111);
-}
-.color-native {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  border: none;
-  padding: 0;
-}
-.color-custom {
-  position: relative;
 }
 </style>
 

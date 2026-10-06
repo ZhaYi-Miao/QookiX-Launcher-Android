@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
 import { useAccountsStore } from "../stores/accounts";
 import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
 import MsLoginDialog from "./MsLoginDialog.vue";
-import { IconTrash } from "./icons";
+import { IconPlus, IconTrash } from "./icons";
 
 /** 顶栏的账号入口（手机形态）：一行头像+用户名，点开是**底部弹层**的账号列表
  *  —— 桌面的下拉气泡（n-popover）在手机上既难点又贴不住指头。 */
@@ -89,6 +89,44 @@ async function pick(uuid: string) {
   }
 }
 
+/**
+ * 「先添加账号」这类流程（首页/实例卡的启动、存档页联机）会置 `accounts.showManager = true`。
+ * 前端重写时这个监听被删掉了，而 `showManager` 的赋值还在 —— 于是那些地方点了完全没反应。
+ */
+watch(
+  () => accounts.showManager,
+  (v) => {
+    if (v) show.value = true;
+  }
+);
+watch(show, (v) => {
+  if (!v) accounts.showManager = false;
+});
+
+/** 微软登录成功时给一句反馈 —— store 里 `msSuccess` 一直没人展示，登录完静悄悄的 */
+watch(
+  () => accounts.msSuccess,
+  (v) => {
+    if (!v) return;
+    message.success(v);
+    accounts.msSuccess = "";
+  }
+);
+
+/**
+ * 微软（正版）登录：设备码流程。
+ * 先收起账号面板再发码 —— 登录弹窗由 `accounts.msFlow` 驱动会自动打开，
+ * 两层弹层叠着不好看。
+ */
+async function startMs() {
+  show.value = false;
+  try {
+    await accounts.startMs();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 function onChipTap() {
   show.value = true;
 }
@@ -151,6 +189,14 @@ async function addOffline() {
         </button>
       </div>
       <p v-if="!accounts.accounts.length" class="empty">{{ $t("account-chip.no-accounts") }}</p>
+
+      <!-- 微软（正版）登录：设备码流程，点完弹窗由 accounts.msFlow 驱动自己出来。
+           之前重构把入口删了，整个应用就没法加正版账号了。 -->
+      <van-button class="add-ms" block type="primary" @click="startMs">
+        <IconPlus /> {{ $t("account-chip.add-microsoft") }}
+      </van-button>
+
+      <div class="add-title">{{ $t("account-chip.add-offline") }}</div>
       <!-- 手机：输入框与「添加」按钮必须同高（原来按钮矮一截，看着很别扭） -->
       <div class="add">
         <app-input v-model:value="offlineName" :placeholder="$t('account-chip.game-username')" maxlength="16" />
@@ -300,6 +346,15 @@ async function addOffline() {
 .add :deep(.van-field__control),
 .add-btn {
   min-height: 44px;
+}
+/* 微软登录入口：放在离线那排上方，是「加正版账号」的唯一入口 */
+.add-ms {
+  min-height: 44px;
+}
+.add-title {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
 }
 .rtype {
   font-size: 12px;

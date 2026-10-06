@@ -54,43 +54,19 @@ export interface Settings {
   glass_blur: number;
   /** 启动器界面缩放（百分比，100 = 原始大小，60–200） */
   ui_scale: number;
-  show_home_hero: boolean;
   show_sidebar_collapse_btn: boolean;
   /** 新闻页面与侧边栏新闻入口是否显示（默认 true） */
   show_news: boolean;
+  /** 首页「正在下载」卡片（有任务时显示，这里是总开关） */
+  show_home_downloads: boolean;
+  /** 首页「最近游玩」列表 */
+  show_home_recent: boolean;
+  /** 首页「游玩统计」卡片（累计时长 + 近 30 天曲线） */
+  show_home_stats: boolean;
   dismissed_update_version: string | null;
   auto_update: boolean;
   /** 启动器界面方向："landscape"（锁定横屏，默认）| "portrait"（锁定竖屏）| "system"（跟随系统） */
   orientation: string;
-  /**
-   * 手机导航栏（首页/实例/内容/…/下载/账号）的摆放位置：
-   * "bottom"（默认，屏幕底部横条）| "left"（屏幕左侧竖栏）。
-   * 横屏手机可用高度只有约 384px，底栏要吃掉约 70px；挪到左侧把这段高度还给内容区。
-   */
-  nav_position: "bottom" | "left";
-  /**
-   * 挖孔 / 刘海的类型（用户按**竖屏**方向描述，横竖屏换算由前端做）：
-   * "auto" 跟随系统安全区（默认）| "none" 强制无 | "center" 中置挖孔 |
-   * "topleft" 左上角 | "topright" 右上角 | "notch" 刘海（宽度用 nav_offset）。
-   * 打孔尺寸彼此相近，统一让开 44px（约一个图标的位置）；只有刘海要自定义宽度。
-   */
-  nav_cutout: "auto" | "none" | "center" | "topleft" | "topright" | "notch";
-  /**
-   * 触控目标大小档位：
-   * "compact"（默认）保持项目原有的紧凑尺寸，不做任何干预；
-   * "standard" 交互元素最小 40px；"large" 48px（手指点不准时调大）。
-   * 实现见 `styles.css` 的 `:root[data-touch=...]`，由 App.vue 写到 <html>。
-   */
-  touch_target: "compact" | "standard" | "large";
-  /**
-   * 避让宽度（px，0–120）：刘海模式的让开宽度；打孔类型不用它（用固定 44）。
-   * 兼作旧版「横向避让滑块」的存储字段。
-   */
-  nav_offset: number;
-  /** 左栏「挖孔空档」的起始位置（px）。已废弃：图标列改为连续排布，仅保留兼容。 */
-  nav_gap_top: number;
-  /** 左栏「挖孔空档」的高度（px）。已废弃：图标列改为连续排布，仅保留兼容。 */
-  nav_gap_h: number;
   /** 应用自更新源："bucket"（对象存储，默认） | "github"（GitHub Releases 官方源） */
   update_source: "bucket" | "github";
 }
@@ -145,6 +121,33 @@ export interface StorageStats {
 
 export interface CacheClearResult {
   freed: number;
+}
+
+/** 「游戏目录」的候选项（Android 侧枚举各卷得到）。 */
+export interface GameDirOption {
+  kind: "internal" | "external";
+  label: string;
+  /** 游戏数据根；`instances/` 会建在其下 */
+  path: string;
+  /** 可用空间（字节） */
+  free: number;
+  total: number;
+  /** 是否可插拔（SD 卡） */
+  removable: boolean;
+}
+
+/** 「游戏目录」当前状态。 */
+export interface GameDirState {
+  /** 内部私有数据目录（默认值） */
+  defaultRoot: string;
+  /** 自定义根；null = 用内部目录 */
+  customRoot: string | null;
+  /** 实际生效的数据根 */
+  root: string;
+  /** 实际生效的实例目录根 */
+  instancesDir: string;
+  /** Android 11+ 的「所有文件访问」是否已授权 */
+  allFilesAccess: boolean;
 }
 
 export interface Instance {

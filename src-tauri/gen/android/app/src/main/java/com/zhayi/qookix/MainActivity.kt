@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -37,6 +38,10 @@ class MainActivity : TauriActivity() {
     TauriBridge.attach(this)
     // 给 Pojav 输入桥（org.lwjgl.glfw.CallbackBridge）准备剪贴板等平台能力
     PojavShim.init(this)
+
+    // 升级后必须让 WebView 换一份前端：它的 HTTP 缓存会把旧 bundle 一直喂回来，
+    // 表现就是"装完新版 APK，界面还是老样子"（2026-10-05 实测踩到 ✗）。
+    clearWebViewCacheOnUpgrade()
 
     // 上一次「结束当前游戏 → 换版本」留下的待启动：进程是被守护服务自动拉回来、
     // 被用户点「游戏已退出」通知、还是用户自己重开，都会走到这里 —— 把用户当时
@@ -377,6 +382,47 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  /**
+   * 版本变化时清掉 WebView 缓存并重新加载。
+   *
+   * 为什么必须做：前端资源走 `http://tauri.localhost`，WebView 会像普通网页一样缓存它们 ——
+   * 装了新 APK 之后仍可能一直吃旧 bundle，用户看到的是**旧界面** ✗（2026-10-05 实测：
+   * 新代码确实进了 APK（哈希一致 ✓），界面却还是老样子 ✗）。
+   * WebView 是 Rust 侧稍后创建的，所以延后一点找到它再「清缓存 + reload」。
+   */
+  private fun clearWebViewCacheOnUpgrade() {
+    val prefs = getSharedPreferences("qookix_webview", Context.MODE_PRIVATE)
+    // 用 PackageManager 取版本，不依赖 BuildConfig（它所在的包名跟着 namespace 走，容易踩 ✗）
+    val current = runCatching {
+      val info = packageManager.getPackageInfo(packageName, 0)
+      "${info.versionName}+${info.longVersionCode}"
+    }.getOrElse { "unknown" }
+    // key 带 _v2：2026-10-05 换过一次清理策略（只清 HTTP 缓存不够，还要绕一次缓存重载），
+    // 改 key 让**所有**已装用户都强制走一次新逻辑，而不是只有刚好升级的那批。
+    if (prefs.getString("last_version_v2", null) == current) return
+    prefs.edit().putString("last_version_v2", current).apply()
+    Log.i(TAG, "检测到版本变化（$current），清 WebView 缓存并绕过缓存重载")
+    window.decorView.postDelayed({
+      val web = findWebView(window.decorView)
+      if (web == null) {
+        Log.w(TAG, "没找到 WebView，跳过清缓存")
+        return@postDelayed
+      }
+      runCatching { web.clearCache(true) }
+        .onFailure { Log.w(TAG, "清 WebView 缓存失败", it) }
+      // 关键：仅 clearCache 不够 —— WebView 仍可能把**旧的入口 HTML** 从缓存喂回来，
+      // 而它引用的旧 chunk 又还在包里，于是界面永远停在旧版 ✗（2026-10-05 实测 ✓）。
+      // 所以这次 reload 明确设成"不走缓存"，读完再恢复默认，免得影响日常加载速度。
+      val settings = web.settings
+      val previousMode = settings.cacheMode
+      runCatching { settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE }
+      runCatching { web.reload() }
+      window.decorView.postDelayed({
+        runCatching { settings.cacheMode = previousMode }
+      }, 5000L)
+    }, 1500L)
+  }
+
   /** 当前正在运行的实例 id；没在跑 / 查不到都返回 null（查不到时按"没在跑"处理，别拦用户）。 */
   private fun runningInstanceId(): String? = try {
     if (!TauriBridge.isGameRunning()) null
@@ -471,6 +517,104 @@ class MainActivity : TauriActivity() {
     } catch (e: Exception) {
       Log.w(TAG, "读取屏幕方向设置失败", e)
     }
+  }
+
+  // ==================== 游戏目录（内部 / 应用专属外部 / 自定义） ====================
+
+  private val reqPickGameDir = 0x51A7
+
+  /** 「游戏目录」可选项（JSON 数组），见 [StorageDirs]。 */
+  fun gameDirOptions(): String = runCatching { StorageDirs.optionsJson(this) }.getOrDefault("[]")
+
+  /** 「所有文件访问」是否已授权（"1"/"0"）。 */
+  fun hasAllFilesAccess(): String = if (StorageDirs.allFilesAccessGranted()) "1" else "0"
+
+  /** 跳到系统的「所有文件访问」设置页（Android 11+ 才需要）。 */
+  fun requestAllFilesAccess() {
+    runOnUiThread {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return@runOnUiThread
+      val direct = Intent(
+        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+        Uri.parse("package:$packageName")
+      )
+      if (runCatching { startActivity(direct) }.isFailure) {
+        // 少数 ROM 只认总设置页
+        runCatching {
+          startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+      }
+    }
+  }
+
+  /**
+   * 弹出系统的目录选择器（SAF）。
+   *
+   * **它是异步的** —— 这里只发起请求，结果在 [onActivityResult] 里处理，解析出的
+   * 真实路径写进 `<files>/game-dir-pick.json`，前端轮询 Rust 命令取回。
+   * 不把 URI 直接交给 Rust / 游戏的原因：两者都只认真实路径，`content://` 用不了。
+   */
+  fun pickGameDir() {
+    runOnUiThread {
+      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+      }
+      if (runCatching { startActivityForResult(intent, reqPickGameDir) }.isFailure) {
+        writeGameDirPick("", "无法打开系统目录选择器")
+      }
+    }
+  }
+
+  /** SAF 的 tree URI → 真实路径。映射是**约定俗成**（非官方）：`primary:` 是内置存储，其余是卷 ID。 */
+  private fun treeUriToRealPath(treeUri: Uri): String? {
+    val docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri) ?: return null
+    val sep = docId.indexOf(':')
+    if (sep < 0) return null
+    val volumeId = docId.substring(0, sep)
+    val rel = docId.substring(sep + 1).trim('/')
+    val root = if (volumeId.equals("primary", ignoreCase = true)) {
+      Environment.getExternalStorageDirectory()
+    } else {
+      File("/storage/$volumeId")
+    }
+    return if (rel.isEmpty()) root.absolutePath else File(root, rel).absolutePath
+  }
+
+  private fun writeGameDirPick(path: String, error: String) {
+    runCatching {
+      File(filesDir, "game-dir-pick.json")
+        .writeText(JSONObject().put("path", path).put("error", error).toString())
+    }
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode != reqPickGameDir) return
+    val treeUri = data?.data
+    if (resultCode != RESULT_OK || treeUri == null) {
+      writeGameDirPick("", "")   // 用户取消
+      return
+    }
+    runCatching {
+      contentResolver.takePersistableUriPermission(
+        treeUri,
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      )
+    }
+    val real = treeUriToRealPath(treeUri)
+    if (real == null) {
+      writeGameDirPick("", "无法把所选目录转换成文件路径")
+      return
+    }
+    if (!File(real).canWrite()) {
+      // Android 11+ 未授予「所有文件访问」时，公共目录写不进去
+      // （SAF 授权只对 ContentResolver 生效，原始路径仍被 scoped storage 拦）。
+      writeGameDirPick("", "该目录无法写入，请先授予「所有文件访问」权限")
+      return
+    }
+    writeGameDirPick(real, "")
   }
 
   /** 锁定 / 跟随屏幕方向。可在任意线程调用。 */

@@ -68,7 +68,12 @@ pub async fn scan() -> StorageStats {
         return empty_stats();
     };
     let root = PathBuf::from(&root_str);
-    match tokio::task::spawn_blocking(move || scan_sync(&root)).await {
+    // 实例根可能被用户改到外部目录（见 settings::game_root）——统计必须用实际位置，
+    // 否则存储页会漏掉外部实例，还会把它们算进「其他数据」。
+    let inst_root = crate::settings::instances_root()
+        .await
+        .unwrap_or_else(|_| root.join("instances"));
+    match tokio::task::spawn_blocking(move || scan_sync(&root, &inst_root)).await {
         Ok(stats) => stats,
         Err(e) => {
             tracing::warn!("存储扫描任务失败: {e}");
@@ -78,7 +83,8 @@ pub async fn scan() -> StorageStats {
 }
 
 /// [scan] 的同步实现。
-fn scan_sync(root: &Path) -> StorageStats {
+/// `inst_root` 是实例目录根（默认 `<root>/instances`，也可能被用户改到外部目录）。
+fn scan_sync(root: &Path, inst_root: &Path) -> StorageStats {
     let mut categories: Vec<StorageCategory> = Vec::new();
     let mut total = 0u64;
 
@@ -101,7 +107,7 @@ fn scan_sync(root: &Path) -> StorageStats {
     // 游戏实例：**一次遍历**同时拿到「每个实例的大小」和「分类合计」。
     // 以前是 `add_dir`（整棵树）+ 再逐实例 `dir_size`（又是整棵树），同一份数据走了两遍 ——
     // 一个 20GB 的实例目录在手机上白多花好几秒。
-    let inst_dir = root.join("instances");
+    let inst_dir = inst_root.to_path_buf();
     let mut instance_count = 0u64;
     let mut instances: Vec<InstanceStorage> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&inst_dir) {

@@ -1,4 +1,3 @@
-use std::path::Path;
 use tokio::fs;
 use anyhow::{Context, Result};
 use uuid::Uuid;
@@ -6,8 +5,7 @@ use chrono::Utc;
 use crate::models::*;
 
 pub async fn list_instances() -> Result<Vec<MinecraftProfile>> {
-    let data_dir = crate::settings::get_data_dir().await?;
-    let instances_dir = Path::new(&data_dir).join("instances");
+    let instances_dir = crate::settings::instances_root().await?;
 
     if !instances_dir.exists() {
         fs::create_dir_all(&instances_dir).await.ok();
@@ -42,10 +40,8 @@ pub async fn list_instances() -> Result<Vec<MinecraftProfile>> {
 
 pub async fn get_instance(instance_id: &str) -> Result<MinecraftProfile> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = crate::settings::get_data_dir().await?;
-    let file_path = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let file_path = crate::settings::instance_dir(instance_id)
+        .await?
         .join("instance.json");
 
     let content = fs::read_to_string(&file_path).await
@@ -57,10 +53,8 @@ pub async fn get_instance(instance_id: &str) -> Result<MinecraftProfile> {
 /// 将实例元数据写回 instance.json（保持目录结构不变）
 pub async fn write_instance(instance: &MinecraftProfile) -> Result<()> {
     crate::fsutil::validate_id(&instance.id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = crate::settings::get_data_dir().await?;
-    let file_path = Path::new(&data_dir)
-        .join("instances")
-        .join(&instance.id)
+    let file_path = crate::settings::instance_dir(&instance.id)
+        .await?
         .join("instance.json");
     let content = serde_json::to_string_pretty(instance)?;
     fs::write(&file_path, content).await
@@ -69,11 +63,9 @@ pub async fn write_instance(instance: &MinecraftProfile) -> Result<()> {
 }
 
 pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfile> {
-    let data_dir = crate::settings::get_data_dir().await?;
+    let instances_root = crate::settings::instances_root().await?;
     let instance_id = Uuid::new_v4().to_string();
-    let instance_dir = Path::new(&data_dir)
-        .join("instances")
-        .join(&instance_id);
+    let instance_dir = instances_root.join(&instance_id);
 
     fs::create_dir_all(&instance_dir).await
         .context("Failed to create instance directory")?;
@@ -138,10 +130,7 @@ pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfi
 
 pub async fn delete_instance(instance_id: &str, keep_dir: bool) -> Result<()> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = crate::settings::get_data_dir().await?;
-    let instance_dir = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id);
+    let instance_dir = crate::settings::instance_dir(instance_id).await?;
 
     if !keep_dir && instance_dir.exists() {
         fs::remove_dir_all(&instance_dir).await
@@ -161,15 +150,13 @@ fn pick<'a>(patch: &'a serde_json::Value, keys: &[&str]) -> Option<&'a serde_jso
 }
 
 pub async fn update_instance(patch: serde_json::Value) -> Result<MinecraftProfile> {
-    let data_dir = crate::settings::get_data_dir().await?;
     let instance_id = patch.get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing instance id in patch"))?;
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
 
-    let file_path = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let file_path = crate::settings::instance_dir(instance_id)
+        .await?
         .join("instance.json");
 
     let content = fs::read_to_string(&file_path).await
@@ -306,10 +293,9 @@ pub async fn set_content_enabled(
         .find(|c| c.filename == filename)
         .ok_or_else(|| "内容记录不存在".to_string())?;
 
-    let data_dir = crate::settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    let dir = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let dir = crate::settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?
         .join(kind_folder(kind));
     let active = dir.join(filename);
     let disabled = dir.join(format!("{filename}.disabled"));

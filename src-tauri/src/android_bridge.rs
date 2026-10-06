@@ -97,6 +97,35 @@ pub fn wifi_ipv4() -> Option<String> {
     None
 }
 
+// ==================== 游戏目录（可选：内部 / 应用专属外部 / 自定义） ====================
+
+/// 「游戏目录」可选项：Kotlin `MainActivity.gameDirOptions` 枚举各卷后回传的 JSON 数组字符串。
+#[cfg(target_os = "android")]
+pub fn game_dir_options_json() -> Option<String> {
+    android::call_activity_str("gameDirOptions", "()Ljava/lang/String;")
+}
+
+/// 「所有文件访问」（MANAGE_EXTERNAL_STORAGE）是否已授权。
+#[cfg(target_os = "android")]
+pub fn has_all_files_access() -> bool {
+    android::call_activity_str("hasAllFilesAccess", "()Ljava/lang/String;")
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// 跳到系统设置页申请「所有文件访问」（Android 11+）。
+#[cfg(target_os = "android")]
+pub fn request_all_files_access() {
+    let _ = android::call_activity("requestAllFilesAccess", "()V", None);
+}
+
+/// 弹出系统的目录选择器（SAF）。**异步** —— 结果由原生写进
+/// `<files>/game-dir-pick.json`，Rust 侧用 `game_dir::take_picked_game_dir` 取回。
+#[cfg(target_os = "android")]
+pub fn pick_game_dir() {
+    let _ = android::call_activity("pickGameDir", "()V", None);
+}
+
 /// 强制结束 `:server` 进程（RCON 停服失败时的兜底：世界可能没存盘）。
 #[cfg(target_os = "android")]
 pub fn force_stop_server(_id: &str) -> Result<(), String> {
@@ -469,6 +498,12 @@ mod android {
     }
 
     /// 停掉 `:server` 进程（连带 JVM 与服务器一起结束）。
+    ///
+    /// 这里**必须复用 `server_service_intent`**（2 参 `putExtra`）。原来是手写的
+    /// `putExtra(String,String,String)` —— `Intent` 上根本没有这个重载，会抛
+    /// `NoSuchMethodError`；错误又被 `.ok()` 吞掉，**挂起的异常留在 JNI env 上**，
+    /// 下一次 JNI 调用（`call_method` 里的 `GetObjectClass`）就让整个应用 SIGABRT。
+    /// 真机实测：调用「停服 + 用补丁 jar 重启」的流程，主进程直接崩掉。
     pub fn stop_server_process(id: &str) -> Result<(), String> {
         use jni::objects::JValue;
         let vm = java_vm().ok_or_else(|| "原生桥未就绪（JavaVM 未初始化）".to_string())?;
@@ -477,40 +512,15 @@ mod android {
             .map_err(|e| e.to_string())?;
         let ctx = activity().ok_or_else(|| "原生桥未就绪（Activity 未 attach）".to_string())?;
 
-        let pkg = env.new_string("com.zhayi.qookix").map_err(|e| e.to_string())?;
-        let cls = env
-            .new_string("com.zhayi.qookix.services.ServerService")
-            .map_err(|e| e.to_string())?;
-        let cn_cls = env.find_class("android/content/ComponentName").map_err(|e| e.to_string())?;
-        let cn = env
-            .new_object(
-                &cn_cls,
-                "(Ljava/lang/String;Ljava/lang/String;)V",
-                &[JValue::Object(&pkg), JValue::Object(&cls)],
-            )
-            .map_err(|e| e.to_string())?;
-        let intent_cls = env.find_class("android/content/Intent").map_err(|e| e.to_string())?;
-        let intent = env.new_object(&intent_cls, "()V", &[]).map_err(|e| e.to_string())?;
+        let intent = server_service_intent(&mut env, id)?;
         env.call_method(
-            &intent,
-            "setComponent",
-            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
-            &[JValue::Object(&cn)],
+            &ctx,
+            "stopService",
+            "(Landroid/content/Intent;)Z",
+            &[JValue::Object(&intent)],
         )
-        .map_err(|e| e.to_string())?;
-        let key = env.new_string("server_id").map_err(|e| e.to_string())?;
-        let val = env.new_string(id).map_err(|e| e.to_string())?;
-        env.call_method(
-            &intent,
-            "putExtra",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
-            &[JValue::Object(&key), JValue::Object(&val), JValue::Object(&val)],
-        )
-        .ok();
-
-        env.call_method(&ctx, "stopService", "(Landroid/content/Intent;)Z", &[JValue::Object(&intent)])
-            .map_err(|e| e.to_string())
-            .map(|_| ())
+        .map_err(|e| e.to_string())
+        .map(|_| ())
     }
 
     /// 构造指向 ServerService 的 Intent

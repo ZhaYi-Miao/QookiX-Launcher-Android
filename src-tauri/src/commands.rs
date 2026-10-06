@@ -939,13 +939,13 @@ const SUBFOLDERS: [&str; 9] = [
     "mods", "shaderpacks", "resourcepacks", "saves", "screenshots", "config", "logs", "natives", "icons",
 ];
 
-/// 实例目录根：<data_dir>/instances/<id>。先校验实例 ID 防路径穿越。
+/// 实例目录根：`settings::instances_root()/<id>`（用户可把游戏目录改到外部）。
+/// 先校验实例 ID 防路径穿越。
 async fn instance_root(instance_id: &str) -> Result<std::path::PathBuf, String> {
     fsutil::validate_id(instance_id, "实例")?;
-    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    Ok(std::path::PathBuf::from(&data_dir)
-        .join("instances")
-        .join(instance_id))
+    settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 把相对路径约束在实例目录内，拒绝 `..` / 绝对路径 / 越界符号链接。

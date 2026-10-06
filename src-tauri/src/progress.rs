@@ -210,6 +210,20 @@ pub fn emit_launch_exit() {
     }
 }
 
+/// 服务端启动阶段（`server://stage`：`{ id, stage }`）。
+///
+/// 启动一台服务器可能要几十秒（旧版 Paper 首次还要先生成补丁、新版要下几十 MB 的原版包），
+/// 期间界面只有一颗转圈的按钮 —— 用户完全不知道是在干活还是卡死了。
+/// 服务端详情页把它直接显示在「启动」按钮上（见 ServerDetailView.vue）。
+pub fn emit_server_stage(server_id: &str, stage: &str) {
+    if let Some(app) = app() {
+        let _ = app.emit(
+            "server://stage",
+            serde_json::json!({ "id": server_id, "stage": stage }),
+        );
+    }
+}
+
 /// 游戏进程状态变化。前端据此显示「运行中」并提供「关闭所有实例」。
 pub fn emit_launch_state(instance_id: &str, state: &str, pid: u32, code: Option<i32>) {
     if let Some(app) = app() {

@@ -307,13 +307,10 @@ pub async fn is_version_installed(version_id: &str) -> bool {
 /// 真正的 JVM 启动在 Activity 里 —— 必须在**拉起之前**就检查，否则空实例会：
 /// 黑屏一下再弹回启动器（用户看到「秒退 / 黑屏」，完全不知道是没装）。
 pub async fn is_instance_installed(instance_id: &str) -> bool {
-    let Ok(data_dir) = get_data_dir().await else {
+    let Ok(inst_root) = crate::settings::instances_root().await else {
         return false;
     };
-    let inst = Path::new(&data_dir)
-        .join("instances")
-        .join(instance_id)
-        .join("instance.json");
+    let inst = inst_root.join(instance_id).join("instance.json");
     let Ok(txt) = tokio::fs::read_to_string(&inst).await else {
         return false;
     };

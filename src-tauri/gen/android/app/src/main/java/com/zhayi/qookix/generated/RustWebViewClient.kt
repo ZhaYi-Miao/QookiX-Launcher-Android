@@ -29,6 +29,16 @@ class RustWebViewClient(webView: RustWebView, context: Context): WebViewClient()
         view: WebView,
         request: WebResourceRequest
     ): WebResourceResponse? {
+        // [临时诊断 2026-10-06] 查「前端更新在真机上不生效」到底加载了谁：
+        // 打入口 HTML / 分片 JS 的请求 URL + 是否走 APK assets 那条分支。
+        // 只打关键请求避免刷屏，定位完可删。
+        run {
+            val u = request.url.toString()
+            if (u.contains(".html") || u.contains("/assets/index-") || u.contains("MultiplayerView")) {
+                val viaAssets = runCatching { Rust.withAssetLoader((view as RustWebView).id) }.getOrDefault(false)
+                android.util.Log.i("QkWryAsset", "请求=$u  走APK-assets=$viaAssets")
+            }
+        }
         pendingUrlRedirect?.let {
             Handler(Looper.getMainLooper()).post {
               view.loadUrl(it)

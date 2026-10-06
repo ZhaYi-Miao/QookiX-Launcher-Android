@@ -9,10 +9,12 @@ import {
   Tab as VanTab,
   Field as VanField,
 } from "vant";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useServersStore } from "../stores/servers";
 import ServerFileManager from "../components/ServerFileManager.vue";
 import AppInput from "../ui/AppInput.vue";
+import AppSwitch from "../ui/AppSwitch.vue";
 
 const route = useRoute();
 const message = useMessage();
@@ -86,6 +88,8 @@ async function toggleRun() {
       message.success(note || $t("multiplayer.server-stopped"));
       await loadLogs();
     } else {
+      startStage.value = $t("server-detail.starting");
+      await watchStage();
       await servers.start(s.id);
       message.success($t("multiplayer.server-started"));
     }
@@ -93,7 +97,25 @@ async function toggleRun() {
     message.error(String(e));
   } finally {
     busy.value = "";
+    startStage.value = "";
   }
+}
+
+/**
+ * 启动阶段文案（后端 `server://stage` 事件），直接显示在「启动」按钮上。
+ *
+ * 启动一台服务器可能要几十秒 —— 旧版 Paper 首次要先生成补丁、新版要下几十 MB 原版包 ——
+ * 只给一颗转圈的按钮，用户分不清是在干活还是卡死了。后端会把阶段（甚至当前日志行，
+ * 如 `Downloading mojang_26.3.jar`）报过来，这里原样显示。
+ */
+const startStage = ref("");
+let unlistenStage: (() => void) | null = null;
+
+async function watchStage() {
+  if (unlistenStage) return;
+  unlistenStage = await listen<{ id: string; stage: string }>("server://stage", (e) => {
+    if (e.payload?.id === serverId) startStage.value = e.payload.stage;
+  });
 }
 
 async function copyAddress() {
@@ -150,6 +172,23 @@ async function save() {
   }
 }
 
+/**
+ * 同意 / 撤回 Minecraft EULA。
+ *
+ * 后端一直支持 `update_hosted_server({eula})`，`start_hosted_server` 也会按它写 eula.txt，
+ * 但界面上**从来没有这个开关** —— 原来的提示却让用户「去设置里勾选」，用户当然找不到。
+ * 这里直接给开关；保存走 `servers.update`，本地列表会同步替换，勾完提示与启动按钮立刻跟着变。
+ */
+async function toggleEula(v: boolean) {
+  const s = server.value;
+  if (!s) return;
+  try {
+    await servers.update({ id: s.id, eula: v });
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 async function loadLogs() {
   try {
     logs.value = await api.readHostedServerLog(serverId);
@@ -187,6 +226,8 @@ onUnmounted(() => {
     clearInterval(timer);
     timer = null;
   }
+  unlistenStage?.();
+  unlistenStage = null;
 });
 </script>
 
@@ -231,7 +272,13 @@ onUnmounted(() => {
       :loading="busy === 'run'"
       @click="toggleRun"
     >
-      {{ running ? $t("multiplayer.stop") : $t("server-detail.start") }}
+      {{
+        running
+          ? $t("multiplayer.stop")
+          : busy === "run" && startStage
+            ? startStage
+            : $t("server-detail.start")
+      }}
     </van-button>
     <p v-if="!coreReady && !running" class="addr-hint">{{ $t("server-detail.memory-hint") }}</p>
 
@@ -242,8 +289,17 @@ onUnmounted(() => {
       <van-tab name="console" :title="$t('server-detail.console')" />
     </van-tabs>
     <div v-if="tab === 'config'" class="pane">
-      <!-- EULA 没勾选时给出明确提示（勾了就不占地方） -->
-      <p v-if="server && !server.eula" class="warn">{{ $t("server-detail.eula-required") }}</p>
+      <!-- EULA 开关：这里点，不用去别处找。勾上后端会把服务端目录里的 eula.txt 改成 true，
+           启动前还会再兜一次（见 servers.rs::start_hosted_server）。 -->
+      <div class="choice">
+        <div class="choice-info">
+          <span class="choice-label">{{ $t("server-detail.eula") }}</span>
+          <p class="choice-hint">
+            {{ server?.eula ? $t("server-detail.eula-done") : $t("server-detail.eula-required") }}
+          </p>
+        </div>
+        <app-switch :value="!!server?.eula" @update:value="toggleEula" />
+      </div>
       <div class="field">
         <label>{{ $t("server-detail.max-memory") }}</label>
         <app-input v-model:value="form.maxMem" type="text" />
@@ -260,7 +316,7 @@ onUnmounted(() => {
         <label>stop</label>
         <app-input v-model:value="form.stopCommand" placeholder="stop" />
       </div>
-      <van-button block type="primary" :loading="busy === 'save'" @click="save">{{ $t("common.save") }}</van-button>
+      <van-button class="save" block type="primary" :loading="busy === 'save'" @click="save">{{ $t("common.save") }}</van-button>
     </div>
     <div v-else-if="tab === 'files'" class="pane"><ServerFileManager :server-id="serverId" /></div>
     <div v-else-if="tab === 'logs'" ref="logPane" class="pane logs">
@@ -349,16 +405,6 @@ onUnmounted(() => {
   min-height: 34px;
   flex-shrink: 0;
 }
-.warn {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(255, 152, 0, 0.12);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-2);
-  flex-shrink: 0;
-}
 .addr-hint {
   margin: -4px 2px 0;
   font-size: 11px;
@@ -401,6 +447,45 @@ onUnmounted(() => {
 }
 .tabs {
   flex-shrink: 0;
+}
+/* tab 条圆角胶囊（与下载页「下载中 / 已下载」同一套观感）：Vant 默认直角，手机上太硬 */
+.tabs :deep(.van-tabs__wrap) {
+  border-radius: 12px;
+  overflow: hidden;
+}
+.tabs :deep(.van-tab) {
+  min-height: 42px;
+  align-items: center;
+}
+/* EULA 开关行：与设置页的 .choice-row 同一套排法 */
+.choice {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.choice-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.choice-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.choice-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+/* 保存按钮：`.pane` 是列方向 flex，按钮默认 flex-shrink:1 会被上面的字段挤成一条细长条 */
+.save {
+  flex-shrink: 0;
+  min-height: 44px;
 }
 .pane {
   flex: 1;

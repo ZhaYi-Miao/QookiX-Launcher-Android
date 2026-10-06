@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t as $t } from "../i18n";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage } from "../composables/message";
 import { useDialog } from "../composables/dialog";
 import { useRouter } from "vue-router";
@@ -11,6 +11,7 @@ import { Button as VanButton, Empty as VanEmpty } from "vant";
 import { IconPlus } from "../components/icons";
 import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
+import AppSelect from "../ui/AppSelect.vue";
 
 const servers = useServersStore();
 const accounts = useAccountsStore();
@@ -26,14 +27,86 @@ const showCreate = ref(false);const form = ref({ name: "", core: "paper", mcVers
 const saving = ref(false);
 const starting = ref("");
 
+/**
+ * 服务端核心：**只列后端真的实现了的**（`src-tauri/src/servers.rs` 里只有
+ * Paper / Vanilla / Fabric 三条下载链路，其余核心会直接报「还在开发中」✗）。
+ * 以前这里 `core` 被写死成 `paper` 且界面上没有入口 ✗ —— 想装原版都没办法。
+ */
+const SERVER_CORES = [
+  { label: "Paper", value: "paper" },
+  { label: "Vanilla 原版", value: "vanilla" },
+  { label: "Fabric（实验）", value: "fabric" },
+];
+
+/**
+ * 可选游戏版本：与「创建实例」用**同一份官方清单**（`api.getVersionManifest()`）。
+ * 以前这里是 `app-input` 让用户**手打版本号** ✗ —— 占位符却写着"选择版本" ✗，
+ * 打错一个字就变成"Paper 暂无该版本的构建"，而且没法知道有哪些可选。
+ */
+const versionOptions = ref<{ label: string; value: string }[]>([]);
+const versionsLoading = ref(false);
+const versionsError = ref("");
+
+/**
+ * 可选版本**跟着核心走**：
+ * - Paper：只能用 Paper 自己的版本清单。它并不支持所有 MC 版本 —— 1.8 那条线
+ *   只有 1.8.8（`1.8.9` 不存在），选 1.8.9 会在装核心时拿到 404。
+ * - 原版 / Fabric：用官方 version manifest（与「创建实例」同一份）。
+ * 每个核心的清单缓存一份，来回切核心不用重复请求。
+ */
+const versionCache = ref<Record<string, { label: string; value: string }[]>>({});
+
+async function loadGameVersions() {
+  const core = form.value.core;
+  const cached = versionCache.value[core];
+  if (cached?.length) {
+    versionOptions.value = cached;
+    ensureVersionValid();
+    return;
+  }
+  versionsLoading.value = true;
+  versionsError.value = "";
+  try {
+    if (core === "paper") {
+      versionOptions.value = (await api.listPaperVersions()).map((v) => ({ label: v, value: v }));
+    } else {
+      const m = await api.getVersionManifest();
+      versionOptions.value = m.versions
+        .filter((v) => v.type === "release")
+        .map((v) => ({ label: v.id, value: v.id }));
+    }
+    versionCache.value = { ...versionCache.value, [core]: versionOptions.value };
+    ensureVersionValid();
+  } catch (e) {
+    versionsError.value = $t("multiplayer.version-failed", { p1: String(e) });
+  } finally {
+    versionsLoading.value = false;
+  }
+}
+
+/** 当前选中的版本不在新清单里（多半是刚换过核心）就落到最新那个，别让「创建」一直禁用 */
+function ensureVersionValid() {
+  if (!versionOptions.value.some((o) => o.value === form.value.mcVersion)) {
+    form.value.mcVersion = versionOptions.value[0]?.value ?? "";
+  }
+}
+
+watch(showCreate, (open) => { if (open) void loadGameVersions(); });
+// 换核心要重新取清单：两边的版本集合不一样
+watch(() => form.value.core, () => { form.value.mcVersion = ""; void loadGameVersions(); });
+
 async function createServer() {
-  if (!form.value.name.trim() || !form.value.mcVersion) return;
+  // 名称留空是允许的（输入框提示「留空则自动命名」）：后端会兜底成游戏版本号。
+  // 之前这里把空名也算作「不可创建」，加上按钮的 disabled，留空就再也点不动了。
+  if (!form.value.mcVersion) return;
   saving.value = true;
   try {
     const s = await servers.create(form.value.name.trim(), form.value.core, form.value.mcVersion);
     showCreate.value = false;
     message.success($t("downloads.finished"));
-    void servers.installCore(s.id);
+    // 后台装核心：失败必须说出来 —— 原来 `void installCore()` 把错误吞成未处理的
+    // Promise 拒绝，用户只看到「创建成功」，进详情页才发现核心没有。
+    void servers.installCore(s.id).catch((e) => message.error(String(e)));
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -265,8 +338,16 @@ onBeforeUnmount(() => {
       <div class="sheet">
         <div class="sheet-title">{{ $t("title-bar.new-server") }}</div>
         <app-input v-model:value="form.name" :placeholder="$t('multiplayer.server-name-hint')" maxlength="40" />
-        <app-input v-model:value="form.mcVersion" :placeholder="$t('create-instance.select-version')" maxlength="16" />
-        <van-button block type="primary" :loading="saving" @click="createServer">{{ $t("multiplayer.create") }}</van-button>
+        <app-select v-model:value="form.core" :options="SERVER_CORES" :placeholder="$t('multiplayer.server-core')" />
+        <app-select
+          v-if="versionOptions.length"
+          v-model:value="form.mcVersion"
+          :options="versionOptions"
+          :placeholder="$t('create-instance.select-version')"
+        />
+        <!-- 只在拿不到版本清单时出现；直接内联样式，免得为一行提示再去改样式块 -->
+        <div v-else class="mp-hint" style="padding: 10px 4px; font-size: 13px; opacity: 0.7">{{ versionsLoading ? $t("multiplayer.version-loading") : versionsError }}</div>
+        <van-button block type="primary" :disabled="!form.mcVersion" :loading="saving" @click="createServer">{{ $t("multiplayer.create") }}</van-button>
       </div>
     </app-popup>
   </div>

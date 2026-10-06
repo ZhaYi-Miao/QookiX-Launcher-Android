@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t as $t } from "./i18n";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "./api";
 import { useSettingsStore } from "./stores/settings";
@@ -19,6 +19,7 @@ import FirstRunSetup from "./components/FirstRunSetup.vue";
 import { IconHome, IconGrid, IconCompass, IconDownload, IconMoreVertical } from "./components/icons";
 
 const route = useRoute();
+const router = useRouter();
 const settings = useSettingsStore();
 const accounts = useAccountsStore();
 const instances = useInstancesStore();
@@ -50,8 +51,12 @@ watch(() => settings.settings?.ui_scale, (v) => {
 }, { immediate: true });
 
 watch(() => settings.settings?.background_image, (v) => {
-  document.documentElement.classList.toggle("has-bg", !!v);
-  if (v) document.documentElement.style.setProperty("--bg-image", `url("${convertFileSrc(v)}")`);
+  const root = document.documentElement;
+  root.classList.toggle("has-bg", !!v);
+  if (v) root.style.setProperty("--bg-image", `url("${convertFileSrc(v)}")`);
+  // 清空时必须把变量一起移除：`.app-bg::before` 一直在读 --bg-image，
+  // 只去掉 has-bg 类的话旧图片照样画出来（「清除背景」看起来没反应）。
+  else root.style.removeProperty("--bg-image");
 }, { immediate: true });
 
 watch(() => settings.settings?.orientation, (m) => { if (m) void api.setOrientation(m); }, { immediate: true });
@@ -107,6 +112,17 @@ watch(
   { immediate: true }
 );
 
+/**
+ * 点底栏 = 回到这一格的主页。
+ *
+ * Vant 的 `TabbarItem` 在**已选中**时内部会跳过跳转（`onClick` 里 `if (!active.value) setActive(...)`），
+ * 而「实例」「更多」这两格各自对应多个路由（实例详情 / 皮肤 / 设置 / 新闻…）：
+ * 进了二级页以后再点这一格完全没反应，只能按系统返回键。这里自己补一次 push。
+ */
+function onTabClick(to: string) {
+  if (route.path !== to) void router.push(to);
+}
+
 const downloadCount = computed(() => tasks.activeCount);
 const pageTitle = computed(() => (route.meta.title as string) || "");
 
@@ -156,18 +172,23 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
     </main>
 
     <van-tabbar v-model="tabModel" :fixed="false" :safe-area-inset-bottom="true" class="tabs">
-      <van-tabbar-item v-for="t in PRIMARY_TABS" :key="t.name" :name="t.name" :to="t.to">
+      <van-tabbar-item v-for="t in PRIMARY_TABS" :key="t.name" :name="t.name" :to="t.to" @click="onTabClick(t.to)">
         <template #icon><component :is="t.icon" class="tab-icon" /></template>
         {{ t.label }}
       </van-tabbar-item>
-      <van-tabbar-item name="downloads" to="/downloads" :badge="downloadCount > 0 ? String(downloadCount) : ''">
+      <van-tabbar-item
+        name="downloads"
+        to="/downloads"
+        :badge="downloadCount > 0 ? String(downloadCount) : ''"
+        @click="onTabClick('/downloads')"
+      >
         <template #icon><IconDownload class="tab-icon" /></template>
         {{ $t("nav.downloads") }}
       </van-tabbar-item>
       <!-- 「更多」：手机底栏只放 5 个，其余入口收到 /more 页（入口一个都没少）。
            做成真实路由页而不是底栏内联弹层 —— 底栏项天生就是「切换页面」，
            返回键/深链/选中态都由路由管，不用自己处理面板的开关与回退。 -->
-      <van-tabbar-item name="more" to="/more">
+      <van-tabbar-item name="more" to="/more" @click="onTabClick('/more')">
         <template #icon><IconMoreVertical class="tab-icon" /></template>
         {{ $t("nav.more") }}
       </van-tabbar-item>

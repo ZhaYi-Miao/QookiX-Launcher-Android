@@ -849,8 +849,7 @@ pub async fn get_loader_versions(loader: String, mc_version: String) -> Result<V
 
 pub async fn install_game(instance_id: &str) -> Result<serde_json::Value> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = settings::get_data_dir().await?;
-    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let instance_path = settings::instance_dir(instance_id).await?;
     let instance_json = instance_path.join("instance.json");
 
     if !instance_json.exists() {
@@ -1023,8 +1022,7 @@ pub async fn install_content(
     version_id: &str,
     kind: &str,
 ) -> Result<Value> {
-    let data_dir = settings::get_data_dir().await?;
-    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let instance_path = settings::instance_dir(instance_id).await?;
     let folder = crate::instances::kind_folder(kind);
     let content_dir = instance_path.join(folder);
     tokio::fs::create_dir_all(&content_dir).await.ok();
@@ -1126,8 +1124,7 @@ pub async fn install_content(
 
 pub async fn list_content(instance_id: &str, kind: &str) -> Result<serde_json::Value> {
     crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = settings::get_data_dir().await?;
-    let instance_path = std::path::PathBuf::from(&data_dir).join("instances").join(instance_id);
+    let instance_path = settings::instance_dir(instance_id).await?;
     let content_dir = instance_path.join(crate::instances::kind_folder(kind));
 
     let mut records = crate::instances::list_content_records(instance_id, kind).await;
@@ -1205,10 +1202,9 @@ pub async fn uninstall_content(instance_id: &str, kind: &str, filename: &str) ->
     if !crate::util::is_safe_filename(filename) {
         return Err("非法文件名".into());
     }
-    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    let dir = std::path::PathBuf::from(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let dir = settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?
         .join(crate::instances::kind_folder(kind));
     let _ = std::fs::remove_file(dir.join(filename));
     let _ = std::fs::remove_file(dir.join(format!("{filename}.disabled")));
@@ -1240,10 +1236,9 @@ pub async fn import_local_file(
     if !crate::util::is_safe_filename(&filename) {
         return Err("非法的文件名".into());
     }
-    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    let dest = std::path::PathBuf::from(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let dest = settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?
         .join(crate::instances::kind_folder(kind))
         .join(&filename);
     // 复制 jar + 解出图标/元数据全是同步 IO（模组包几十 MB），挪出 tokio worker
@@ -1318,10 +1313,9 @@ pub async fn apply_update(
         .await
         .map_err(|e| e.to_string())?;
     // 移除旧文件 + 记录（若与新版文件名不同）
-    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    let dir = std::path::PathBuf::from(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let dir = settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?
         .join(crate::instances::kind_folder(kind));
     if crate::util::is_safe_filename(old_filename) {
         let _ = std::fs::remove_file(dir.join(old_filename));
@@ -1334,10 +1328,9 @@ pub async fn apply_update(
 /// 异步识别未识别内容：先 sha1 哈希查找，回退到名称搜索。
 pub async fn identify_content(instance_id: &str, kind: &str) -> Result<(), String> {
     crate::fsutil::validate_id(instance_id, "实例")?;
-    let data_dir = settings::get_data_dir().await.map_err(|e| e.to_string())?;
-    let dir = std::path::PathBuf::from(&data_dir)
-        .join("instances")
-        .join(instance_id)
+    let dir = settings::instance_dir(instance_id)
+        .await
+        .map_err(|e| e.to_string())?
         .join(crate::instances::kind_folder(kind));
     let records = crate::instances::list_content_records(instance_id, kind).await;
     let to_identify: Vec<(String, String)> = records

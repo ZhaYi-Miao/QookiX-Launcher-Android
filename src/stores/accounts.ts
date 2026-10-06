@@ -93,7 +93,10 @@ export const useAccountsStore = defineStore("accounts", {
           } catch (e: unknown) {
             if (!this.msFlow) return;
             const msg = String(e);
-            if (msg === "__auth_pending__") {
+            // 「尚未授权」只是继续等；网络抖动后端也按这个码返回（见 accounts::ms_poll），
+            // 免得切一次前后台就把用户已经完成的授权丢掉。用 includes 而不是全等：
+            // 这个标记经过 invoke 的错误包装后可能带上前缀，全等判断会在某天静默失效。
+            if (msg.includes("__auth_pending__")) {
               await new Promise((r) => setTimeout(r, 5000));
               continue;
             }
