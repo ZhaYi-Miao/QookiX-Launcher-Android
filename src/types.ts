@@ -541,14 +541,17 @@ export interface ServerStatus {
   error: string | null;
 }
 
-// 本地托管的游戏服务器核心类型
+// 本地托管的游戏服务器核心类型。
+// **必须与后端 `models.rs::ServerCore` 完全一致**（那边带 `rename_all = "lowercase"`）：
+// 以前这里写的是 spigot/purpur，而后端是 forge/neoforge —— 两边都取不到对方的键，
+// `CORE_LABELS[core]` 会拿到 undefined。目前真正能装核心的只有 paper / vanilla / fabric
+// （见 `servers.rs::install_hosted_server_core`），其余核心会明确报「还在开发中」。
 export type ServerCore =
   | "vanilla"
   | "paper"
-  | "spigot"
-  | "purpur"
+  | "fabric"
   | "forge"
-  | "fabric";
+  | "neoforge";
 
 // 陶瓦联机（Terracotta）
 export interface TerracottaInfo {

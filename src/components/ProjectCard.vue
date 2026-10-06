@@ -55,6 +55,9 @@ const iconError = ref(false);
   gap: 8px;
   padding: 12px;
   cursor: pointer;
+  /* 允许卡片窄于自身 min-content：标题是 `white-space: nowrap`，不写这一条
+     grid item 的 `min-width: auto` 会顶着标题宽度把卡片撑出轨道（右侧溢出屏幕）。 */
+  min-width: 0;
 }
 .top {
   display: flex;

@@ -157,7 +157,11 @@ pub struct ProjectFile {
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectDependency {
+    /// 发到前端是 `projectId` / `dependencyType`（前端 `types.ts::ProjectDependency`
+    /// 就是这么命名的）。少了 camelCase 转换时安装对话框的依赖标签与类型高亮会全丢
+    /// —— 读到的是 undefined。
     pub project_id: String,
     pub title: String,
     pub slug: String,
@@ -600,15 +604,26 @@ async fn project_versions_curseforge(
 
 // ==================== Project Dependencies ====================
 
-pub async fn project_dependencies(provider: &str, project_id: &str) -> Result<Vec<ProjectDependency>> {
+pub async fn project_dependencies(
+    provider: &str,
+    project_id: &str,
+    version_id: Option<&str>,
+) -> Result<Vec<ProjectDependency>> {
     if provider == "curseforge" {
         return Ok(vec![]); // CurseForge deps handled via files
     }
 
     let client = crate::util::http_client().await;
-    let response = client.get(format!("{}/project/{}", MODRINTH_API, project_id))
-        .send().await.context("Failed to get project")?;
-    let result: Value = response.json().await.context("Failed to parse project")?;
+    // **必须按版本查**：Modrinth 的依赖是**版本级**的 —— `/project/{id}` 上那个
+    // `dependencies` 数组绝大多数项目是空的，只查它等于「依赖列表永远是空的」
+    // （安装对话框里那排依赖标签从来没出现过）。前端明明传了 version_id，
+    // 这里以前却用 `_version_id` 把它丢掉了。
+    let url = match version_id.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => format!("{MODRINTH_API}/project/{project_id}/version/{v}"),
+        None => format!("{MODRINTH_API}/project/{project_id}"),
+    };
+    let response = client.get(url).send().await.context("Failed to get project version")?;
+    let result: Value = response.json().await.context("Failed to parse project version")?;
 
     let mut deps = Vec::new();
     if let Some(relations) = result["dependencies"].as_array() {

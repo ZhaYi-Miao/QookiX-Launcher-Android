@@ -2725,7 +2725,9 @@ textarea.text-input {
 }
 .deps-groups {
   display: grid;
-  grid-template-columns: 1fr;
+  /* minmax(0,1fr)：条目里有 nowrap 的版本号/按钮，`1fr` 的最小尺寸是内容
+     min-content，窄屏上会把这一列顶宽、右侧出血（同 .storage-grid 的坑）。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   margin-top: 4px;
 }
@@ -3087,8 +3089,9 @@ textarea.text-input {
 .about-links-row {
     grid-column: 1 / -1;
     display: grid;
-    /* 手机：一行两个（3 个会让「GitHub 仓库」这类长文字换行，很难看） */
-    grid-template-columns: repeat(2, 1fr);
+    /* 手机：一行两个（3 个会让「GitHub 仓库」这类长文字换行，很难看）。
+       minmax(0,1fr)：这一行的链接名是长文字，`1fr` 会被内容顶宽 → 右侧出血。 */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     }
     .about-links-row .about-link {

@@ -372,8 +372,12 @@ onMounted(async () => {
 .grid {
   display: grid;
   /* 手机：一行一张卡。双列时每张卡只有 ~160px，标题/作者/描述全被压扁，
-     「安装」两个字还会被挤成竖排。 */
-  grid-template-columns: 1fr;
+     「安装」两个字还会被挤成竖排。
+     ⚠️ 写 `minmax(0, 1fr)` 而不是 `1fr`：`1fr` = `minmax(auto, 1fr)`，轨道最小宽
+     = 卡片 min-content；而卡片里的标题是 `white-space: nowrap`，min-content 就是
+     **标题整行宽度** → 窄屏（360px 视口实测）上轨道被撑到比容器还宽 20px，
+     卡片右侧直接溢出屏幕、顶到边缘。配合 ProjectCard 里的 `min-width: 0` 一起生效。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   grid-auto-rows: max-content;
 }

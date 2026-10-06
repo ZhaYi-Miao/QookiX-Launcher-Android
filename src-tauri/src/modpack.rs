@@ -531,6 +531,8 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
 
     Ok(MinecraftProfile {
         id: instance_id, name: instance_name, mc_version, loader, loader_version,
+        // 整合包导入不带别名（用户可事后在设置页加，用于 qookix://launch/<别名>）
+        alias: None,
         created: Utc::now().timestamp(), last_played: None, total_play_time: 0,
         game_dir: instance_dir.to_string_lossy().to_string(), java_dir: String::new(),
         java_args: None, game_args: None, resolution: Some((854, 480)),

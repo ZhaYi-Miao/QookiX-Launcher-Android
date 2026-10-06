@@ -90,6 +90,7 @@ pub async fn create_instance(config: serde_json::Value) -> Result<MinecraftProfi
             _ => Loader::Vanilla,
         },
         loader_version: config["loaderVersion"].as_str().map(|s| s.to_string()),
+        alias: None,
         created: Utc::now().timestamp(),
         last_played: None,
         total_play_time: 0,
@@ -166,6 +167,29 @@ pub async fn update_instance(patch: serde_json::Value) -> Result<MinecraftProfil
     // Apply patch fields
     if let Some(v) = pick(&patch, &["name"]).and_then(|v| v.as_str()) {
         instance.name = v.to_string();
+    }
+    // 实例别名（`qookix://launch/<别名>` 用）。与桌面版 `instances.rs` 同一套校验：
+    // 小写、仅字母数字与 `-` / `_`、全局唯一、空串表示清除。
+    // 这里以前**完全没有这段** —— 设置页的「保存」是静默丢弃，用户以为改好了。
+    if let Some(v) = pick(&patch, &["alias"]) {
+        let raw = v.as_str().unwrap_or("").trim().to_ascii_lowercase();
+        if raw.is_empty() {
+            instance.alias = None;
+        } else {
+            if !raw
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(anyhow::anyhow!("别名只能包含英文字母、数字、- 和 _"));
+            }
+            // 冲突检查（排除自己）
+            for other in list_instances().await.unwrap_or_default() {
+                if other.id != instance.id && other.alias.as_deref() == Some(raw.as_str()) {
+                    return Err(anyhow::anyhow!("别名已被实例「{}」占用", other.name));
+                }
+            }
+            instance.alias = Some(raw);
+        }
     }
     if let Some(v) = pick(&patch, &["icon"]).and_then(|v| v.as_str()) {
         instance.icon = Some(v.to_string());

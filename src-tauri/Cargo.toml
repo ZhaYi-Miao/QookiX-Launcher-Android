@@ -1,6 +1,6 @@
 [package]
 name = "qookix-launcher"
-version = "1.2.3"
+version = "1.2.4"
 edition = "2021"
 rust-version = "1.77"
 description = "QookiX Launcher - Minecraft Launcher for Android and Desktop"

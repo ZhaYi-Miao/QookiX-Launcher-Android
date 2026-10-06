@@ -236,8 +236,11 @@ pub fn device_abi() -> String {
 const RECOMMENDED_KINDS: &[&str] = &["renderer", "driver", "components"];
 
 /// 首启准备状态：还缺哪些、一共多大、用户跳过没有。
+///
+/// 字段名与 `PluginInfo` 一样是 snake_case（前端 `types.ts::PluginSetupStatus`
+/// 也按 snake_case 读）。这里以前挂着 `rename_all = "camelCase"`，于是 `total_size`
+/// 发出去变成 `totalSize` → 首启窗口的「需要下载 X MB」恒为 0。
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetupStatus {
     /// 还有缺的（前端据此决定弹不弹首启窗口）
     pub needed: bool,

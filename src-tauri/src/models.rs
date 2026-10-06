@@ -9,6 +9,10 @@ pub struct MinecraftProfile {
     pub loader: Loader,
     #[serde(alias = "loaderVersion")]
     pub loader_version: Option<String>,
+    /// 实例别名：用于 `qookix://launch/<别名>` 协议启动（小写、全局唯一、无空格）。
+    /// 与桌面版同名字段对齐；`default` 让旧实例文件（没有这个键）照常读。
+    #[serde(default)]
+    pub alias: Option<String>,
     pub created: i64,
     #[serde(alias = "lastPlayed")]
     pub last_played: Option<i64>,
@@ -79,11 +83,20 @@ pub struct RendererIssue {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum Loader {
+    /// 旧 instance.json 里写的是 `"Vanilla"`（本枚举曾漏掉 `rename_all`）——
+    /// 每个变体都补 `alias` 才能在升级后继续读出来，否则 serde 报 unknown variant、
+    /// 整个实例加载失败。序列化一律输出小写，与前端 `types.ts` 的 `Loader` 对齐。
+    #[serde(alias = "Vanilla")]
     Vanilla,
+    #[serde(alias = "Fabric")]
     Fabric,
+    #[serde(alias = "Quilt")]
     Quilt,
+    #[serde(alias = "Forge")]
     Forge,
+    #[serde(alias = "NeoForge")]
     NeoForge,
 }
 

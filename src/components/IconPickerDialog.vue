@@ -245,7 +245,8 @@ function save() {
 }
 .ip-icons {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  /* min() 兜住窄容器（与设置页同一套写法） */
+  grid-template-columns: repeat(auto-fill, minmax(min(48px, 100%), 1fr));
   gap: 6px;
   max-height: 220px;
   overflow-y: auto;

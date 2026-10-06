@@ -56,95 +56,42 @@ const CMD_MAP: Record<string, string> = {
   logout_account: "remove_account",
 };
 
-// Android 后端未实现的命令列表 —— 调用时返回安全的默认值而不是崩溃
-const UNIMPLEMENTED = new Set([
-  "change_data_dir",
-  "detect_java",
-  "download_java",
-  "recommend_java",
-  "scan_minecraft_import",
-  "import_minecraft_folder",
-  "export_instance_pack",
-  "import_instance_pack",
-  "reveal_hosted_server_path",
-  "terracotta_detect",
-  "terracotta_download",
-  "terracotta_launch",
-  "terracotta_stop",
-  "terracotta_status",
-  "terracotta_create_room",
-  "terracotta_join_room",
-  "terracotta_leave",
-]);
-
-// 未实现命令的默认返回值（**只有只读命令**才允许给安全默认值）
-const UNIMPLEMENTED_DEFAULTS: Record<string, unknown> = {
-  detect_java: { candidates: [], selected: null },
-  recommend_java: null,
-  download_java: null,
-  scan_minecraft_import: undefined,
-  import_minecraft_folder: [],
-  // hosted servers
-  get_hosted_server: null,
-  create_hosted_server: null,
-  update_hosted_server: null,
-  delete_hosted_server: undefined,
-  // 缺了这两项时 invoke 会 resolve undefined，store 把 undefined 赋给
-  // `servers`，随后 `servers.length` 直接抛错 —— 多人游戏页与服务器详情页整页白屏。
-  list_hosted_servers: [],
-  is_hosted_server_running: false,
-  install_hosted_server_core: null,
-  start_hosted_server: undefined,
-  stop_hosted_server: undefined,
-  // 声明的是 string[]（ServerDetailView 会直接 .map()），给 "" 会在打开
-  // 「服务器日志」页签时抛 TypeError。
-  read_hosted_server_log: [],
-  open_hosted_server_folder: undefined,
-  reveal_hosted_server_path: undefined,
-  list_hosted_server_folders: { folders: [] },
-  list_hosted_server_files: { files: [] },
-  list_hosted_server_dir: { entries: [] },
-  read_hosted_server_file: "",
-  write_hosted_server_file: undefined,
-  list_hosted_server_config_files: [],
-  // terracotta
-  terracotta_detect: null,
-  terracotta_download: null,
-  terracotta_launch: null,
-  terracotta_stop: undefined,
-  terracotta_status: null,
-  terracotta_create_room: null,
-  terracotta_join_room: null,
-  terracotta_leave: undefined,
+/**
+ * Android 后端**没有实现**的命令 —— 一份表同时说清「哪些没有」和「读还是写」。
+ *
+ * 以前拆成 `UNIMPLEMENTED` / `UNIMPLEMENTED_WRITE` / `UNIMPLEMENTED_DEFAULTS` 三份，
+ * 结果互相矛盾：hosted 系列（create / update / delete / install / start / stop_hosted_server、
+ * write_hosted_server_file）**早已在后端实现**，却还挂在写名单里 —— 而拦截只认第一份，
+ * 于是名单形同虚设、默认值表里还留着一堆永远用不到的死条目（2026-10-06 审计）。
+ * 现在只有这一份真源：
+ *   "read"  → 给安全默认值（别让调用点抛 TypeError、整页崩）
+ *   "write" → 直接 reject（后端什么都没做，UI 绝不能弹「已保存 / 已启动」）
+ */
+const UNIMPLEMENTED: Record<string, "read" | "write"> = {
+  // 导入类：Android 上确实没有对应实现
+  scan_minecraft_import: "read",
+  import_minecraft_folder: "write",
+  import_instance_pack: "write",
+  // 陶瓦联机：这几条是**桌面版**「启动 Terracotta 进程」的接口，
+  // Android 改走 :tunnel 的本地 HTTP（terracotta_ping / terracotta_request）。
+  terracotta_detect: "read",
+  terracotta_status: "read",
+  terracotta_download: "write",
+  terracotta_launch: "write",
+  terracotta_stop: "write",
+  terracotta_create_room: "write",
+  terracotta_join_room: "write",
+  terracotta_leave: "write",
 };
 
-/**
- * 未实现命令中属于「写操作」的那些。
- *
- * 这些**绝不能**静默返回默认值 —— 后端什么都没做，UI 却会弹「配置已保存 /
- * 服务器已启动 / 已删除」，用户完全看不出来（问题清单 P0-10 的假成功族）。
- * 读命令仍走上面的默认值，避免整页崩。
- */
-const UNIMPLEMENTED_WRITE = new Set([
-  "change_data_dir",
-  "download_java",
-  "export_instance_pack",
-  "import_instance_pack",
-  "import_minecraft_folder",
-  "create_hosted_server",
-  "update_hosted_server",
-  "delete_hosted_server",
-  "install_hosted_server_core",
-  "start_hosted_server",
-  "stop_hosted_server",
-  "write_hosted_server_file",
-  "terracotta_download",
-  "terracotta_launch",
-  "terracotta_stop",
-  "terracotta_create_room",
-  "terracotta_join_room",
-  "terracotta_leave",
-]);
+/** 未实现命令的默认返回值（**只有只读命令**才允许给安全默认值） */
+const UNIMPLEMENTED_DEFAULTS: Record<string, unknown> = {
+  // 调用点把它当「扫描结果对象」用，给 undefined 最接近「什么都没扫到」
+  scan_minecraft_import: undefined,
+  // 这两条调用点会直接读字段，给 undefined 会抛 TypeError
+  terracotta_detect: null,
+  terracotta_status: null,
+};
 
 /**
  * 包装 tauri invoke：
@@ -163,9 +110,10 @@ function invoke<T>(
   const mappedCmd = CMD_MAP[cmd] ?? cmd;
 
   // 未实现的命令（不触发加载条）
-  if (UNIMPLEMENTED.has(mappedCmd)) {
+  const missing = UNIMPLEMENTED[mappedCmd];
+  if (missing) {
     console.warn(`[api] 命令 "${cmd}" (→ "${mappedCmd}") 在 Android 上未实现`);
-    if (UNIMPLEMENTED_WRITE.has(mappedCmd)) {
+    if (missing === "write") {
       // 写操作必须显式失败：否则 UI 会「假成功」（问题清单 P0-4 / P0-10）
       return Promise.reject(
         new Error($t("api.not-implemented", { p1: cmd }))

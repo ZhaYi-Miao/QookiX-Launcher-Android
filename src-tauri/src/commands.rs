@@ -471,8 +471,10 @@ pub async fn project_versions(provider: String, project_id: String, mc_version: 
 }
 
 #[command]
-pub async fn project_dependencies(provider: String, project_id: String, _version_id: Option<String>) -> Result<Vec<browse::ProjectDependency>, String> {
-    browse::project_dependencies(&provider, &project_id).await.map_err(|e| e.to_string())
+pub async fn project_dependencies(provider: String, project_id: String, version_id: Option<String>) -> Result<Vec<browse::ProjectDependency>, String> {
+    browse::project_dependencies(&provider, &project_id, version_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[command]

@@ -10,18 +10,16 @@ import type { ServerCore } from "../types";
 export const CORE_LABELS: Record<ServerCore, string> = {
   vanilla: "Vanilla",
   paper: "Paper",
-  spigot: "Spigot",
-  purpur: "Purpur",
-  forge: "Forge",
   fabric: "Fabric",
+  forge: "Forge",
+  neoforge: "NeoForge",
 };
 
 /** 核心 → 徽标颜色 */
 export const CORE_COLORS: Record<ServerCore, string> = {
   vanilla: "#a0a4b8",
   paper: "#5aa2f0",
-  spigot: "#4ecdc4",
-  purpur: "#c78aff",
-  forge: "#e89a4b",
   fabric: "#b48ead",
+  forge: "#e89a4b",
+  neoforge: "#e0a35c",
 };
