@@ -1247,6 +1247,17 @@ pub async fn read_instance_log(instance_id: String) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// 导出（分享）实例日志：打 zip 后走系统分享。
+///
+/// 日志目录默认在 `Android/data/<包名>/…` 下，**Android 11+ 屏蔽了 Android/data**，
+/// 文件管理器和电脑 MTP 都取不到（MT 会报「该文件被设置了私有权限」），分享是唯一出路。
+#[command]
+pub async fn export_instance_logs(instance_id: String) -> Result<(), String> {
+    crate::launch::export_instance_logs(&instance_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 渲染器健康检查：本次启动日志里有渲染器失败证据、且当前渲染器不是该版本推荐的那个时，
 /// 返回一份「建议切换」的说明（前端在玩家回到启动器后弹窗询问）。
 ///

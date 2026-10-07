@@ -123,7 +123,16 @@ public class ImportControlActivity extends Activity {
             return;
         }
 
-        new File(Tools.CTRLMAP_PATH + "/TMP_IMPORT_FILE.json").renameTo(new File(Tools.CTRLMAP_PATH + "/" + fileName + ".json"));
+        // 不再直接改名落盘，改为交给启动器那套「只读预览 → 确认就」流程：
+        // 这样**从MT 管理器分享进来的布局**和用 SAF 导入的走同一条路
+        //（都有预览、取消会清掉临时文件，不会留下没确认过的布局）。
+        // 顺带解决「SAF 看不到 Android/data」的问题 —— SAF 打不开的目录，
+        // 用户可以在 MT 里长按文件 → 分享 → QookiX 走这里。
+        Intent preview = new Intent(this, net.kdt.pojavlaunch.CustomControlsActivity.class);
+        preview.putExtra("layout", "TMP_IMPORT_FILE");
+        preview.putExtra("preview", true);
+        preview.putExtra("saveAs", fileName);
+        startActivity(preview);
         Toast.makeText(getApplicationContext(), getText(R.string.import_control_done), Toast.LENGTH_SHORT).show();
         finishAndRemoveTask();
     }

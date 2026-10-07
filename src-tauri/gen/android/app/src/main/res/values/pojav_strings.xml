@@ -152,6 +152,8 @@
 
     <string name="customctrl_selectdefault">Select default controlmap</string>
     <string name="customctrl_export">Export controlmap</string>
+    <string name="customctrl_preview_use">Use this layout</string>
+    <string name="customctrl_preview_cancel">Cancel</string>
 
     <string name="main_share_logs">Share log file</string>
     <string name="main_install_jar_file">Execute a .jar</string>

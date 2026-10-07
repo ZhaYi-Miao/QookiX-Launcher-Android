@@ -37,7 +37,7 @@
             app:layout_constraintBottom_toTopOf="@+id/editText_import_control_file_name"
             app:layout_constraintStart_toStartOf="@+id/editText_import_control_file_name" />
 
-        <com.kdt.mcgui.MineEditText
+        <EditText
             android:id="@+id/editText_import_control_file_name"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -45,10 +45,13 @@
             android:layout_marginBottom="20dp"
             android:hint="File name"
             android:imeOptions="flagForceAscii"
+            android:inputType="text"
+            android:textColor="@android:color/white"
+            android:textColorHint="#88FFFFFF"
 
             app:layout_constraintBottom_toTopOf="@+id/mineButton_import_control" />
 
-        <com.kdt.mcgui.MineButton
+        <Button
             android:id="@+id/mineButton_import_control"
             android:layout_width="0dp"
             android:layout_height="wrap_content"

@@ -91,7 +91,7 @@ import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
 import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.2.2 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.3.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -722,6 +722,50 @@ function chooseGameDir(opt: GameDirOption) {
   });
 }
 
+/**
+ * 公共目录：放在这里的话，日志 / 存档 / 模组电脑 MTP 和文件管理器都能直接看到。
+ *
+ * 为什么需要它：默认的「应用专属外部目录」在 `/storage/emulated/0/Android/data/<包名>/` 下，
+ * **Android 11+ 单独屏蔽了 Android/data** —— 文件管理器即使有「所有文件访问」也进不去，
+ * 电脑 MTP 也看不到。表现就是「日志拿不出来」（MT 报「该文件被设置了私有权限」）。
+ */
+const PUBLIC_GAME_DIR = "/storage/emulated/0/QookiX";
+
+async function moveToPublicDir() {
+  if (gameDirBusy.value) return;
+  if (gameDirState.value && !gameDirState.value.allFilesAccess) {
+    message.warning($t("settings.game-dir-need-permission"));
+    await ensureAllFilesAccess();
+    return;
+  }
+  // 用项目自带的命令式确认框（naive 形状：content / positiveText / onPositiveClick）
+  dialog.warning({
+    title: $t("settings.game-dir-public-title"),
+    content: $t("settings.game-dir-public-desc", { p1: PUBLIC_GAME_DIR }),
+    positiveText: $t("settings.game-dir-migrate"),
+    negativeText: $t("common.cancel"),
+    onPositiveClick: () => {
+      void applyGameDir(PUBLIC_GAME_DIR, true);
+    },
+  });
+}
+
+/** 申请「所有文件访问」并等结果（写公共目录、选自定义目录都需要它）。 */
+async function ensureAllFilesAccess() {
+  try {
+    if (gameDirState.value?.allFilesAccess) return;
+    await grantAllFilesAccess();
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      await loadGameDirs();
+      if (gameDirState.value?.allFilesAccess) return;
+    }
+    message.warning($t("settings.game-dir-need-permission"));
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 /** 自定义目录：先弹系统选择器（异步），再轮询取回真实路径。 */
 async function pickCustomGameDir() {
   if (gameDirState.value && !gameDirState.value.allFilesAccess) {
@@ -921,6 +965,18 @@ function fmtBytes(v: number | null | undefined): string {
   return v ? fmtSize(v) : "—";
 }
 
+/**
+ * 从系统设置返回后刷新权限状态。
+ *
+ * 「所有文件访问」只能在系统设置里手动打开，我们的 intent 一发出去就返回：用户勾完回到
+ * 应用，这个组件**还挂着**（只是 WebView 走 onPause/onResume）。原来只在 `onMounted` 读一次，
+ * 于是 `gameDirState.allFilesAccess` 永远是 false —— 按钮一直显示「授权」，点「选择目录」
+ * 还被 `game-dir-need-permission` 拦下来，看起来就像「授权了也没用」。
+ */
+function onVisible() {
+  if (document.visibilityState === "visible") void loadGameDirs();
+}
+
 onMounted(() => {
   settings.load();
   loadPojav();
@@ -939,6 +995,7 @@ onMounted(() => {
   });
   void loadPlugins();
   void api.getPluginManifestUrl().then((u) => (pluginManifestUrl.value = u));
+  document.addEventListener("visibilitychange", onVisible);
   // 安装进度：下载按字节推进，校验/解压阶段只有文案
   void listen<PluginProgressEvent>("plugin://progress", (e) => {
     pluginProgress.value = e.payload;
@@ -950,6 +1007,7 @@ onUnmounted(() => {
   stopPolling();
   if (saveTimer) clearTimeout(saveTimer);
   unlistenPlugin?.();
+  document.removeEventListener("visibilitychange", onVisible);
 });
 </script>
 
@@ -1561,6 +1619,13 @@ onUnmounted(() => {
                 {{ $t("settings.game-dir-pick") }}
               </button>
               <button
+                class="mini-btn"
+                :disabled="gameDirBusy || currentGameRoot === PUBLIC_GAME_DIR"
+                @click="moveToPublicDir"
+              >
+                {{ $t("settings.game-dir-public") }}
+              </button>
+              <button
                 v-if="gameDirState && !gameDirState.allFilesAccess"
                 class="mini-btn"
                 @click="grantAllFilesAccess"
@@ -1858,7 +1923,7 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.2.2</span>
+            >v1.3.0</span>
           </div>
           <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>

@@ -1,13 +1,19 @@
 package com.zhayi.qookix.tunnel
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
+import android.net.VpnService
 import android.os.IBinder
 import android.util.Log
 import net.burningtnt.terracotta.TerracottaAndroidAPI
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -36,8 +42,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   POST /host?player=NAME   → 开始开房并扫描局域网里的「开放局域网世界」
  *   POST /guest?room=CODE&player=NAME → 加入别人的房间
  *   POST /waiting            → 回到等待状态
+ *   POST /advertise?port=25565&name=我的服 → **把本机的自建服端口暴露给房间成员**（见下）
+ *   POST /no-advertise       → 停止广播（关掉对外开房）
  *   POST /shutdown           → 停止隧道
  *   GET  /logs               → 最近日志（Terracotta 自己的 application.log 尾部）
+ *
+ * ## 自建服（专用服务器）为什么需要 `/advertise`
+ *
+ * Terracotta 发现「本机有台MC 服务器」的方式**不是扫端口，而是被动收组播包**
+ * （官方 `src/mc/scanning.rs`：`bind(4445)` + `join_multicast(224.0.2.60)`，解析
+ * `[MOTD]…[/MOTD][AD]<端口>[/AD]`，5 秒过期）。那个包**就是 Minecraft 官方「局域网世界」的
+ * 发现包** —— 只有**游戏客户端**开世界时才会发，**独立服务端不会发**。
+ * 所以只开房间的话会一直停在「正在寻找本机开放局域网的游戏…」（真机现象）。
+ *
+ * 而房主端其实只要求「有个端口在 127.0.0.1 上能回应 MC ping」（官方 `room.rs`的
+ * `check_mc_conn`：发单字节 `0xFE`、要求回包首字节 `0xFF`）—— **真正的 MC 服务端天然满足**。
+ *
+ * 于是我们自己做这个广播：每 1.5s 把本服端口发出去，Terracotta 的扫描器发现它之后
+ * 会自动建房间、生成房间码、并把该端口加进 EasyTier 的转发白名单。朋友就能连。
+ * （端口不必是 25565：Terracotta 转发的是「扫描到的那个端口」。）
  */
 class TerracottaTunnelService : Service() {
 
@@ -61,22 +84,161 @@ class TerracottaTunnelService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // 按需重绑：`:tunnel` 进程会被 libterracotta 的原生线程一直吊着（Service 停了进程
+        // 也不退出），所以完全可能出现「进程在、但 HTTP 套接字已经被关掉」的状态 ——
+        // 真机踩过：`tunnel_port` 里留着旧端口，可那个端口**根本没有进程在监听**
+        // （/proc/net/tcp 里查不到），于是主进程每次请求都吃「连接被拒」，
+        // 界面表现就是点「开启房间」报一条看不懂的错、怎么重试都一样。
+        // 这里让每次 startService 都顺手确认一下套接字，Rust 侧探测到连不上时
+        // 再 startService 一次就能自愈，不必用户「完全退出应用」。
+        // 套接字健康也要把端口文件补写回去：文件可能被清掉、或者是被上一代进程写的
+        // （主进程就是靠这个文件找我们，它拿着一个旧端口来连必然吃连接被拒）。
         if (!running.get()) startEverything()
+        else if (serverSocket?.isClosed != false) startHttpServer()
+        else rewritePortFile()
         return START_STICKY
     }
 
+    /** 把当前监听端口写回共享数据目录（幂等；套接字没起来时什么都不做）。 */
+    private fun rewritePortFile() {
+        try {
+            val ss = serverSocket ?: return
+            if (ss.isClosed) return
+            java.io.File(filesDir, PORT_FILE).writeText(ss.localPort.toString())
+        } catch (t: Throwable) {
+            Log.w(TAG, "写端口文件失败", t)
+        }
+    }
+
+    // ── 自建服对外开房：把本服端口广播成「局域网世界」 ─────────────────────────
+
+    /** 广播线程（每 1.5s 发一次组播包，让 Terracotta 的扫描器发现我们）。 */
+    private var advThread: Thread? = null
+
+    /**
+     * 组播锁。**必须有**：Android 在省电 / doze 下会过滤组播包，不持有这个锁的话
+     * Terracotta 自己的扫描器（就在同一个 App 里）**根本收不到包** —— 表现就是开房后
+     * 永远停在「正在寻找本机开放局域网的游戏…」。这个锁是设备级 WiFi 过滤器、不是线程级的，
+     * 所以在 `:tunnel` 进程里 acquire 就足以让同 UID 的 Terracotta 收得到包。
+     */
+    private var mcLock: WifiManager.MulticastLock? = null
+
+    private fun acquireMcLock() {
+        if (mcLock?.isHeld == true) return
+        runCatching {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            mcLock = wm.createMulticastLock("qookix-terracotta").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.onFailure { Log.w(TAG, "获取组播锁失败（联机可能发现不了本机服务器）", it) }
+    }
+
+    private fun releaseMcLock() {
+        runCatching { if (mcLock?.isHeld == true) mcLock?.release() }
+        mcLock = null
+    }
+
+    /** 开始广播本机服务器端口。必须在 Terracotta 进入 `setScanning` 之后调用。 */
+    private fun startAdvertise(port: Int, name: String) {
+        stopAdvertise()
+        if (port !in 1..65535) return
+        acquireMcLock()
+        // MOTD 填服务器名、AD 填我们真正的端口 —— 官方扫描器只认这两个字段
+        val payload = "[MOTD]$name[/MOTD][AD]$port[/AD]"
+        Log.i(TAG, "开始广播自建服: $payload")
+        advThread = Thread({
+            val bytes = payload.toByteArray(StandardCharsets.UTF_8)
+            try {
+                DatagramSocket().use { sock ->
+                    val group = InetAddress.getByName(MC_DISCOVERY_GROUP)
+                    while (!Thread.currentThread().isInterrupted) {
+                        runCatching { sock.send(DatagramPacket(bytes, bytes.size, group, MC_DISCOVERY_PORT)) }
+                        Thread.sleep(1500)
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "广播线程结束", t)
+            }
+            // 自然退出（被 interrupt）时把锁还回去，否则会一直握着
+            releaseMcLock()
+        }, "mc-advertise").also { it.isDaemon = true; it.start() }
+    }
+
+    /** 停掉对外开房时一并停掉广播 */
+    private fun stopAdvertise() {
+        advThread?.interrupt()
+        advThread = null
+        releaseMcLock()
+    }
+
+    /**
+     * 答复Terracotta 的 VpnService 请求（**必须在 30 秒内**，否则它抛
+     * `IllegalStateException` 并卡住，EasyTier 也提交不了下一次请求）。
+     *
+     * 这里**必须真的建隧道**，不是「拒绝」：
+     *   - 拒绝（或者像以前那样不答复）→ 手机侧没有 TUN → 房间码能开出来，
+     *     但**客人连不进来**（真机：电脑端加入报「连接发生错误」，房主 profiles 里只有自己）。
+     *   - 建立 → EasyTier 才有数据面把入站 mesh 流量转成「连本机 25565」。
+     *
+     * 没拿到系统 VPN 授权时只能 reject（`establish()` 会返回 null 并抛异常），
+     * 这种情况下前端应当先弹授权 —— 见 `MainActivity.ensureVpnConsent`。
+     */
+    private fun fulfillVpnRequest() {
+        val req = runCatching { TerracottaAndroidAPI.getPendingVpnServiceRequest() }.getOrNull()
+        if (req == null) {
+            Log.w(TAG, "收到 VPN 回调但没有待处理请求")
+            return
+        }
+        try {
+            if (VpnService.prepare(this) != null) {
+                Log.w(TAG, "尚未获得 VPN 授权 → 拒绝本次请求（房间能开，但客人连不进来）")
+                runCatching { req.reject() }
+                return
+            }
+            // Builder 必须由**正在运行**的 VpnService 实例创建，且要和 Terracotta 同进程。
+            // startService 是异步的，这里最多等 5 秒（答复窗口有 30 秒，够用）。
+            startService(Intent(this, TerracottaVpnService::class.java))
+            var builder: VpnService.Builder? = null
+            for (i in 0 until 50) {
+                builder = TerracottaVpnService.newBuilder()
+                if (builder != null) break
+                Thread.sleep(100)
+            }
+            if (builder == null) {
+                Log.w(TAG, "VPN 服务 5秒内没起来 → 拒绝本次请求")
+                runCatching { req.reject() }
+                return
+            }
+            // startVpnService 内部会 addAddress / addRoute / establish 并返回 fd
+            vpnFd = req.startVpnService(builder)
+            Log.i(TAG, "VPN/TUN 已建立（fd=${vpnFd?.fd}）")
+        } catch (t: Throwable) {
+            Log.e(TAG, "建立 VPN 失败", t)
+            runCatching { req.reject() }
+        }
+    }
+
+    /**
+     * EasyTier 持有的隧道 fd。
+     *
+     * 官方文档要求「EasyTier 退出后必须 close」，所以**只在隧道整体关停时关**
+     * —— 房间还在的时候关掉会把数据面打断（表现为客人忽然连不上）。
+     */
+    private var vpnFd: android.os.ParcelFileDescriptor? = null
+
     private fun startEverything() {
         running.set(true)
+        // **预热 VPN 服务**：`VpnService.Builder` 只能由一个已运行的 VpnService 实例创建，
+        // 而 `startService` 是异步的 —— 不预热的话，Terracotta 回调到达时 instance 还是 null，
+        // 只能拒绝（真机日志：「VPN 服务实例还没起来 → 拒绝本次请求」，而服务在 20ms 后才创建）。
+        runCatching { startService(Intent(this, TerracottaVpnService::class.java)) }
         // 加载 + 启动 Terracotta 放后台线程：initialize() 内部要初始化 EasyTier，
         // 阻塞约 1 秒，放主线程会卡住启动。
         Thread({
             try {
                 System.loadLibrary("terracotta")
-                val cb = TerracottaAndroidAPI.VpnServiceCallback {
-                    // EasyTier 需要 TUN（VPN）时回调。这里不申请 VPN：
-                    // 陶瓦的「开房」只需要把 MC 那个端口映射进 mesh。
-                    Log.w(TAG, "收到 VpnService 请求，本次不申请（走端口映射模式）")
-                }
+                val cb = TerracottaAndroidAPI.VpnServiceCallback { fulfillVpnRequest() }
                 val meta = TerracottaAndroidAPI.initialize(applicationContext, cb)
                 Log.i(TAG, "Terracotta 就绪: $meta")
                 ready = true
@@ -86,6 +248,17 @@ class TerracottaTunnelService : Service() {
             }
         }, "tc-init").start()
 
+        startHttpServer()
+    }
+
+    /**
+     * 起本地 HTTP 服务（主进程唯一的通信入口）。
+     *
+     * 单独抽出来是为了能**只重绑套接字**：原生那套（`System.loadLibrary` + `initialize`）
+     * 一个进程只能做一次，重复初始化会炸，而端口文件丢失/套接字被关这类小毛病
+     * 只需要重新监听一下。
+     */
+    private fun startHttpServer() {
         // 本地 HTTP 服务（主进程唯一的通信入口）
         Thread({
             try {
@@ -106,10 +279,18 @@ class TerracottaTunnelService : Service() {
 
     private fun shutdownTerracotta() {
         ready = false
+        stopAdvertise()
+        // EasyTier 退出后要归还隧道 fd，否则 TUN 接口泄漏
+        runCatching { vpnFd?.close() }
+        vpnFd = null
         runCatching { serverSocket?.close() }
         serverSocket = null
         running.set(false)
         runCatching { stopForeground(true) }
+        // **必须删掉端口文件**：套接字关了但文件还在的话，主进程会继续抱着一个
+        // 「看起来很对」的死端口去连，报连接被拒。删掉之后它至少能给出
+        // 「隧道服务还没启动」这种能看懂的提示。
+        runCatching { java.io.File(filesDir, PORT_FILE).delete() }
     }
 
     /** 开房时晋升前台（带通知），保证切后台不被回收 */
@@ -298,9 +479,24 @@ class TerracottaTunnelService : Service() {
                                 }
                             }
                             path == "/waiting" -> {
+                                // 回到等待状态时顺手停掉自建服广播 —— 否则会一直对外宣称
+                                // 「有台服务器在那个端口」，而服可能已经停了。
+                                stopAdvertise()
                                 TerracottaAndroidAPI.setWaiting()
                                 demoteForeground()
                                 "{\"ok\":true,\"state\":\"waiting\"}"
+                            }
+                            path == "/advertise" -> {
+                                val port = query["port"]?.toIntOrNull()
+                                if (port == null) "{\"ok\":false,\"error\":\"缺少端口\"}"
+                                else {
+                                    startAdvertise(port, query["name"]?.takeIf { it.isNotBlank() } ?: "QookiX Server")
+                                    "{\"ok\":true,\"advertising\":$port}"
+                                }
+                            }
+                            path == "/no-advertise" -> {
+                                stopAdvertise()
+                                "{\"ok\":true,\"advertising\":null}"
                             }
                             path == "/autohost" -> {
                                 // 游戏启动时调用：直接进开房扫描。这样用户**不用回启动器点按钮**
@@ -388,5 +584,12 @@ class TerracottaTunnelService : Service() {
 
         /** 隧道 HTTP 端口文件（放在 filesDir，主进程 Rust 读它拿端口） */
         const val PORT_FILE = "tunnel_port"
+
+        /**
+         * Minecraft 官方的「局域网世界」发现包目的地。Terracotta 的扫描器就是
+         * 监听这里（官方 `scanning.rs`：bind 4445 + join_multicast 224.0.2.60）。
+         */
+        const val MC_DISCOVERY_GROUP = "224.0.2.60"
+        const val MC_DISCOVERY_PORT = 4445
     }
 }

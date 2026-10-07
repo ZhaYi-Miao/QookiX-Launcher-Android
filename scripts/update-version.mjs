@@ -12,7 +12,7 @@
  *  - src/views/SettingsView.vue                  (关于页 "vX.Y.Z")
  *
  * 发布流程：先跑这个脚本 → 提交 → 打 tag（vX.Y.Z）→ Release 工作流自动打包。
- * 注意 versionCode 必须单调递增，这里按 MAJOR*1e6 + MINOR*1e4 + PATCH*100 生成。
+ * 注意 versionCode 必须单调递增，这里按 MAJOR*1e4 + MINOR*1e2 + PATCH 生成。
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -75,7 +75,7 @@ patch("src-tauri/tauri.conf.json", (c) =>
 
 // 4. 安卓 versionName / versionCode
 const [major, minor, patchNo] = newVersion.split(".").map((n) => parseInt(n, 10) || 0);
-const versionCode = major * 1_000_000 + minor * 10_000 + patchNo * 100;
+const versionCode = major * 10_000 + minor * 100 + patchNo;
 patch("src-tauri/gen/android/app/tauri.properties", (c) => {
   const next = c.replace(
     /^(tauri\.android\.versionName\s*=\s*).*$/m,

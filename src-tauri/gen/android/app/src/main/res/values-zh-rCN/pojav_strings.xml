@@ -128,6 +128,8 @@
     <string name="customctrl_addsubbutton">添加子按键</string>
     <string name="customctrl_selectdefault">选择默认控制布局</string>
     <string name="customctrl_export">导出控制布局文件</string>
+    <string name="customctrl_preview_use">就用这个布局</string>
+    <string name="customctrl_preview_cancel">取消</string>
     <string name="main_share_logs">分享日志文件</string>
     <string name="main_install_jar_file">执行 Jar 文件</string>
     <string name="main_play">启动游戏</string>

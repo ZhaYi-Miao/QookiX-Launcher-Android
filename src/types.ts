@@ -444,6 +444,16 @@ export interface PluginSetupResult {
 }
 
 /** 控制布局里的一个按钮（与 Rust `controls::ControlButtonInfo` 对应）。 */
+/** 导入布局的结果（原生侧校验后回传；`ok=false` 时带 `error`） */
+export interface ControlImportResult {
+  ok: boolean;
+  name?: string;
+  buttons?: number;
+  joysticks?: number;
+  drawers?: number;
+  error?: string;
+}
+
 /** 一份触控控制布局（`<files>/controlmap/<名字>.json`，全局共享，不区分实例） */
 export interface ControlLayoutInfo {
   name: string;

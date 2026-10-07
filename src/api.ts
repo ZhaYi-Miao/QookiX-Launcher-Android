@@ -32,6 +32,7 @@ import type {
   PluginSetupResult,
   PluginSetupStatus,
   ControlButtonInfo,
+  ControlImportResult,
   ControlLayoutInfo,
   GameDirOption,
   GameDirState,
@@ -629,11 +630,42 @@ export const api = {
   terracottaTunnelPing: () => invoke<boolean>("terracotta_ping", undefined, { silent: true }),
   /** 调隧道接口，返回原始 JSON 字符串。path 形如 /state、/host?player=xxx */
   terracottaTunnelRequest: (path: string) => invoke<string>("terracotta_request", { path }, { silent: true }),
+  /** 是否已获得陶瓦联机的 VPN 授权（没有 TUN 就没有数据面，客人连不进来） */
+  terracottaVpnGranted: () => invoke<boolean>("terracotta_vpn_granted", undefined, { silent: true }),
+  /** 弹 VPN 授权对话框（开房前先调用） */
+  terracottaRequestVpn: () => invoke<void>("terracotta_request_vpn", undefined, { silent: true }),
   terracottaCreateRoom: (player?: string) =>
     invoke<Record<string, unknown>>("terracotta_create_room", { player: player ?? null }, { silent: true }),
   terracottaJoinRoom: (room: string, player?: string) =>
     invoke<Record<string, unknown>>("terracotta_join_room", { room, player: player ?? null }, { silent: true }),
   terracottaLeave: () => invoke<Record<string, unknown>>("terracotta_leave", undefined, { silent: true }),
+
+  // ── 控制布局：打开原生编辑器 / 导入 / 导出 ──────────────────────────
+  /** 打开原生控制布局编辑器（横屏 + 游戏主题，和游戏里那个界面一致）。空 layout = 当前默认 */
+  openControlLayoutEditor: (layout?: string, preview?: boolean, saveAs?: string) =>
+    invoke<void>(
+      "open_control_layout_editor",
+      { layout: layout ?? null, preview: !!preview, saveAs: saveAs ?? null },
+      { silent: true },
+    ),
+  /** 导出（系统分享）一份布局 */
+  exportControlLayout: (name: string) => invoke<void>("export_control_layout", { name }),
+  /** 弹系统文件选择器导入布局（结果异步，用 takeControlImport 取） */
+  pickControlLayout: () => invoke<void>("pick_control_layout", undefined, { silent: true }),
+  /** 取回导入结果：`{ok, buttons, joysticks, drawers, error}`，没有则是 null */
+  takeControlImport: () => invoke<ControlImportResult | null>("take_control_import", undefined, { silent: true }),
+  /** 按文件路径导入布局（不经 SAF —— SAF 打不开 Android/data，MT 能拿到那些路径） */
+  importControlLayoutByPath: (path: string) =>
+    invoke<ControlImportResult>("import_control_layout_by_path", { path }),
+
+  /** 导出（分享）实例日志：打 zip 后走系统分享 */
+  exportInstanceLogs: (id: string) => invoke<void>("export_instance_logs", { instanceId: id }),
+
+  /**
+   * 告诉原生「日志页在前台」，之后音量- / 音量+ 会被转成 `qk-log-zoom` 事件派给 WebView。
+   * 离开日志页必须关掉，否则游戏里音量键会失效。
+   */
+  setLogZoomCapture: (on: boolean) => invoke<void>("set_log_zoom_capture", { on }, { silent: true }),
 
   // storage
   getStorageStats: () => invoke<StorageStats>("get_storage_stats"),

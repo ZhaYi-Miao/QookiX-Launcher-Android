@@ -1,3 +1,8 @@
+// EGL / GLES 的包装函数**刻意保持 C 官方拼写**（eglGetDisplay、eglSwapBuffers……），
+// 好处是能和 Khronos 规范、以及动态库导出的符号名一一对照 —— 所以本文件放开 snake_case 提醒。
+// （真要改名就 12 个定义 + 18 处调用点一起改，纯风格收益，不值得。）
+#![allow(non_snake_case)]
+
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use anyhow::Result;
@@ -102,17 +107,23 @@ mod egl_ffi {
         });
     }
 
-    pub fn eglGetDisplay(display_id: EGLNativeDisplayType) -> EGLDisplay {
+    /// ## 为什么这批包装是 `unsafe fn`
+    ///
+    /// 每个包装内部都读 `static mut` 的函数指针并调用 FFI —— 本身就不安全，
+    /// 以前却声明成安全函数，于是调用处一圈 `unsafe { }` 全成了「多余的块」
+    /// （一次编译 18 条警告），真正的风险点反而被藏起来了。
+    /// 标成 `unsafe fn` 后：调用点现有的 `unsafe { }` 名副其实，unsafety 也如实传出去。
+    pub unsafe fn eglGetDisplay(display_id: EGLNativeDisplayType) -> EGLDisplay {
         load_egl_symbols();
-        unsafe { EGL_GET_DISPLAY.expect("eglGetDisplay not loaded")(display_id) }
+        EGL_GET_DISPLAY.expect("eglGetDisplay not loaded")(display_id)
     }
 
-    pub fn eglInitialize(dpy: EGLDisplay, major: *mut EGLint, minor: *mut EGLint) -> EGLBoolean {
+    pub unsafe fn eglInitialize(dpy: EGLDisplay, major: *mut EGLint, minor: *mut EGLint) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_INITIALIZE.expect("eglInitialize not loaded")(dpy, major, minor) }
+        EGL_INITIALIZE.expect("eglInitialize not loaded")(dpy, major, minor)
     }
 
-    pub fn eglChooseConfig(
+    pub unsafe fn eglChooseConfig(
         dpy: EGLDisplay,
         attrib_list: *const EGLint,
         configs: *mut EGLConfig,
@@ -120,67 +131,67 @@ mod egl_ffi {
         num_config: *mut EGLint,
     ) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_CHOOSE_CONFIG.expect("eglChooseConfig not loaded")(dpy, attrib_list, configs, config_size, num_config) }
+        EGL_CHOOSE_CONFIG.expect("eglChooseConfig not loaded")(dpy, attrib_list, configs, config_size, num_config)
     }
 
-    pub fn eglBindAPI(api: EGLenum) -> EGLBoolean {
+    pub unsafe fn eglBindAPI(api: EGLenum) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_BIND_API.expect("eglBindAPI not loaded")(api) }
+        EGL_BIND_API.expect("eglBindAPI not loaded")(api)
     }
 
-    pub fn eglCreateContext(
+    pub unsafe fn eglCreateContext(
         dpy: EGLDisplay,
         config: EGLConfig,
         share_context: EGLContext,
         attrib_list: *const EGLint,
     ) -> EGLContext {
         load_egl_symbols();
-        unsafe { EGL_CREATE_CONTEXT.expect("eglCreateContext not loaded")(dpy, config, share_context, attrib_list) }
+        EGL_CREATE_CONTEXT.expect("eglCreateContext not loaded")(dpy, config, share_context, attrib_list)
     }
 
-    pub fn eglCreateWindowSurface(
+    pub unsafe fn eglCreateWindowSurface(
         dpy: EGLDisplay,
         config: EGLConfig,
         win: EGLNativeWindowType,
         attrib_list: *const EGLint,
     ) -> EGLSurface {
         load_egl_symbols();
-        unsafe { EGL_CREATE_WINDOW_SURFACE.expect("eglCreateWindowSurface not loaded")(dpy, config, win, attrib_list) }
+        EGL_CREATE_WINDOW_SURFACE.expect("eglCreateWindowSurface not loaded")(dpy, config, win, attrib_list)
     }
 
-    pub fn eglMakeCurrent(
+    pub unsafe fn eglMakeCurrent(
         dpy: EGLDisplay,
         draw: EGLSurface,
         read: EGLSurface,
         ctx: EGLContext,
     ) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_MAKE_CURRENT.expect("eglMakeCurrent not loaded")(dpy, draw, read, ctx) }
+        EGL_MAKE_CURRENT.expect("eglMakeCurrent not loaded")(dpy, draw, read, ctx)
     }
 
-    pub fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {
+    pub unsafe fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_DESTROY_SURFACE.expect("eglDestroySurface not loaded")(dpy, surface) }
+        EGL_DESTROY_SURFACE.expect("eglDestroySurface not loaded")(dpy, surface)
     }
 
-    pub fn eglDestroyContext(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolean {
+    pub unsafe fn eglDestroyContext(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_DESTROY_CONTEXT.expect("eglDestroyContext not loaded")(dpy, ctx) }
+        EGL_DESTROY_CONTEXT.expect("eglDestroyContext not loaded")(dpy, ctx)
     }
 
-    pub fn eglTerminate(dpy: EGLDisplay) -> EGLBoolean {
+    pub unsafe fn eglTerminate(dpy: EGLDisplay) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_TERMINATE.expect("eglTerminate not loaded")(dpy) }
+        EGL_TERMINATE.expect("eglTerminate not loaded")(dpy)
     }
 
-    pub fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {
+    pub unsafe fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {
         load_egl_symbols();
-        unsafe { EGL_SWAP_BUFFERS.expect("eglSwapBuffers not loaded")(dpy, surface) }
+        EGL_SWAP_BUFFERS.expect("eglSwapBuffers not loaded")(dpy, surface)
     }
 
-    pub fn eglGetError() -> EGLint {
+    pub unsafe fn eglGetError() -> EGLint {
         load_egl_symbols();
-        unsafe { EGL_GET_ERROR.expect("eglGetError not loaded")() }
+        EGL_GET_ERROR.expect("eglGetError not loaded")()
     }
 }
 

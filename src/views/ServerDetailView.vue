@@ -3,6 +3,7 @@ import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useMessage } from "../composables/message";
+import { useLogZoom } from "../composables/useLogZoom";
 import {
   Button as VanButton,
   Tabs as VanTabs,
@@ -34,6 +35,14 @@ const consoleInput = ref("");
 const consoleOut = ref("");
 /** 日志滚动容器（用于自动追尾） */
 const logPane = ref<HTMLElement | null>(null);
+
+/**
+ * 日志字号缩放：与实例日志页**共用** `useLogZoom`。
+ *
+ * 这一页的服务器日志和控制台都是手写的 `<pre>`（不是 `LogViewer`），所以缩放
+ * 得单独接一次—— 两处共用同一个字号，在日志与控制台之间切来切去大小一致。
+ */
+const { fontSize, applyFontSize, zoomBy, touch } = useLogZoom();
 
 const server = computed(() => servers.byId(serverId));
 const running = computed(() => (server.value ? servers.isRunning(server.value.id) : false));
@@ -189,6 +198,161 @@ async function toggleEula(v: boolean) {
   }
 }
 
+// ── 对外开房（陶瓦联机 + 自建服）─────────────────────────────────────────
+//
+// Terracotta 发现「本机有台 MC 服务器」的方式**不是扫端口，而是被动收组播包**
+// （官方 scanning.rs：bind 4445 + join_multicast 224.0.2.60，解析 `[MOTD]…[/AD]<端口>[/AD]`）。
+// 那个包只有**游戏客户端开局域网世界**时才会发，独立服务端不发 —— 所以只点「开启房间」
+// 会一直停在「正在寻找本机开放局域网的游戏…」。这里由我们自己发这个包把端口报出去，
+// Terracotta 发现后就会自动建房、生成房间码、并把该端口加进转发白名单。
+//
+// 端口不必是 25565：Terracotta 转发的是「扫描到的那个端口」。
+const shareOn = ref(false);
+const shareBusy = ref(false);
+const shareRoom = ref("");
+const shareErr = ref("");
+let shareTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 从 `/state` 的 JSON 里掏房间码（字段名与隧道侧 extractRoomCode 一致） */
+function pickRoomCode(raw: string): string {
+  for (const key of ['"room"', '"code"', '"room_code"', '"roomCode"']) {
+    const i = raw.indexOf(key);
+    if (i < 0) continue;
+    const colon = raw.indexOf(":", i + key.length);
+    if (colon < 0) continue;
+    const rest = raw.slice(colon + 1).trimStart();
+    if (!rest.startsWith('"')) continue;
+    const end = rest.indexOf('"', 1);
+    if (end <= 1) continue;
+    const v = rest.slice(1, end);
+    if (v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function stopSharePolling() {
+  if (shareTimer) clearInterval(shareTimer);
+  shareTimer = null;
+}
+
+/**
+ * 调隧道接口，失败自动重试几次。
+ *
+ * 冷启动应用时隧道要 `loadLibrary` + 初始化 EasyTier（手机上还跑着服务器 JVM 时更慢），
+ * 头几秒必然连不上。原来直接把这句错误弹给用户（"隧道还在启动中，请稍后重试"），
+ * 用户只能看着干等 —— 这里自己重试 3 次（共约 6 秒），多数情况用户点一下就成了。
+ */
+async function tunnelCall(path: string, tries = 3): Promise<string> {
+  let last = "";
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await api.terracottaTunnelRequest(path);
+    } catch (e) {
+      last = String(e);
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  throw last;
+}
+
+/**
+ * 开房前确保拿到「VPN」系统授权。
+ *
+ * 陶瓦联机的数据面必须走 TUN：房主要把 mesh 上的入站流量转成「连本机 25565」，
+ * 客人才连得进来。没有 TUN 的症状很隐蔽 —— **房间码能开出来，但客人永远连不上**
+ * （电脑端加入时报「连接发生错误」，而房主侧日志里只有自己）。
+ *
+ * 而且 Terracotta 的 VpnService 请求只有 30 秒答复窗口，系统授权对话框要用户点一下，
+ * 所以必须提前问、不能塞在那个窗口里。
+ */
+async function ensureVpnConsent(): Promise<boolean> {
+  try {
+    if (await api.terracottaVpnGranted()) return true;
+    await api.terracottaRequestVpn();
+    // 等用户点「允许」（授权一次后长期有效）
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (await api.terracottaVpnGranted()) return true;
+    }
+    message.warning($t("server-detail.share-vpn-denied"));
+    return false;
+  } catch {
+    return await api.terracottaVpnGranted();
+  }
+}
+
+async function toggleShare(v: boolean) {
+  const s = server.value;
+  if (!s) return;
+  shareBusy.value = true;
+  shareErr.value = "";
+  try {
+    if (!v) {
+      stopSharePolling();
+      // 顺序有讲究：先停广播，再让 Terracotta 回到等待 —— `/waiting` 里也会顺手停广播，
+      // 但先停一次能保证「立刻」不再对外宣称有台服务器。
+      await api.terracottaTunnelRequest("/no-advertise").catch(() => "");
+      await api.terracottaTunnelRequest("/waiting").catch(() => "");
+      shareOn.value = false;
+      shareRoom.value = "";
+      return;
+    }
+    if (!running.value) {
+      shareOn.value = false;
+      message.warning($t("server-detail.share-need-running"));
+      return;
+    }
+    // 没 VPN 授权就别开房：否则房间码出得来、朋友却怎么都连不上
+    if (!(await ensureVpnConsent())) {
+      shareOn.value = false;
+      return;
+    }
+    const name = s.name || $t("server-detail.share");
+    // 先广播、再让 Terracotta 去扫；顺序反了它这次扫描就白扫了。
+    await tunnelCall(`/advertise?port=${s.port}&name=${encodeURIComponent(name)}`);
+    await tunnelCall(`/host?player=${encodeURIComponent(name)}`);
+    shareOn.value = true;
+    shareRoom.value = "";
+    // 房间码要等 Terracotta 扫到我们的广播才出现（几秒），这里轮询拿
+    let waited = 0;
+    shareTimer = setInterval(async () => {
+      waited += 1500;
+      try {
+        const raw = await api.terracottaTunnelRequest("/state");
+        const code = pickRoomCode(raw);
+        if (code) {
+          shareRoom.value = code;
+          stopSharePolling();
+          message.success($t("server-detail.share-ok"));
+        } else if (waited >= 45000) {
+          stopSharePolling();
+          shareErr.value = $t("server-detail.share-no-room");
+        }
+      } catch (e) {
+        if (waited >= 45000) {
+          stopSharePolling();
+          shareErr.value = String(e);
+        }
+      }
+    }, 1500);
+  } catch (e) {
+    shareOn.value = false;
+    shareErr.value = String(e);
+    message.error(String(e));
+  } finally {
+    shareBusy.value = false;
+  }
+}
+
+async function copyShareRoom() {
+  try {
+    await navigator.clipboard.writeText(shareRoom.value);
+    message.success($t("terracotta.copied"));
+  } catch {
+    message.error($t("terracotta.copy-failed"));
+  }
+}
+
 async function loadLogs() {
   try {
     logs.value = await api.readHostedServerLog(serverId);
@@ -228,6 +392,7 @@ onUnmounted(() => {
   }
   unlistenStage?.();
   unlistenStage = null;
+  stopSharePolling();
 });
 </script>
 
@@ -300,6 +465,26 @@ onUnmounted(() => {
         </div>
         <app-switch :value="!!server?.eula" @update:value="toggleEula" />
       </div>
+      <!-- 对外开房：把本机这台服务器经陶瓦联机暴露给朋友（端口可以自定义） -->
+      <div class="choice">
+        <div class="choice-info">
+          <span class="choice-label">{{ $t("server-detail.share") }}</span>
+          <p class="choice-hint">
+            <template v-if="shareRoom">{{ $t("server-detail.share-room", { code: shareRoom }) }}</template>
+            <template v-else-if="shareErr">{{ shareErr }}</template>
+            <template v-else-if="shareOn">{{ $t("server-detail.share-waiting") }}</template>
+            <template v-else>{{ $t("server-detail.share-hint") }}</template>
+          </p>
+        </div>
+        <app-switch
+          :value="shareOn"
+          :disabled="shareBusy"
+          @update:value="toggleShare"
+        />
+      </div>
+      <div v-if="shareRoom" class="tc-actions">
+        <van-button size="small" @click="copyShareRoom">{{ $t("terracotta.copy") }}</van-button>
+      </div>
       <div class="field">
         <label>{{ $t("server-detail.max-memory") }}</label>
         <app-input v-model:value="form.maxMem" type="text" />
@@ -319,12 +504,28 @@ onUnmounted(() => {
       <van-button class="save" block type="primary" :loading="busy === 'save'" @click="save">{{ $t("common.save") }}</van-button>
     </div>
     <div v-else-if="tab === 'files'" class="pane"><ServerFileManager :server-id="serverId" /></div>
-    <div v-else-if="tab === 'logs'" ref="logPane" class="pane logs">
-      <pre v-for="(l, i) in logs" :key="i" class="ln">{{ l }}</pre>
-      <p v-if="!logs.length" class="empty">{{ $t("log-viewer.no-logs") }}</p>
+    <div v-else-if="tab === 'logs'" class="pane logs">
+      <!-- 字号那一组：A− / 当前字号 / A+，与实例日志页同一套（useLogZoom） -->
+      <div class="zoombar">
+        <button class="zbtn" :title="$t('log-viewer.zoom-out')" @click="zoomBy(-1)">A−</button>
+        <button class="zbtn zval" :title="$t('log-viewer.zoom-reset')" @click="applyFontSize(12)">{{ fontSize }}</button>
+        <button class="zbtn" :title="$t('log-viewer.zoom-in')" @click="zoomBy(1)">A+</button>
+      </div>
+      <div
+        ref="logPane"
+        class="log-scroll"
+        :style="{ fontSize: fontSize + 'px' }"
+        @touchstart.passive="touch.onTouchStart"
+        @touchmove.passive="touch.onTouchMove"
+        @touchend="touch.onTouchEnd"
+        @touchcancel="touch.onTouchEnd"
+      >
+        <pre v-for="(l, i) in logs" :key="i" class="ln">{{ l }}</pre>
+        <p v-if="!logs.length" class="empty">{{ $t("log-viewer.no-logs") }}</p>
+      </div>
     </div>
     <div v-else class="pane console">
-      <pre v-if="consoleOut" class="cout">{{ consoleOut }}</pre>
+      <pre v-if="consoleOut" class="cout" :style="{ fontSize: fontSize + 'px' }">{{ consoleOut }}</pre>
       <p v-else class="empty">{{ $t("server-detail.console-hint") }}</p>
       <div class="cbar">
         <van-field v-model="consoleInput" class="cinput" :placeholder="$t('server-detail.console-placeholder')" />
@@ -419,12 +620,14 @@ onUnmounted(() => {
 .cout {
   flex: 1;
   min-height: 0;
+  /* 字号由 useLogZoom 绑上来，不在这里写死 */
   overflow-y: auto;
   margin: 0;
   padding: 10px 12px;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.22);
   font-family: "Cascadia Code", Consolas, monospace;
+  /* 字号由 useLogZoom 的 fontSize 绑上来（这行只是兜底默认值） */
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-1);
@@ -496,6 +699,45 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 14px;
 }
+/* 日志页：`.pane` 自己不再滚，滚动交给里面的 `.log-scroll`，
+   这样顶上的字号按钮条才能固定不动（原来整页一起滚，按钮会跟着跑）。 */
+.pane.logs {
+  overflow: hidden;
+  gap: 8px;
+}
+.zoombar {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.zbtn {
+  min-width: 40px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zbtn.zval {
+  min-width: 34px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.log-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  /* 字号由 useLogZoom 的 fontSize 绑上来；这里给个兜底值，
+     免得 JS 没跑起来时pre 继承成16px 把布局撑乱 */
+  font-size: 12px;
+}
 .field label {
   display: block;
   margin-bottom: 6px;
@@ -508,7 +750,9 @@ onUnmounted(() => {
 .ln {
   margin: 0;
   font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
+  /* 原来写死 11px，会盖掉 useLogZoom 绑上来的字号 -> 只留兜底值，
+     真实字号由 .log-scroll 的 inline style 控制（改这里等于没改） */
+  font-size: 1em;
   color: var(--text-2);
   white-space: pre-wrap;
   word-break: break-all;

@@ -118,7 +118,7 @@ pub fn exec(port: u16, password: &str, command: &str) -> Result<String, String> 
 
     // 1) 鉴权
     write_packet(&mut s, 1, TYPE_AUTH, password).map_err(|e| format!("鉴权发送失败: {e}"))?;
-    let (id, ty, body) = read_packet(&mut s)?;
+    let (id, ty, _body) = read_packet(&mut s)?;
     if ty != TYPE_AUTH_RESPONSE {
         return Err(format!("鉴权响应类型异常: type={ty}"));
     }

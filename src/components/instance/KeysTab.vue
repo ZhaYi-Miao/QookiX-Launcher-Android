@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { t as $t } from "../../i18n";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import AppButton from "../../ui/AppButton.vue";
 import { useDialog } from "../../composables/dialog";
 import { useMessage } from "../../composables/message";
 import { api } from "../../api";
-import type { ControlLayoutInfo } from "../../types";
+import type { ControlImportResult, ControlLayoutInfo } from "../../types";
 import AppSheet from "../../ui/AppSheet.vue";
 import AppInput from "../../ui/AppInput.vue";
 import AppPopup from "../../ui/AppPopup.vue";
-import { IconCopy, IconEdit, IconMoreVertical, IconTrash } from "../icons";
+import { IconCopy, IconDownload, IconEdit, IconMoreVertical, IconTrash } from "../icons";
 
 // 手机端的「按键」= 屏幕上的触控控制层。布局文件放在 <files>/controlmap/，
 // **全局共享、不区分实例**（所以这里不按实例过滤），当前生效的那份由 pojav 偏好
-// defaultCtrl 指向。细调（大小/颜色/键位映射/组合键）在游戏内的「自定义控制布局」里做，
-// 这个 tab 只做启动器侧能做的：选布局、复制、重命名、删除。
+// defaultCtrl 指向。
+//
+// 现在启动器侧也能改布局了：**进原生编辑器**（就是游戏里那个横屏界面，所见即所得），
+// 以及导入/导出。细调（大小/颜色/键位映射/组合键）在那个编辑器里做，和游戏内完全一致。
 const props = defineProps<{ instanceId: string }>();
 void props; // 布局是全局的，实例 id 只为了与其他 tab 组件签名一致
 
@@ -26,6 +28,131 @@ const loading = ref(false);
 const busy = ref("");
 /** 布局操作面板的目标（手机：行内只留主操作，其余进底部清单） */
 const kTarget = ref<string | null>(null);
+
+// ── 打开原生编辑器 / 导入 / 导出 ────────────────────────────────────────
+/** 从系统设置页（原生编辑器）返回后要刷新列表：布局可能已被改名/新增 */
+function refreshOnFocus() {
+  const on = () => {
+    if (document.visibilityState === "visible") void loadLayouts();
+  };
+  document.addEventListener("visibilitychange", on);
+  onUnmounted(() => document.removeEventListener("visibilitychange", on));
+}
+
+/** 编辑某一份布局（不传 = 当前默认那份），进的是游戏里那个横屏编辑器。 */
+async function editLayout(name?: string) {
+  if (busy.value) return;
+  busy.value = name ?? "*";
+  try {
+    await api.openControlLayoutEditor(name, false, undefined);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** 导出（系统分享）某一份布局。 */
+async function exportLayout(name: string) {
+  if (busy.value) return;
+  busy.value = name;
+  try {
+    await api.exportControlLayout(name);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** 导入：选文件 → 校验 → 问名字 → 进原生编辑器只读预览 → 确认后才落盘。 */
+async function importLayout() {
+  if (busy.value) return;
+  busy.value = "import";
+  try {
+    await api.pickControlLayout();
+    const res = await waitForImportResult();
+    await afterImport(res);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** SAF 是异步的：原生侧把结果写进临时文件，这里轮询取 */
+async function waitForImportResult(): Promise<ControlImportResult | null> {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const res = await api.takeControlImport();
+    if (res) return res;
+  }
+  return null;
+}
+
+/** 校验结果处理 + 问名字 + 进预览 */
+async function afterImport(res: ControlImportResult | null) {
+  if (!res) {
+    message.warning($t("instance-keys.import-cancelled"));
+    return;
+  }
+  if (!res.ok) {
+    message.error(res.error || $t("instance-keys.import-invalid"));
+    return;
+  }
+  // 先让用户起个名字，再进预览确认 —— 名字在启动器里问，比在原生对话框里打字舒服
+  const suggested = freeName(res.name || "imported");
+  const name = await askName(suggested);
+  if (!name) return;
+  await api.openControlLayoutEditor(res.name, true, name);
+  // 预览确认后原生才会 copy 成正式布局，回到启动器再刷一次列表
+  setTimeout(() => void loadLayouts(), 1500);
+}
+
+/**
+ * 按**文件路径**导入 —— 给「系统选择器打不开某些目录」准备的第二条路。
+ *
+ * 系统只认 SAF，我们没法让 MT 代替我们弹选择器（MT 没这个接口）；
+ * 但 MT 能拿到那些目录里文件的绝对路径，用户复制过来我们直接读就行
+ * （配合「所有文件访问」权限）。
+ */
+async function importLayoutByPath() {
+  if (busy.value) return;
+  const path = await askText($t("instance-keys.import-path-title"), "");
+  if (!path) return;
+  busy.value = "import";
+  try {
+    const res = await api.importControlLayoutByPath(path);
+    await afterImport(res);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** 通用文本输入弹层（复用命名那个弹层）。 */
+function askText(title: string, initial: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    renameFrom.value = "";
+    renameTo.value = initial;
+    textResolve = resolve;
+    renameShow.value = true;
+    renameTitle.value = title;
+  });
+}
+let textResolve: ((v: string | null) => void) | null = null;
+
+/** 复用重命名那套弹层问个名字；取消返回 null。 */
+function askName(initial: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    renameFrom.value = "";
+    renameTo.value = initial;
+    renameResolve = resolve;
+    renameShow.value = true;
+  });
+}
+let renameResolve: ((v: string | null) => void) | null = null;
 
 /** 面板动作统一包装：先收起面板再执行 */
 function runK(fn: () => unknown) {
@@ -47,7 +174,10 @@ async function loadLayouts() {
     loading.value = false;
   }
 }
-onMounted(() => void loadLayouts());
+onMounted(() => {
+  void loadLayouts();
+  refreshOnFocus();
+});
 
 async function run(name: string, action: () => Promise<ControlLayoutInfo[]>, okText: string) {
   if (busy.value) return;
@@ -86,15 +216,44 @@ function duplicate(name: string) {
 const renameShow = ref(false);
 const renameFrom = ref("");
 const renameTo = ref("");
+/** 弹层标题可变：命名 / 输入文件路径共用这一个弹层 */
+const renameTitle = ref("");
 
 function openRename(name: string) {
   renameFrom.value = name;
   renameTo.value = name;
+  renameTitle.value = "";
   renameShow.value = true;
 }
 
 async function submitRename() {
   const to = renameTo.value.trim();
+  // 文本输入（导入路径）也复用这个弹层
+  if (textResolve) {
+    const done = textResolve;
+    textResolve = null;
+    renameShow.value = false;
+    if (!to) {
+      message.warning($t("instance-keys.path-required"));
+      done(null);
+      return;
+    }
+    done(to);
+    return;
+  }
+  // 导入流程也复用这个弹层：此时 renameResolve 有值，只需把名字回给它
+  if (renameResolve) {
+    const done = renameResolve;
+    renameResolve = null;
+    renameShow.value = false;
+    if (!to) {
+      message.warning($t("instance-keys.name-required"));
+      done(null);
+      return;
+    }
+    done(to);
+    return;
+  }
   if (!to) {
     message.warning($t("instance-keys.name-required"));
     return;
@@ -109,6 +268,20 @@ async function submitRename() {
     renameShow.value = false;
   } catch (e) {
     message.error(String(e));
+  }
+}
+
+function cancelRename() {
+  renameShow.value = false;
+  if (textResolve) {
+    const done = textResolve;
+    textResolve = null;
+    done(null);
+  }
+  if (renameResolve) {
+    const done = renameResolve;
+    renameResolve = null;
+    done(null);
   }
 }
 
@@ -147,11 +320,10 @@ function fmtTime(sec: number): string {
 
 <template>
   <div class="tab-root">
-    <div class="keys-note glass">
-      <p class="note-line">{{ $t("instance-keys.keys-intro-a") }}<b>{{ $t("instance-keys.keys-shared") }}</b>{{ $t("instance-keys.keys-intro-b") }}<b>{{ $t("instance-keys.keys-howto-a") }}</b>{{ $t("instance-keys.keys-intro-c") }}</p>
-      <p class="note-line dim">{{ $t("instance-keys.keys-howto-b") }}<b>{{ $t("instance-keys.keys-howto-d") }}</b>{{ $t("instance-keys.keys-howto-c") }}</p>
-    </div>
-
+    <!-- 原来这里有一张「手机端的「按键」是…所有实例共用…」的说明卡片（.keys-note）。
+         用户要求整张卡片不要：下面「当前使用 default 16 个按键」那块已经把该说的说清楚了，
+         说明文字既占地方又跟下面重复。相关的 instance-keys.keys-intro-* / keys-howto-*
+         / keys-shared 文案已从 zh-CN.json 一并删除。 -->
     <div v-if="currentLayout" class="keys-cur glass">
       <div class="cur-main">
         <div class="cur-label">{{ $t("instance-keys.in-use") }}</div>
@@ -159,6 +331,29 @@ function fmtTime(sec: number): string {
       </div>
       <div class="cur-meta">
         {{ $t("instance-keys.stats", { p1: currentLayout.buttons, p2: currentLayout.joysticks, p3: currentLayout.drawers }) }}</div>
+    </div>
+
+    <!-- 编辑 / 导入 / 导出：编辑器是原生那个横屏界面（和游戏里所见即所得） -->
+    <div class="keys-tools glass">
+      <button class="k-tool" :disabled="!!busy" @click="editLayout(currentLayout?.name)">
+        {{ $t("instance-keys.edit-layout") }}
+      </button>
+      <button class="k-tool" :disabled="!!busy" @click="importLayout">
+        {{ $t("instance-keys.import") }}
+      </button>
+      <button class="k-tool" :disabled="!!busy" @click="importLayoutByPath">
+        {{ $t("instance-keys.import-by-path") }}
+      </button>
+      <button
+        class="k-tool"
+        :disabled="!!busy || !currentLayout"
+        @click="currentLayout && exportLayout(currentLayout.name)"
+      >
+        {{ $t("instance-keys.export") }}
+      </button>
+      <!-- SAF 打不开 Android/data 等目录，所以明确告诉用户还有一条路：
+           在 MT 之类有权限的文件管理器里「分享 → QookiX」也能导入。 -->
+      <p class="k-tools-hint">{{ $t("instance-keys.import-hint") }}</p>
     </div>
 
     <div v-if="loading" class="keys-empty">{{ $t("instance-keys.loading") }}</div>
@@ -186,6 +381,9 @@ function fmtTime(sec: number): string {
         <!-- 手机：行内只留「设为当前」（主操作），复制/重命名/删除收进更多面板。
              原来 4 个 tiny 按钮并排，在竖屏里每个只剩 ~30px 宽，手指根本点不准。 -->
         <div class="k-actions">
+          <button class="k-set" :disabled="!!busy" @click.stop="editLayout(l.name)">
+            {{ $t("instance-keys.edit-layout") }}
+          </button>
           <button v-if="!l.current" class="k-set" :disabled="!!busy" @click.stop="setCurrent(l.name)">
             {{ $t("instance-keys.set-current") }}
           </button>
@@ -198,13 +396,17 @@ function fmtTime(sec: number): string {
 
     <app-sheet
       v-model:show="renameShow"
-      :title="$t('instance-keys.rename')"
+      :title="renameTitle || $t('instance-keys.rename')"
       class="keys-rename-card"
     >
-      <app-input v-model:value="renameTo" :placeholder="$t('instance-keys.new-name')" @keyup.enter="submitRename" />
-      <p class="rename-hint">{{ $t("instance-keys.name-hint") }}</p>
+      <app-input
+        v-model:value="renameTo"
+        :placeholder="renameTitle ? $t('instance-keys.import-path-placeholder') : $t('instance-keys.new-name')"
+        @keyup.enter="submitRename"
+      />
+      <p class="rename-hint">{{ renameTitle || $t("instance-keys.name-hint") }}</p>
       <div class="rename-actions">
-        <app-button @click="renameShow = false">{{ $t("common.cancel") }}</app-button>
+        <app-button @click="cancelRename">{{ $t("common.cancel") }}</app-button>
         <app-button type="primary" @click="submitRename">{{ $t("file-manager.ok") }}</app-button>
       </div>
     </app-sheet>
@@ -218,6 +420,12 @@ function fmtTime(sec: number): string {
     >
       <div v-if="kTarget" class="k-panel">
         <div class="k-panel-title text-ellipsis">{{ kTarget }}</div>
+        <button class="k-act" :disabled="!!busy" @click="runK(() => editLayout(kTarget!))">
+          <IconEdit />{{ $t("instance-keys.edit-layout") }}
+        </button>
+        <button class="k-act" :disabled="!!busy" @click="runK(() => exportLayout(kTarget!))">
+          <IconDownload />{{ $t("instance-keys.export") }}
+        </button>
         <button class="k-act" :disabled="!!busy" @click="runK(() => duplicate(kTarget!))">
           <IconCopy />{{ $t("common.copy") }}
         </button>
@@ -247,23 +455,39 @@ function fmtTime(sec: number): string {
   overflow-y: auto;
   padding-right: 2px;
 }
-.keys-note,
 .keys-cur,
 .keys-list,
+.keys-tools,
 .keys-empty {
   border-radius: 12px;
   padding: 12px 14px;
 }
-.note-line {
-  margin: 0;
+/* 编辑 / 导入 / 导出：三个等宽按钮一行（窄屏允许换行） */
+.keys-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.k-tool {
+  flex: 1 1 96px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+.k-tool:disabled {
+  opacity: 0.5;
+}
+/* 按钮下面那行小字：提示「也可以从MT 分享导入」 */
+.k-tools-hint {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
   font-size: 12px;
-  line-height: 1.65;
-  color: var(--text-2);
-}
-.note-line + .note-line {
-  margin-top: 6px;
-}
-.note-line.dim {
+  line-height: 1.5;
   color: var(--text-3);
 }
 .keys-cur {

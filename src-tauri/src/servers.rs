@@ -635,7 +635,6 @@ async fn download_verified(
     dest: &Path,
     expect_sha: Option<&str>,
 ) -> Result<u64, String> {
-    use std::io::Write as _;
     use tokio::io::AsyncWriteExt;
 
     if let Some(p) = dest.parent() {
@@ -1048,7 +1047,8 @@ async fn download_sha1(
 async fn download_fabric(
     client: &reqwest::Client,
     id: &str,
-    mc_version: &str,
+    // 目前按「最新安装器」下，版本号暂时用不上；保留参数是为了调用方语义完整（以后按版本取）
+    _mc_version: &str,
 ) -> Result<(), String> {
     let mc = meta_client().await?;
     let meta = get_json_retry(&mc, "https://meta.fabricmc.net/v2/versions/installer", 4)

@@ -12,6 +12,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Parcelable
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -116,6 +117,37 @@ class MainActivity : TauriActivity() {
   }
 
   private var lastBackHandledAt = 0L
+
+  /**
+   * 「音量键当缩放键」的开关。**默认关** —— 音量键在别处（游戏里、系统界面）必须照常工作，
+   * 所以只有日志页在前端调`set_log_zoom_capture(true)` 之后才拦截。
+   *
+   * 为什么必须走原生：Android 的音量键**不会**派发成 WebView 的 keydown，
+   * 前端 `addEventListener('keydown')` 永远收不到。
+   */
+  private var logZoomCapture = false
+
+  fun setLogZoomCapture(on: Boolean) {
+    logZoomCapture = on
+  }
+
+  /**
+   * 音量-缩小 / 音量+放大日志字号。走 `qk-log-zoom` 自定义事件，
+   * 和返回键那套 `evaluateJavascript` 是同一个思路。
+   *
+   * 注意要 `super.onKeyDown(...)`：**不能**返回 true 吃掉事件，否则系统音量条不弹、
+   * 免打扰/媒体键行为也会乱。这里是「事件继续走，同时通知前端缩放」。
+   */
+  override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+    if (logZoomCapture && (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN)) {
+      val delta = if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) 1 else -1
+      val wv = findWebView(window.decorView)
+      if (wv != null) {
+        wv.evaluateJavascript("window.dispatchEvent(new CustomEvent('qk-log-zoom',{detail:{delta:$delta}}))") { }
+      }
+    }
+    return super.onKeyDown(keyCode, event)
+  }
 
   /** 返回键的**唯一**处理入口（两条通路汇到这里，做 300ms 去重防止处理两次）。 */
   private fun handleBack() {
@@ -508,6 +540,217 @@ class MainActivity : TauriActivity() {
         }
     }
 
+    /**
+     * Rust 侧（`terracotta_ping` / `terracotta_request`）探测到隧道连不上时调它，
+     * 让隧道**自愈**，而不是让用户「完全退出应用后重试」。
+     *
+     * 靠的是 `TerracottaTunnelService.onStartCommand` 的「按需重绑」：进程可能还活着
+     * （libterracotta 的原生线程吊着），但 HTTP 套接字已经关了；再 startService 一次
+     * 就会重新监听并重写端口文件 ✓。
+     */
+    fun ensureTunnelService() {
+      runOnUiThread { startTunnelService() }
+    }
+
+    /**
+     * 确保已获得「VPN（陶瓦联机）」的系统授权，必要时弹授权对话框。
+     *
+     * 为什么必须**提前**要：Terracotta 的 VpnService 请求只有 30 秒答复窗口
+     * （超时会抛 IllegalStateException 并把 EasyTier 卡住），而系统授权对话框
+     * 要用户点一下 —— 塞在那个窗口里太脆。所以开房之前先问一次。
+     *
+     * 授权一次后长期有效（`VpnService.prepare` 返回 null 即已授权）。
+     */
+    fun ensureVpnConsent() {
+      runOnUiThread {
+        val need = runCatching { android.net.VpnService.prepare(this) }.getOrNull()
+        if (need == null) {
+          android.util.Log.i("MainActivity", "VPN 已授权")
+          return@runOnUiThread
+        }
+        android.util.Log.i("MainActivity", "请求 VPN 授权")
+        runCatching { startActivityForResult(need, REQ_VPN_CONSENT) }
+      }
+    }
+
+    /** 是否已获得 VPN 授权（"1"/"0"）。 */
+    fun vpnConsentGranted(): String =
+      if (runCatching { android.net.VpnService.prepare(this) == null }.getOrDefault(false)) "1" else "0"
+
+    // ── 导出实例日志 ────────────────────────────────────────────────────
+
+  /**
+   * 把实例的日志目录打包成 zip 并分享。
+   *
+   * 为什么必须打 zip：日志目录里是 `latest.log` + 一堆 `*.log.gz`，一次分享一个文件
+   * 最省事（对方解开就能看）。zip 放 cacheDir，FileProvider 的 `cache-path` 已经映射过了。
+   */
+  fun shareLogsZip(archiveName: String, srcDir: String) {
+    runOnUiThread {
+      runCatching {
+        val files = java.io.File(srcDir).listFiles()?.filter { it.isFile }
+          ?.sortedByDescending { it.lastModified() }
+        if (files.isNullOrEmpty()) throw java.io.IOException("没有可导出的日志文件")
+        val out = java.io.File(cacheDir, archiveName)
+        java.util.zip.ZipOutputStream(java.io.FileOutputStream(out)).use { zos ->
+          // 文件名可能重复（同一天多次轮转），前面补序号区分
+          files.forEachIndexed { i, f ->
+            zos.putNextEntry(java.util.zip.ZipEntry(String.format("%03d_%s", i, f.name)))
+            f.inputStream().use { it.copyTo(zos) }
+            zos.closeEntry()
+          }
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+          this, "$packageName.fileprovider", out
+        )
+        val send = Intent(Intent.ACTION_SEND)
+        send.putExtra(Intent.EXTRA_STREAM, uri)
+        send.type = "application/zip"
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(Intent.createChooser(send, "分享日志"))
+      }.onFailure {
+        Log.w(TAG, "导出日志失败", it)
+        runCatching {
+          android.widget.Toast.makeText(this, it.message ?: "导出失败", android.widget.Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+  }
+
+  // ── 控制布局（Pojav 按键布局）：启动器里直接编辑 / 导入 / 导出 ──────────
+
+    /**
+     * 打开原生控制布局编辑器（横屏 + 游戏主题，和游戏里那个界面一模一样）。
+     *
+     * @param layout 要编辑的布局名（`<files>/controlmap/` 下、不带 .json）；空 = 当前默认
+     * @param preview 只读预览（导入时先给用户看一眼）
+     * @param saveAs 预览确认后另存成的名字（仅预览模式）
+     */
+    fun openControlEditor(layout: String?, preview: Boolean, saveAs: String?) {
+      runOnUiThread {
+        runCatching {
+          val i = Intent(this, net.kdt.pojavlaunch.CustomControlsActivity::class.java)
+          if (!layout.isNullOrBlank()) i.putExtra("layout", layout)
+          i.putExtra("preview", preview)
+          if (!saveAs.isNullOrBlank()) i.putExtra("saveAs", saveAs)
+          startActivity(i)
+        }.onFailure { android.util.Log.w("MainActivity", "打开控制布局编辑器失败", it) }
+      }
+    }
+
+    /**
+     * 导出控制布局：走系统分享（FileProvider 已经映射了 `<files>/controlmap/`，
+     * 见 res/xml/file_paths.xml）。
+     *
+     * 用户要的是「把布局发给别人」，所以分享比「存到某个目录」更顺手；
+     * 需要落到具体目录时在分享目标里选文件管理器即可。
+     */
+    fun exportControlLayout(layout: String) {
+      runOnUiThread {
+        runCatching {
+          val f = java.io.File(filesDir, "controlmap/$layout.json")
+          if (!f.isFile) throw java.io.IOException("布局不存在：$layout")
+          val uri = androidx.core.content.FileProvider.getUriForFile(
+            this, "$packageName.fileprovider", f
+          )
+          val send = Intent(Intent.ACTION_SEND)
+          send.putExtra(Intent.EXTRA_STREAM, uri)
+          send.type = "application/json"
+          send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          startActivity(Intent.createChooser(send, null))
+        }.onFailure { android.util.Log.w("MainActivity", "导出控制布局失败", it) }
+      }
+    }
+
+    /**
+     * 导入控制布局：SAF 选一个 json → 校验 → 写成 `<controlmap>/IMPORT_TMP.json`。
+     *
+     * 校验沿用 `ImportControlActivity` 的标准（必须有 `version` 与 `mControlDataList`）——
+     * 不校验的话，坏文件会进到游戏里才炸。返回统计 JSON 字符串给前端弹预览用。
+     */
+    fun importControlLayout(): String {
+      // **为什么用 GET_CONTENT 而不是 OPEN_DOCUMENT**：
+      // 系统选择器（DocumentsUI）只认 OPEN_DOCUMENT，而 MT 管理器这类第三方文件管理器
+      // 注册的是老式的 `ACTION_GET_CONTENT + OPENABLE` —— 实测
+      // `cmd package query-activities -a android.intent.action.GET_CONTENT -t application/json`
+      // 里**有** `bin.mt.plus`，但 `OPEN_DOCUMENT` 那条**没有**它。
+      // 也就是说：发 OPEN_DOCUMENT → 用户永远看不到 MT；发 GET_CONTENT 就能把它列出来。
+      // 再套一层 `createChooser` → 弹出的就是「选择打开方式」那样一个应用列表。
+      val i = Intent(Intent.ACTION_GET_CONTENT)
+      i.addCategory(Intent.CATEGORY_OPENABLE)
+      i.type = "application/json"
+      // 传 null 而不是省略 EXTRA_STREAM：`createChooser` 遇到部分应用会往 intent 里塞
+      // 一个默认的 clipData，导致目标应用以为用户已经选好了文件。给 null 明确表示「还没选」。
+      i.putExtra(Intent.EXTRA_STREAM, null as Parcelable?)
+      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      reqPickControl = true
+      val picked = Intent.createChooser(i, getString(R.string.import_control_label))
+      try {
+        startActivityForResult(picked, reqPickFile)
+      } catch (t: Throwable) {
+        // 极端情况下没有应用能处理（不会有，但别崩）
+        reqPickControl = false
+        android.widget.Toast.makeText(this, "没有可用的文件选择器", android.widget.Toast.LENGTH_SHORT).show()
+      }
+      return ""
+    }
+
+    /** 与 [readPickedControlLayout] 共用的校验 + 落盘；返回统计 JSON。 */
+      private fun acceptLayoutText(text: String): String {
+        return runCatching {
+          val j = org.json.JSONObject(text)
+          if (!j.has("version") || !j.has("mControlDataList")) {
+            throw java.io.IOException("这不是有效的控制布局文件")
+          }
+          val tmp = java.io.File(filesDir, "controlmap/$TMP_IMPORT_NAME.json")
+          tmp.parentFile?.mkdirs()
+          tmp.writeText(text)
+          org.json.JSONObject()
+            .put("ok", true)
+            .put("name", TMP_IMPORT_NAME)
+            .put("buttons", j.optJSONArray("mControlDataList")?.length() ?: 0)
+            .put("joysticks", j.optJSONArray("mJoystickDataList")?.length() ?: 0)
+            .put("drawers", j.optJSONArray("mDrawerDataList")?.length() ?: 0)
+            .toString()
+        }.getOrElse {
+          org.json.JSONObject().put("ok", false).put("error", it.message ?: "导入失败").toString()
+        }
+      }
+
+      /** 读取用户在 SAF 里选的布局文件；返回 `{ok, buttons, joysticks, drawers, name}`。 */
+      private fun readPickedControlLayout(uri: android.net.Uri): String {
+        return runCatching {
+          val text = contentResolver.openInputStream(uri)?.use {
+            it.readBytes().toString(java.nio.charset.StandardCharsets.UTF_8)
+          } ?: throw java.io.IOException("读不到所选文件")
+          acceptLayoutText(text)
+        }.getOrElse {
+          org.json.JSONObject().put("ok", false).put("error", it.message ?: "导入失败").toString()
+        }
+      }
+
+      /**
+       * 直接从**文件路径**导入（不经SAF）。
+       *
+       * 为什么需要这条：SAF（系统选择器）打不开 `Android/data` 等目录，而 MT 管理器有 root 权限能拿到
+       * 那些文件的绝对路径 —— 用户在 MT 里复制路径粘过来，我们凭「所有文件访问」直接读就行。
+       * 技术上**没法**让 MT 代替我们弹选择器（MT 没这个接口，系统只认 SAF）。
+       */
+      fun importControlLayoutFromPath(path: String): String {
+        val p = path.trim()
+        if (p.isEmpty()) {
+          return org.json.JSONObject().put("ok", false).put("error", "路径为空").toString()
+        }
+        return runCatching {
+          val f = java.io.File(p)
+          if (!f.isFile) throw java.io.IOException("找不到这个文件")
+          if (f.length() > 8 * 1024 * 1024) throw java.io.IOException("文件太大了（超过 8MB）")
+          acceptLayoutText(f.readText(Charsets.UTF_8))
+        }.getOrElse {
+          org.json.JSONObject().put("ok", false).put("error", it.message ?: "导入失败").toString()
+        }
+      }
+
     private fun applyStoredOrientation() {
     try {
       val file = File(filesDir, "settings.json")
@@ -522,6 +765,15 @@ class MainActivity : TauriActivity() {
   // ==================== 游戏目录（内部 / 应用专属外部 / 自定义） ====================
 
   private val reqPickGameDir = 0x51A7
+
+  /** 「导入控制布局」用的 SAF 请求码（与选游戏目录那个区分开）。 */
+  private val reqPickFile = 0x51A8
+
+  /** 本次 SAF 是为了导入控制布局（onActivityResult 里据此分支）。 */
+  private var reqPickControl = false
+
+  /** 导入用的临时布局文件名（`TMP_IMPORT` 前缀会被布局列表跳过，见 controls.rs）。 */
+  private val TMP_IMPORT_NAME = "TMP_IMPORT_FILE"
 
   /** 「游戏目录」可选项（JSON 数组），见 [StorageDirs]。 */
   fun gameDirOptions(): String = runCatching { StorageDirs.optionsJson(this) }.getOrDefault("[]")
@@ -591,7 +843,27 @@ class MainActivity : TauriActivity() {
 
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
-    if (requestCode != reqPickGameDir) return
+    // 「VPN 授权」对话框的结果（陶瓦联机开房前会弹，见 ensureVpnConsent）
+    if (requestCode == REQ_VPN_CONSENT) {
+      android.util.Log.i(
+        "MainActivity",
+        "VPN 授权结果: " + if (resultCode == RESULT_OK) "已允许" else "已拒绝"
+      )
+      return
+    }
+    if (requestCode != reqPickGameDir) {
+      // 控制布局导入（SAF 选单个 json）→ 校验后写 IMPORT_TMP.json，前端轮询取结果
+      if (requestCode == reqPickFile && reqPickControl) {
+        reqPickControl = false
+        val json = if (resultCode == RESULT_OK && data?.data != null) {
+          readPickedControlLayout(data.data!!)
+        } else {
+          org.json.JSONObject().put("ok", false).put("error", "已取消").toString()
+        }
+        runCatching { java.io.File(filesDir, "control-import.json").writeText(json) }
+      }
+      return
+    }
     val treeUri = data?.data
     if (resultCode != RESULT_OK || treeUri == null) {
       writeGameDirPick("", "")   // 用户取消
@@ -848,6 +1120,9 @@ class MainActivity : TauriActivity() {
 
     /** Pojav 控制层读的那份 SharedPreferences 文件名（LauncherPreferences 里定的）。 */
     const val PREFS_POJAV = "launcher_preferences"
+
+    /** 「VPN 授权」对话框的请求码（见 ensureVpnConsent）。 */
+    const val REQ_VPN_CONSENT = 4201
   }
     /**
      * WiFi 网卡的 IPv4 地址（服务器联机地址用）。

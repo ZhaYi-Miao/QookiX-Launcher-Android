@@ -772,6 +772,43 @@ pub async fn read_instance_log(instance_id: &str) -> anyhow::Result<String> {
         .context("日志读取任务失败")?
 }
 
+/// **导出（分享）实例日志**。
+///
+/// 为什么需要：日志目录在游戏目录里，默认是 `/storage/emulated/0/Android/data/<包名>/…`，
+/// 而 **Android 11+ 单独屏蔽了 `Android/data`** —— 文件管理器（哪怕有「所有文件访问」）进不去、
+/// 电脑 MTP 也看不到。实测表现就是 MT 报「该文件被设置了私有权限」，玩家根本没法把日志发出来。
+/// 打包 zip 后走系统分享（FileProvider 的 `cache-path`）是唯一稳定的出路。
+pub async fn export_instance_logs(instance_id: &str) -> anyhow::Result<()> {
+    let root = crate::settings::instances_root_sync().ok_or_else(|| {
+        anyhow::anyhow!("实例目录还没准备好，先启动一次游戏")
+    })?;
+    let dir = std::path::Path::new(&root).join(instance_id).join("logs");
+    if !dir.is_dir() {
+        anyhow::bail!("这个实例还没有日志");
+    }
+    // 归档名带版本名，方便对方一眼看出是哪台设备的日志
+    let tag = crate::settings::instances_root_sync()
+        .and_then(|r| {
+            std::fs::read_to_string(
+                std::path::Path::new(&r).join(instance_id).join("instance.json"),
+            )
+            .ok()
+        })
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("version_name").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_else(|| "minecraft".to_string());
+    let archive = format!("qookix-logs-{}-{}.zip", sanitize(&tag), instance_id);
+    crate::android_bridge::share_logs_zip(&archive, &dir.to_string_lossy());
+    Ok(())
+}
+
+/// 文件名里不能有路径分隔符等
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect()
+}
+
 fn read_instance_log_sync(instance_id: &str, data_dir: &str) -> anyhow::Result<String> {
     let launcher_log = Path::new(data_dir)
         .join("logs")

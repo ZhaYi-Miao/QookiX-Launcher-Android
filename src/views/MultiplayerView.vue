@@ -167,6 +167,26 @@ const tcHint = computed(() => {
   return tcRoom.value ? $t("terracotta.hint-hosting") : $t("terracotta.hint-scanning");
 });
 
+/**
+ * 调隧道接口，失败自动重试几次。
+ *
+ * 冷启动时隧道要 `loadLibrary` + 初始化 EasyTier（手机上还跑着服务器 JVM 时更慢），
+ * 头几秒必然连不上。直接把这句错误弹给用户（"隧道还在启动中，请稍后重试"）的话，
+ * 用户只能看着干等 —— 自己重试几次，多数情况点一下就成了。
+ */
+async function tcCall(path: string, tries = 3): Promise<string> {
+  let last = "";
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await api.terracottaTunnelRequest(path);
+    } catch (e) {
+      last = String(e);
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  throw last;
+}
+
 /** 拉一次隧道状态。Terracotta 返回形如 {"index":1,"state":"host-scanning"} */
 async function tcRefresh() {
   try {
@@ -188,11 +208,46 @@ async function tcRefresh() {
   }
 }
 
+/**
+ * 开房前确保拿到「VPN」系统授权（陶瓦的数据面要走 TUN，否则客人连不进来）。
+ * 详见 ServerDetailView 里的同名函数。
+ */
+async function ensureTcVpn(): Promise<boolean> {
+  try {
+    if (await api.terracottaVpnGranted()) return true;
+    await api.terracottaRequestVpn();
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (await api.terracottaVpnGranted()) return true;
+    }
+    message.warning($t("terracotta.vpn-denied"));
+    return false;
+  } catch {
+    return await api.terracottaVpnGranted();
+  }
+}
+
 async function startHosting() {
   tcBusy.value = true;
   try {
+    // 先探一次活：隧道可能刚被系统回收（端口文件是上次留下的，照着发请求只会
+    // 撞上「连接被拒」这种看不懂的报错）。这里给它一次自愈的机会。
+    await tcRefresh();
+    if (tcState.value === "off") {
+      message.warning($t("terracotta.hint-off"));
+      return;
+    }
+    // 没 VPN 授权就别开房：否则房间码出得来、朋友却怎么都连不上
+    if (!(await ensureTcVpn())) return;
     const name = accounts.current?.username ?? "player";
-    await api.terracottaTunnelRequest("/host?player=" + encodeURIComponent(name));
+    const raw = await tcCall("/host?player=" + encodeURIComponent(name));
+    // 隧道会回 {"ok":false,"error":"…"}（比如状态不对），原来不看就往下走，
+    // 用户只看到「已等待，请先在游戏里开放局域网世界」，永远不知道自己被拒了
+    if (!raw.includes('"ok":true')) {
+      const err = raw.match(/"error":"([^"]*)"/)?.[1];
+      message.error(err ? `陶瓦联机：${err}` : $t("terracotta.hint-off"));
+      return;
+    }
     for (let i = 0; i < 8; i++) {
       await new Promise((r) => setTimeout(r, 1500));
       await tcRefresh();
@@ -212,7 +267,7 @@ async function joinRoom() {
   tcBusy.value = true;
   try {
     const name = accounts.current?.username ?? "player";
-    const raw = await api.terracottaTunnelRequest(
+    const raw = await tcCall(
       "/guest?room=" + encodeURIComponent(code) + "&player=" + encodeURIComponent(name),
     );
     if (raw.includes('"ok":true')) {

@@ -242,6 +242,96 @@ pub async fn list_control_layouts() -> Result<Vec<ControlLayoutInfo>, String> {
     Ok(out)
 }
 
+/// 打开原生控制布局编辑器（就是游戏里那个横屏界面）。
+///
+/// 为什么不自己画一个：那个编辑器本来就是「所见即所得」的实现（同一套 `ControlLayout` 视图，
+/// 直接读游戏那份布局文件），重写一套只会得到「预览和游戏里不完全一样」的结果。
+/// `layout` 传空 = 编辑当前默认那份；`preview` = 只读预览（导入时先给用户看一眼）。
+#[tauri::command]
+pub async fn open_control_layout_editor(
+    layout: Option<String>,
+    preview: bool,
+    save_as: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let name = match layout {
+            Some(n) if !n.trim().is_empty() => Some(validate_name(&n)?),
+            _ => None,
+        };
+        let save = match save_as {
+            Some(n) if !n.trim().is_empty() => Some(validate_name(&n)?),
+            _ => None,
+        };
+        crate::android_bridge::open_control_editor(name.as_deref(), preview, save.as_deref());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (layout, preview, save_as);
+        return Err("控制布局编辑器只能在手机上使用".to_string());
+    }
+    Ok(())
+}
+
+/// 导出（系统分享）一份布局。
+#[tauri::command]
+pub async fn export_control_layout(name: String) -> Result<(), String> {
+    let name = validate_name(&name)?;
+    let path = layout_file(&name)?;
+    if !path.is_file() {
+        return Err(format!("布局「{name}」不存在"));
+    }
+    #[cfg(target_os = "android")]
+    crate::android_bridge::export_control_layout(&name);
+    #[cfg(not(target_os = "android"))]
+    return Err("导出功能只能在手机上使用".to_string());
+    Ok(())
+}
+
+/// 弹系统文件选择器，让用户挑一个布局文件导入（真正的读取在原生侧异步完成）。
+#[tauri::command]
+pub async fn pick_control_layout() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    crate::android_bridge::pick_control_layout();
+    #[cfg(not(target_os = "android"))]
+    return Err("导入功能只能在手机上使用".to_string());
+    Ok(())
+}
+
+/// 取回导入结果（原生侧校验完写进临时文件，这里取走即删）。
+#[tauri::command]
+pub async fn take_control_import() -> Result<Option<serde_json::Value>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let Some(s) = crate::android_bridge::take_control_import() else {
+            return Ok(None);
+        };
+        return Ok(serde_json::from_str(&s).ok());
+    }
+    #[cfg(not(target_os = "android"))]
+    Ok(None)
+}
+
+/// 按**文件路径**导入控制布局（不经 SAF）。
+///
+/// 存在的理由：SAF 打不开 `Android/data` 等目录，而 MT 管理器能拿到那些文件的绝对路径 ——
+/// 用户复制路径粘过来，我们凭「所有文件访问」直接读。
+/// （技术上**不能**让 MT 代替我们弹选择器：MT 没有这个接口，系统只认 SAF/DocumentsUI。）
+#[tauri::command]
+pub async fn import_control_layout_by_path(path: String) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let raw = crate::android_bridge::import_control_layout_from_path(path.trim())
+            .ok_or_else(|| "导入失败".to_string())?;
+        return serde_json::from_str(&raw).map_err(|e| format!("导入结果解析失败：{e}"));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = path;
+        Err("按路径导入只能在手机上使用".to_string())
+    }
+}
+
 /// 切换当前使用的布局（写 pojav 偏好 `defaultCtrl`）。
 #[tauri::command]
 pub async fn set_current_control_layout(name: String) -> Result<Vec<ControlLayoutInfo>, String> {

@@ -119,6 +119,109 @@ pub fn request_all_files_access() {
     let _ = android::call_activity("requestAllFilesAccess", "()V", None);
 }
 
+/// 让陶瓦隧道（`:tunnel`）**按需重绑**一次。探测到连不上时用，见 `terracotta.rs`。
+#[cfg(target_os = "android")]
+pub fn ensure_tunnel_service() {
+    let _ = android::call_activity("ensureTunnelService", "()V", None);
+}
+
+/// 告诉原生「日志页在前台」，之后音量- / 音量+ 会被转成缩放事件派给 WebView。
+/// 离开日志页一定要关掉，否则游戏里按音量+-会失效。
+#[tauri::command]
+pub fn set_log_zoom_capture(on: bool) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = android::call_activity_bool("setLogZoomCapture", "(Z)V", on);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = on;
+    }
+}
+
+/// 弹「VPN（陶瓦联机）」的系统授权对话框（已授权时什么都不做）。
+///
+/// 必须在开房**之前**调用：Terracotta 的 VpnService 请求只有 30 秒答复窗口，
+/// 系统授权对话框要用户点一下，塞在那个窗口里太容易超时。
+#[cfg(target_os = "android")]
+pub fn ensure_vpn_consent() {
+    let _ = android::call_activity("ensureVpnConsent", "()V", None);
+}
+
+/// 是否已获得 VPN 授权。
+#[cfg(target_os = "android")]
+pub fn vpn_consent_granted() -> bool {
+    android::call_activity_str("vpnConsentGranted", "()Ljava/lang/String;")
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// 导出（分享）某个目录里的日志：原生侧打成 zip 再弹系统分享。
+#[cfg(target_os = "android")]
+pub fn share_logs_zip(archive_name: &str, dir: &str) {
+    let _ = android::call_activity2(
+        "shareLogsZip",
+        "(Ljava/lang/String;Ljava/lang/String;)V",
+        archive_name,
+        dir,
+    );
+}
+
+// ── 控制布局（Pojav 按键布局）────────────────────────────────────────────
+// 这些都要过 Activity：原生编辑器是 Activity、SAF 要 Activity 结果。
+// 返回值用字符串（JSON），因为 JNI 侧构造对象很啰嗦。
+
+/// 打开原生控制布局编辑器（横屏 + 游戏主题，与游戏内那个界面一致）。
+#[cfg(target_os = "android")]
+pub fn open_control_editor(layout: Option<&str>, preview: bool, save_as: Option<&str>) {
+    // 空串 = 「用当前默认」（Kotlin 侧按 isNullOrBlank 判断），省得在 JNI 里构造 null 引用
+    android::call_activity_sbs(
+        "openControlEditor",
+        "(Ljava/lang/String;ZLjava/lang/String;)V",
+        layout.unwrap_or(""),
+        preview,
+        save_as.unwrap_or(""),
+    );
+}
+
+/// 导出（分享）控制布局。
+#[cfg(target_os = "android")]
+pub fn export_control_layout(layout: &str) {
+    // 模块里已有「一个字符串参数」的 helper，不用自己拼 JNI
+    let _ = android::call_activity(
+        "exportControlLayout",
+        "(Ljava/lang/String;)V",
+        Some(layout),
+    );
+}
+
+/// 弹 SAF 让用户选一个控制布局文件。
+#[cfg(target_os = "android")]
+pub fn pick_control_layout() {
+    let _ = android::call_activity("importControlLayout", "()Ljava/lang/String;", None);
+}
+
+/// 直接按**文件路径**导入控制布局（不经SAF —— SAF 打不开 Android/data）。
+#[cfg(target_os = "android")]
+pub fn import_control_layout_from_path(path: &str) -> Option<String> {
+    // `call_activity`（单字符串参数 + 返回字符串）正好符合这个签名
+    android::call_activity(
+        "importControlLayoutFromPath",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        Some(path),
+    )
+}
+
+/// 取回 SAF 选择的结果（JSON：ok/buttons/joysticks/drawers/error），没有则返回空串。
+#[cfg(target_os = "android")]
+pub fn take_control_import() -> Option<String> {
+    let dir = crate::settings::data_dir_sync()?;
+    let p = std::path::PathBuf::from(dir).join("control-import.json");
+    let s = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    Some(s)
+}
+
 /// 弹出系统的目录选择器（SAF）。**异步** —— 结果由原生写进
 /// `<files>/game-dir-pick.json`，Rust 侧用 `game_dir::take_picked_game_dir` 取回。
 #[cfg(target_os = "android")]
@@ -422,7 +525,6 @@ mod android {
     #[cfg(target_os = "android")]
     pub fn start_server_process(id: &str) -> Result<(), String> {
         use jni::objects::JValue;
-        use jni::sys::jint;
 
         let vm = java_vm().ok_or_else(|| "原生桥未就绪（JavaVM 未初始化）".to_string())?;
         let mut env = vm
@@ -692,6 +794,49 @@ mod android {
             }
             _ => Some(String::new()),
         }
+    }
+
+    /// 调 MainActivity 上的 `(String, boolean, String)` 方法（无返回值）。
+    ///
+    /// 控制布局编辑器要传三个参数（编辑哪一份 / 是否只读预览 / 另存成什么），
+    /// 现有的 `call_activity` 只支持「一个字符串」或「无参」，所以加这一个。
+    /// 空串代表「不传」（Kotlin 侧按 `isNullOrBlank()` 判断）。
+    pub fn call_activity_sbs(name: &str, sig: &str, first: &str, flag: bool, third: &str) {
+        let Some(vm) = java_vm() else { return };
+        let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+            return;
+        };
+        let Some(obj) = activity() else { return };
+        let Ok(a): Result<JString, _> = env.new_string(first) else {
+            return;
+        };
+        let Ok(b): Result<JString, _> = env.new_string(third) else {
+            return;
+        };
+        let _ = env.call_method(
+            &obj,
+            name,
+            sig,
+            &[
+                JValue::Object(&a),
+                JValue::Bool(u8::from(flag)),
+                JValue::Object(&b),
+            ],
+        );
+    }
+
+    /// **单个 boolean 参数**的版本。
+    ///
+    /// `call_activity` 只认字符串参数（`Option<&str>`），`call_activity_sbs` 又是
+    /// 「字符串+布尔+字符串」三参的特例，都套不上这种「就一个开关」的调用
+    /// （如 `setLogZoomCapture(Z)V`），所以单独加一个。
+    pub fn call_activity_bool(name: &str, sig: &str, flag: bool) {
+        let Some(vm) = java_vm() else { return };
+        let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+            return;
+        };
+        let Some(obj) = activity() else { return };
+        let _ = env.call_method(&obj, name, sig, &[JValue::Bool(u8::from(flag))]);
     }
 
     /// 调用 MainActivity 上的实例方法并返回字符串结果（返回 null 时得到 None）。

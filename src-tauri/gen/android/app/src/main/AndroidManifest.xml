@@ -20,6 +20,48 @@
     <!-- 控制布局可以通过 content:// 从外部导入（Pojav 的 ImportControlActivity 同款） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
+    <!--
+      「所有文件访问」（MANAGE_EXTERNAL_STORAGE）。
+
+      **这条以前漏了，结果是「设置 → 游戏目录 → 授权」根本走不通**：
+      它是 Android 11+ 的特殊访问权限，**必须在清单里声明**，系统才会把本应用列入
+      「所有文件访问」那一栏；没声明的话小米/HyperOS 的权限页里这一项是**灰色点不动**的
+      （别的 ROM 直接不显示），Environment.isExternalStorageManager() 也永远返回 false
+      —— 启动器就一直以为没授权，用户点多少次都没用。
+
+      为什么需要它：自定义游戏目录要支持「任意共享存储路径」（如 /sdcard/Documents/mc），
+      而游戏 JVM 和 Rust 的 std::fs 都只能拿**真实路径**（SAF 的 content:// URI 两边都用不了），
+      所以必须能直接读写那些目录，而不只是 SAF 授权的那一个。
+
+      注：targetSdk 36 不影响系统授予（只有 Google Play 的政策审核会管这个权限，
+      侧载安装不受限制）。requestLegacyExternalStorage 对 targetSdk≥30 已被系统忽略。
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <!--
+      组播锁（`WifiManager.MulticastLock`）需要这条权限，否则 acquire 抛
+      SecurityException（`WifiServiceImpl.enforceMulticastChangePermission`）。
+      它是「陶瓦联机 + 自建服」能跑起来的前提：Terracotta 的服务器扫描器靠
+      `bind(4445) + join_multicast(224.0.2.60)` 收包，我们自建服要靠
+      `[MOTD]…[/AD]<端口>[/AD]` 组播包把端口报给它（见TerracottaTunnelService 的类注释）。
+      实测缺这条时锁申请会失败；部分 ROM 上仍能收到包（宽松），严格的设备上会扫不到服务器。
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!--
+      陶瓦联机的 VPN（TUN）。
+
+      EasyTier 的**数据面**必须走 TUN：房主把mesh 上的入站流量转成「连本机 25565」，
+      客人才连得进来。Terracotta 不自己申请 VPN，而是把请求交给宿主App
+      （`TerracottaAndroidAPI.VpnServiceCallback`），由我们建隧道。
+
+      不声明 BIND_VPN_SERVICE / 不注册这个服务 → 房间里只有房主
+      （真机症状：电脑端加入报「连接发生错误」，房主 profiles 里只有自己）。
+      服务必须跑在 `:tunnel` 进程 —— `libterracotta.so` 只在那里加载，
+      跨进程没法把 `ParcelFileDescriptor` 交给 native。
+    -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:glEsVersion="0x00030000" android:required="false" />
@@ -97,8 +139,14 @@
         </activity>
 
         <!--
-          从外部导入控制布局（content:// 的 json/纯文本）。
-          来自 PojavLauncher 的 net.kdt.pojavlaunch.ImportControlActivity。
+          从外部导入控制布局。
+
+          为什么既有 content:// 又有 file://、还带了 octet-stream：
+          文件管理器（尤其 MT）分享一个 .json 时，给的 MIME 很不统一 ——
+          有的给 application/json，有的给 application/octet-stream（它不认扩展名），
+          有的干脆给 file://。**只认 application/json 的话，用户在 MT 里
+          长按分享根本看不到 QookiX 这个选项**（intent-filter 不匹配，系统不列出来）。
+          所以这几种都接上；真正的校验在代码里（必须有 version + mControlDataList）。
         -->
         <activity
             android:name="net.kdt.pojavlaunch.ImportControlActivity"
@@ -110,9 +158,24 @@
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="content" android:mimeType="application/json" />
                 <data android:scheme="content" android:mimeType="text/json" />
                 <data android:scheme="content" android:mimeType="text/plain" />
+                <data android:scheme="content" android:mimeType="application/octet-stream" />
+                <data android:scheme="file" android:mimeType="application/json" />
+                <data android:scheme="file" android:mimeType="application/octet-stream" />
+                <data android:scheme="file" android:mimeType="text/plain" />
+                <data android:scheme="file" android:mimeType="application/x-json" />
+            </intent-filter>
+            <!-- 有些文件管理器分享时不给 MIME（只有 ACTION_VIEW + URI），
+                 用 pathPattern 兜底匹配 .json；不写 mimeType 以免匹配所有文件。 -->
+            <intent-filter android:label="@string/import_control_label">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" android:pathPattern=".*\\.json" />
             </intent-filter>
         </activity>
 
@@ -151,6 +214,17 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             android:process=":tunnel" />
+
+        <!-- 陶瓦联机的 VPN（TUN）：必须与 :tunnel 同进程，详见上方 BIND_VPN_SERVICE 处的说明 -->
+        <service
+            android:name=".tunnel.TerracottaVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:process=":tunnel">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".services.GameGuardService"

@@ -2,11 +2,12 @@
 import { t as $t } from "../i18n";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useMessage } from "../composables/message";
+import { useLogZoom } from "../composables/useLogZoom";
 import AppSwitch from "../ui/AppSwitch.vue";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useTasksStore } from "../stores/tasks";
 import { api } from "../api";
-import { IconClose, IconCopy, IconDownload } from "./icons";
+import { IconClose, IconCopy, IconDownload, IconFolder } from "./icons";
 
 const props = defineProps<{ instanceId: string }>();
 const tasks = useTasksStore();
@@ -82,6 +83,22 @@ async function copyAll() {
   }
 }
 
+/**
+ * 打包分享日志文件（zip）。
+ *
+ * 为什么上面那个「导出」不够：它只把**当前显示的文本**存成文件，而游戏自己的
+ * `latest.log` + 历史 `*.log.gz` 都在游戏目录里 —— 默认位于 `Android/data/<包名>/…`，
+ * **Android 11+ 屏蔽了 Android/data**，文件管理器（哪怕有「所有文件访问」）和电脑 MTP
+ * 都取不到。这个按钮把整个日志目录打包后走系统分享，才真正能把日志发出去。
+ */
+async function shareLogFiles() {
+  try {
+    await api.exportInstanceLogs(props.instanceId);
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
 async function exportLog() {
   if (!logText.value) {
     message.info($t("log-viewer.no-logs"));
@@ -103,6 +120,9 @@ async function exportLog() {
     message.error(String(e));
   }
 }
+
+/* 字号缩放：与服务器日志/控制台共用 `useLogZoom`（含捏合、音量- / 音量+、记忆字号） */
+const { fontSize, applyFontSize, zoomBy, touch } = useLogZoom();
 </script>
 
 <template>
@@ -114,15 +134,38 @@ async function exportLog() {
           <span>{{ $t("log-viewer.auto-scroll") }}</span>
           <app-switch :value="autoScroll" @update:value="(v: boolean) => (autoScroll = v)" />
         </label>
+        <!-- 字号：按钮最直观，捏合和音量键是同一套逻辑的另外两个入口 -->
+        <div class="log-zoom">
+          <button class="mini icon-only" :title="$t('log-viewer.zoom-out')" :aria-label="$t('log-viewer.zoom-out')" @click="zoomBy(-1)">
+            <span class="zoom-glyph">A</span><span class="zoom-sign">−</span>
+          </button>
+          <button class="mini icon-only" :title="$t('log-viewer.zoom-reset')" :aria-label="$t('log-viewer.zoom-reset')" @click="applyFontSize(12)">
+            <span class="zoom-glyph">{{ fontSize }}</span>
+          </button>
+          <button class="mini icon-only" :title="$t('log-viewer.zoom-in')" :aria-label="$t('log-viewer.zoom-in')" @click="zoomBy(1)">
+            <span class="zoom-glyph">A</span><span class="zoom-sign">+</span>
+          </button>
+        </div>
         <button class="mini" :title="$t('log-viewer.copy-all')" :aria-label="$t('log-viewer.copy-all')" @click="copyAll">
           <IconCopy />{{ $t("common.copy") }}</button>
         <button class="mini" :title="$t('log-viewer.export-file')" :aria-label="$t('log-viewer.export-file')" @click="exportLog">
           <IconDownload />{{ $t("log-viewer.export") }}</button>
+        <button class="mini" :title="$t('log-viewer.share-files')" :aria-label="$t('log-viewer.share-files')" @click="shareLogFiles">
+          <IconFolder />{{ $t("log-viewer.share-files-short") }}</button>
         <button class="mini" :title="$t('log-viewer.clear-logs')" :aria-label="$t('log-viewer.clear-logs')" @click="clear">
           <IconClose />{{ $t("log-viewer.clear") }}</button>
       </div>
     </div>
-    <div ref="box" class="log-box mono" @scroll="onScroll">
+    <div
+      ref="box"
+      class="log-box mono"
+      :style="{ fontSize: fontSize + 'px' }"
+      @scroll="onScroll"
+      @touchstart.passive="touch.onTouchStart"
+      @touchmove.passive="touch.onTouchMove"
+      @touchend="touch.onTouchEnd"
+      @touchcancel="touch.onTouchEnd"
+    >
       <div v-if="!logs.length" class="log-empty">
         {{ tasks.runningInstance === instanceId ? $t('log-viewer.game-starting') : $t('log-viewer.no-logs-hint') }}
       </div>
@@ -172,16 +215,17 @@ async function exportLog() {
 .log-actions {
   display: flex;
   align-items: center;
+  /* **窄屏必须换行**：原来这里没写 wrap，「自动滚动 + 4 个按钮」硬挤在一行，
+     结果「打包日志」被压成竖排、「复制」被拆字—— 观感跟坏掉一样。 */
+  flex-wrap: wrap;
   gap: 8px;
 }
-.auto {
-  font-size: 12px;
-  color: var(--text-3);
-  display: flex;
+/* 字号那一组：三个小方块挨在一起，当成一个控件 */
+.log-zoom {
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  margin-right: 6px;
+  gap: 4px;
+  padding: 0 2px;
 }
 .mini {
   display: inline-flex;
@@ -196,6 +240,27 @@ async function exportLog() {
   cursor: pointer;
   font-family: inherit;
   transition: all 0.12s;
+  /* 同上：不写这句，窄屏下按钮里的文字会自己折行（「打包日志」竖成一条） */
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* 纯图标的方形按钮（字号组）：不撑宽度，避免跟旁边抢地方 */
+.mini.icon-only {
+  padding: 4px 7px;
+  justify-content: center;
+  position: relative;
+}
+.zoom-glyph {
+  font-size: 12px;
+  line-height: 1;
+}
+.zoom-sign {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--accent);
 }
 .mini:hover {
   color: var(--text-1);

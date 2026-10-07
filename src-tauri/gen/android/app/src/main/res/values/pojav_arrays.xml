@@ -26,6 +26,12 @@
         <item name="6">@string/customctrl_export</item>
     </string-array>
 
+    <!-- 导入布局的预览模式菜单（只读，看一眼再决定要不要） -->
+    <string-array name="menu_customcontrol_preview">
+        <item name="0">@string/customctrl_preview_use</item>
+        <item name="1">@string/customctrl_preview_cancel</item>
+    </string-array>
+
     <string-array name="menu_ingame">
         <item>@string/control_forceclose</item>
         <item>@string/control_viewout</item>

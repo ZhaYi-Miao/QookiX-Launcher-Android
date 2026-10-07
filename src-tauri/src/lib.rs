@@ -1,3 +1,14 @@
+// 本仓库有不少「能力已实现、但还没接到界面/流程上」的入口：JRE 安装器（`java.rs::install_jre`
+// 等着开服时自动补 Java）、旧平台 API 客户端（`modpack.rs` 里自己那套 Modrinth/CurseForge，
+// 现在实际走 `browse.rs`）、描述 Mojang 版本清单 schema 的结构体（`models.rs`）、
+// 以及一些留作兜底的错误枚举变体。
+//
+// 它们是**有意保留**的（不是忘了删），所以这里统一放开 dead_code ——
+// 之前每次编译 30 多条「never used / never read」纯属噪声，真正的编译错误反而被埋掉了。
+// 哪个能力接上线了，就把对应项的 `#[allow(dead_code)]` 去掉（文件内已逐处标注）。
+// 未使用的 import / 变量仍然照常报警 —— 那类是真该清掉的。
+#![allow(dead_code)]
+
 mod commands;
 mod models;
 mod settings;
@@ -91,6 +102,8 @@ pub fn run() {
     servers::hosted_server_core_installed,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,
+    terracotta::terracotta_vpn_granted,
+    terracotta::terracotta_request_vpn,
             // Version commands
             commands::get_version_list,
             commands::get_version_manifest,
@@ -204,6 +217,7 @@ pub fn run() {
             game_dir::request_all_files_access,
             game_dir::pick_game_dir,
             game_dir::take_picked_game_dir,
+            android_bridge::set_log_zoom_capture,
             game_dir::set_game_dir,
 
             // Crash analysis
@@ -238,6 +252,7 @@ pub fn run() {
             // Playtime
             commands::playtime_stats,
             commands::read_instance_log,
+            commands::export_instance_logs,
         commands::check_renderer_health,
         commands::check_renderer_health_latest,
             commands::get_pojav_prefs,
@@ -291,6 +306,11 @@ pub fn run() {
             controls::duplicate_control_layout,
             controls::rename_control_layout,
             controls::delete_control_layout,
+            controls::open_control_layout_editor,
+            controls::export_control_layout,
+            controls::pick_control_layout,
+            controls::take_control_import,
+            controls::import_control_layout_by_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Qookix application");
