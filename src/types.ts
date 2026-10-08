@@ -614,6 +614,53 @@ export interface ServerConfig {
   java_path: string | null;
   jvm_args: string | null;
   stop_command: string | null;
+  /** 空闲休眠时长（分钟）：0 = 关闭。无人在线超过这个时长就优雅停服，有人连接自动唤醒 */
+  sleep_timeout_min: number;
+  /** 休眠期间卡片上的提示语；null = 用界面自带文案 */
+  sleep_hint: string | null;
+  /** 唤醒过程中的提示语；null = 用界面自带文案 */
+  wake_hint: string | null;
+  /**
+   * `server.properties` 里的 `max-players`（**不是 server.json 里的字段**，
+   * 后端每次返回配置时现读现挂）。卡片副标题的「最多 N 名玩家」用它；
+   * 读不到就是 null，卡片退回显示端口。
+   */
+  max_players?: number | null;
+}
+
+/**
+ * 服务端运行态（`hosted_server_runtime`）。
+ *
+ * `sleeping` 是这次新加的：休眠中的服务器 JVM 已经停了（`running=false`），
+ * 但端口还被唤醒监听占着。界面必须能区分「休眠」与「用户停掉的」——
+ * 前者按钮是「唤醒」、后者是「启动」，两者混在一起用户就不知道该不该点。
+ */
+export interface ServerRuntime {
+  running: boolean;
+  startedAt: number;
+  jvmUp: boolean;
+  exitNote: string | null;
+  sleeping: boolean;
+  sleepSince: number;
+  /** 最近一次自动休眠 / 唤醒失败的原因 */
+  wakeError: string | null;
+}
+
+/**
+ * `server.properties` 里可在设置页编辑的那几项。
+ *
+ * 字段与后端白名单一一对应（`servers.rs` 的 `editable_props`）：
+ * 只放玩家真正会调的，其它键写错会让服务端起不来。
+ * 这些项 Minecraft **只在启动时读**，改完要重启才生效。
+ */
+export interface ServerProperties {
+  onlineMode: boolean;
+  whiteList: boolean;
+  viewDistance: number;
+  simulationDistance: number;
+  maxPlayers: number;
+  difficulty: "peaceful" | "easy" | "normal" | "hard";
+  gameMode: "survival" | "creative" | "adventure" | "spectator";
 }
 
 // 崩溃分析结果

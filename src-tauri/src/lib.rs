@@ -22,6 +22,8 @@ mod java;
 mod accounts;
 mod modpack;
 mod servers;
+/// 服务器空闲休眠与唤醒（无人时停服省电，有人连接自动拉起）。
+mod sleep;
 mod server_process;
 mod server_files;
 mod instance_files;
@@ -74,6 +76,10 @@ pub fn run() {
         // 保存 AppHandle：下载/安装/启动的进度事件都靠它广播给前端
         .setup(|app| {
             progress::set_app_handle(app.handle().clone());
+            // 进程重启后把后台任务补回来：休眠中的服务器要重新挂上唤醒监听，
+            // 运行中的要重新开始空闲巡检。这两件事不补都是**静默失效**
+            // （界面写着「休眠中」却没人听端口），所以放在这里而不是等前端来调。
+            sleep::resume_on_start();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -105,7 +111,11 @@ pub fn run() {
     servers::device_available_memory_mb,
     servers::battery_unrestricted,
     servers::request_battery_unrestricted,
+    servers::device_thermal_status,
+    servers::open_hosted_server_directory,
     servers::hosted_server_core_installed,
+    servers::get_hosted_server_properties,
+    servers::set_hosted_server_properties,
     terracotta::terracotta_ping,
     terracotta::terracotta_request,
     terracotta::terracotta_vpn_granted,

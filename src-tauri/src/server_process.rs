@@ -118,6 +118,69 @@ fn server_tmp_dir(work_dir: &str) -> String {
     dir.to_string_lossy().to_string()
 }
 
+/// 随包的 Android 版 JNA 原生库（`libjnidispatch.so`，各 ABI 一份，从 JNA 官方
+/// AAR `net.java.dev.jna:jna:<版本>@aar` 的 `jni/<abi>/` 里原样抽出）。
+#[cfg(target_os = "android")]
+#[cfg(target_arch = "aarch64")]
+const JNA_LIB: &[u8] = include_bytes!("../jna/arm64-v8a/libjnidispatch.so");
+#[cfg(target_os = "android")]
+#[cfg(target_arch = "x86_64")]
+const JNA_LIB: &[u8] = include_bytes!("../jna/x86_64/libjnidispatch.so");
+
+/// 把随包的 `libjnidispatch.so` 落到 `<数据目录>/jna/<arch>/`，返回该目录；拿不到就 None。
+///
+/// ## 为什么必须自带一份
+///
+/// 服务端（Paper 通过 oshi 采硬件信息）要用 JNA。JNA 启动时从自己 jar 里**按平台前缀**
+/// 挑一份原生库解压出来加载，而平台判定看的是 `java.vm.name` 里有没有 `Dalvik` ——
+/// 我们这套 JRE 是 OpenJDK 移植（不是 Dalvik），于是 JNA 认为自己在 Linux 上，挑了
+/// `linux-aarch64` 那份 glibc 版本：
+///
+/// ```text
+/// UnsatisfiedLinkError: ... dlopen failed: library "libc.so.6" not found
+/// ```
+///
+/// Android 的 bionic 里只有 `libc.so`，没有 `libc.so.6`，所以必然失败（oshi 整个初始化
+/// 不了）。竞品 Anvil-MC 的做法就是自带原生库 + 设 `jna.boot.library.path`
+/// （它 dex 里有 `-Djna.boot.library.path=`）。该属性**优先于** JNA 自己的平台探测，
+/// 于是平台判定绕过去了。
+///
+/// ## 版本必须与服务端下载的 jna.jar 对得上
+///
+/// JNA 只比对**主.次版本**（`Native.isCompatibleVersion`），不一致会抛
+/// `JNA native support library version ... does not match expected version`。
+/// 服务端那边的 jna.jar 由 Paper 自己下到
+/// `servers/<id>/libraries/net/java/dev/jna/jna/<版本>/`（实测 26.x = **5.17.0**），
+/// 随包这两份就是 5.17.0 的 AAR 抽出来的。换了核心/升级后若对不上，症状只是
+/// 「JNA 依旧不可用」（等同没有这个修复），去那个目录看版本号即可。
+fn ensure_jna_dir() -> Option<String> {
+    if !cfg!(target_os = "android") {
+        return None;
+    }
+    #[cfg(target_os = "android")]
+    let lib: &[u8] = JNA_LIB;
+    #[cfg(not(target_os = "android"))]
+    let lib: &[u8] = &[];
+    let dir = PathBuf::from(crate::settings::data_dir_sync()?)
+        .join("jna")
+        .join(std::env::consts::ARCH);
+    let file = dir.join("libjnidispatch.so");
+    // 已经是对的那份就不重写：每次启动都写一遍纯属白耗 IO。
+    // 比大小就够 —— 这里只有「随包那一份」一种可能的来源。
+    if std::fs::metadata(&file).map(|m| m.len()).ok() == Some(lib.len() as u64) {
+        return Some(dir.to_string_lossy().to_string());
+    }
+    if std::fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    if let Err(e) = std::fs::write(&file, lib) {
+        tracing::warn!("[server] 写 libjnidispatch.so 失败（{e}），JNA 可能仍不可用");
+        return None;
+    }
+    tracing::info!("[server] 已就绪 Android 版 libjnidispatch.so：{}", file.display());
+    Some(dir.to_string_lossy().to_string())
+}
+
 /// 设备当前**可用**内存（MB）。读 `/proc/meminfo` 的 `MemAvailable`。
 ///
 /// 用 `MemAvailable` 而不是 `MemTotal`：后者把内核收回、内核仍保留的内存也算进来，
@@ -614,7 +677,7 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                     spec2.xmx_mb
                 );
             }
-            let jvm_args = vec![
+            let mut jvm_args = vec![
                 format!("-Xmx{xmx_mb}M"),
                 // -Xms 用配置里的「最小内存」，但要夹紧：
                 // ① 下限 256M —— 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server
@@ -654,6 +717,12 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                 // 开服场景完全值得换。竞品 Anvil-MC 的服务端 JVM 也设了同一个参数。
                 "-Dsun.zip.disableMemoryMapping=true".to_string(),
             ];
+            // 让 JNA 用**随包的 Android 版**原生库，而不是它自己按 `java.vm.name`
+            // 猜出来的 linux-aarch64（glibc 版，在 bionic 上必然 dlopen 失败）。
+            // 详见 ensure_jna_dir。
+            if let Some(dir) = ensure_jna_dir() {
+                jvm_args.push(format!("-Djna.boot.library.path={dir}"));
+            }
             // JvmLauncher::launch 成功时会把自己的 jre_home 写进内部 state，
             // /stop 时 JvmLauncher::shutdown() 直接从那里取，不用在这里传。
             let mut all_jvm = vec![format!("-Duser.dir={}", spec2.work_dir)];

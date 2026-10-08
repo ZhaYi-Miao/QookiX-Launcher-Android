@@ -118,6 +118,43 @@ pub fn request_ignore_battery_optimizations() {
 #[cfg(not(target_os = "android"))]
 pub fn request_ignore_battery_optimizations() {}
 
+/// 设备当前热状态（`MainActivity.thermalStatus`）：0 正常 … 2 中等 … 4 危急 … 6 关机。
+///
+/// 手机开服跑久了会被系统降频，服务器跟着变卡。把它报给界面，用户才能知道
+/// 「不是服务器坏了，是手机热了」。读不到一律当 0（不打扰用户）。
+#[cfg(target_os = "android")]
+pub fn thermal_status() -> i32 {
+    android::call_activity_str("thermalStatus", "()Ljava/lang/String;")
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn thermal_status() -> i32 {
+    0
+}
+
+/// 把一个目录交给系统文件管理器打开（`MainActivity.openDirectory`，经 FileProvider 的
+/// `content://` 目录 URI）。
+///
+/// 返回 1 = 已交给外部应用，0 = 本机没有能打开「文件夹」的应用（调用方退回内置文件管理），
+/// -1 = 目录不存在。
+#[cfg(target_os = "android")]
+pub fn open_directory(path: &str) -> i32 {
+    android::call_activity(
+        "openDirectory",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        Some(path),
+    )
+    .and_then(|s| s.trim().parse::<i32>().ok())
+    .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn open_directory(_path: &str) -> i32 {
+    0
+}
+
 #[cfg(not(target_os = "android"))]
 pub fn wifi_ipv4() -> Option<String> {
     None

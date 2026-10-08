@@ -284,5 +284,27 @@
               android:name="android.support.FILE_PROVIDER_PATHS"
               android:resource="@xml/file_paths" />
         </provider>
+
+        <!--
+          服务器文件目录（files/servers/）作为「文档提供者」暴露给系统文件管理器。
+
+          为什么要它：服务器文件在应用私有区，第三方管理器进不去。FileProvider 只能给
+          **单个文件**造 URI（把目录交给 ACTION_VIEW 时，系统文件应用只会打开它自己的首页，
+          实测列不出目录），要「浏览/拷入/拷出整个目录」只能用 DocumentsProvider。
+
+          MANAGE_DOCUMENTS 是 signature 级权限（归系统所有）：写在这里表示**只有系统**
+          （SAF / 文件管理器）能访问本 provider，其它应用仍需用户授权 URI 才行 —— 不需要
+          也无法在 <uses-permission> 里申请它。
+        -->
+        <provider
+            android:name=".ServerDocsProvider"
+            android:authorities="${applicationId}.serverdocs"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 </manifest>

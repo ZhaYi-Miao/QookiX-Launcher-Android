@@ -40,6 +40,23 @@ const SERVER_CORES = [
 ];
 
 /**
+ * 卡片副标题上用的核心短名。
+ *
+ * `SERVER_CORES` 那份 label 是给创建表单看的（「Vanilla 原版」「Fabric（实验）」），
+ * 塞进副标题太长 —— 副标题要的是「Paper 1.21.4 · 最多 20 名玩家」这种一眼扫完的东西
+ * （照竞品 Anvil 的卡片写法）。
+ */
+const CORE_SHORT: Record<string, string> = {
+  paper: "Paper",
+  vanilla: "Vanilla",
+  fabric: "Fabric",
+  neoforge: "NeoForge",
+};
+function coreShort(core: string) {
+  return CORE_SHORT[core] ?? core;
+}
+
+/**
  * 可选游戏版本：与「创建实例」用**同一份官方清单**（`api.getVersionManifest()`）。
  * 以前这里是 `app-input` 让用户**手打版本号** ✗ —— 占位符却写着"选择版本" ✗，
  * 打错一个字就变成"Paper 暂无该版本的构建"，而且没法知道有哪些可选。
@@ -366,7 +383,13 @@ onBeforeUnmount(() => {
             {{ servers.isRunning(s.id) ? $t("multiplayer.running") : $t("multiplayer.offline") }}
           </div>
           <div class="srv-name">{{ s.name }}</div>
-          <div class="srv-meta">{{ s.core }} {{ s.mc_version }} · :{{ s.port }}</div>
+          <!-- 副标题：「核心 版本 · 最多 N 名玩家」（照竞品 Anvil 的卡片）。
+               人数来自 server.properties 的 max-players，后端每次返回配置时现读现挂；
+               读不到（还没生成过 properties）就退回显示端口，不留空。 -->
+          <div class="srv-meta">
+            {{ coreShort(s.core) }} {{ s.mc_version }} ·
+            {{ s.max_players ? $t("multiplayer.card-players", { n: s.max_players }) : `:${s.port}` }}
+          </div>
           <!-- 操作行：**视觉权重 = 操作频率**（照 Anvil 的卡片逻辑）——
                启动给大面积，文件/设置收成图标，删除用最弱对比。
                ⚠️ 内部按钮必须 .stop：整张卡可点进详情，不拦的话点「启动」会顺带跳页。 -->

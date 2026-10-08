@@ -15,8 +15,10 @@ import { api } from "../api";
 import { useServersStore } from "../stores/servers";
 import ServerFileManager from "../components/ServerFileManager.vue";
 import AppInput from "../ui/AppInput.vue";
+import AppSelect from "../ui/AppSelect.vue";
 import AppSlider from "../ui/AppSlider.vue";
 import AppSwitch from "../ui/AppSwitch.vue";
+import type { ServerProperties } from "../types";
 
 const route = useRoute();
 const message = useMessage();
@@ -30,7 +32,73 @@ const tab = ref(
 );
 const busy = ref("");
 const logs = ref<string[]>([]);
-const form = ref({ maxMem: 1024, minMem: 512, motd: "", jvmArgs: "", stopCommand: "stop" });
+const form = ref({
+  maxMem: 1024,
+  minMem: 512,
+  motd: "",
+  jvmArgs: "",
+  stopCommand: "stop",
+  // 空闲休眠：0 = 关。默认值只是初始化，实际以 server.json 为准（onMounted 里回填）
+  sleepTimeout: 30,
+  sleepHint: "",
+  wakeHint: "",
+});
+
+/**
+ * 空闲休眠状态（轮询得到）。
+ *
+ * 与 store 里的 `sleepingIds` 分开存：store 那份是给列表页用的（只关心在不在休眠），
+ * 这份还要带上「唤醒失败的原因」和进入休眠的时间，详情页要显示出来。
+ */
+const sleepInfo = ref<{ sleeping: boolean; since: number; error: string | null }>({
+  sleeping: false,
+  since: 0,
+  error: null,
+});
+const sleeping = computed(() => sleepInfo.value.sleeping);
+
+/** 休眠 / 唤醒的提示语：用户自定义优先，留空就用界面自带文案 */
+const sleepText = computed(
+  () => server.value?.sleep_hint?.trim() || $t("server-detail.sleep-default")
+);
+const wakeText = computed(
+  () => server.value?.wake_hint?.trim() || $t("server-detail.wake-default")
+);
+
+/**
+ * `server.properties` 里可编辑的那几项。
+ *
+ * 这些项 Minecraft **只在启动时读**，改完要重启服务端才生效 —— 卡片上写了这句，
+ * 否则用户改完发现没变化会以为没保存。
+ */
+const world = ref<ServerProperties>({
+  onlineMode: true,
+  whiteList: false,
+  viewDistance: 10,
+  simulationDistance: 10,
+  maxPlayers: 20,
+  difficulty: "easy",
+  gameMode: "survival",
+});
+
+const sleepOptions = computed(() => [
+  { label: $t("server-detail.sleep-off"), value: 0 },
+  { label: $t("server-detail.sleep-15"), value: 15 },
+  { label: $t("server-detail.sleep-30"), value: 30 },
+  { label: $t("server-detail.sleep-60"), value: 60 },
+]);
+const difficultyOptions = computed(() => [
+  { label: $t("server-detail.difficulty-peaceful"), value: "peaceful" },
+  { label: $t("server-detail.difficulty-easy"), value: "easy" },
+  { label: $t("server-detail.difficulty-normal"), value: "normal" },
+  { label: $t("server-detail.difficulty-hard"), value: "hard" },
+]);
+const gameModeOptions = computed(() => [
+  { label: $t("server-detail.gamemode-survival"), value: "survival" },
+  { label: $t("server-detail.gamemode-creative"), value: "creative" },
+  { label: $t("server-detail.gamemode-adventure"), value: "adventure" },
+  { label: $t("server-detail.gamemode-spectator"), value: "spectator" },
+]);
 
 /** 核心是否已下载（决定按钮是「下载核心」还是「启动」） */
 const coreReady = ref(false);
@@ -80,6 +148,64 @@ function refreshBattery() {
 /** 弹系统「忽略电池优化」页；回来后靠 window focus 事件刷新状态 */
 function askBattery() {
   void api.requestBatteryUnrestricted().catch(() => {});
+}
+
+/**
+ * 设备热状态（0 正常 … 2 中等 … 4 危急 … 6 关机）。
+ *
+ * 手机开服跑久了会被系统降频，服务器跟着变卡。说出来，用户才知道
+ * 「不是服务器坏了，是手机热了」。只提示、不拦：热节流是手机的自我保护，
+ * 凉下来会自己恢复，各家 ROM 的阈值也不一样 —— 按系统给的数说话最可靠。
+ * 阈值取 `PowerManager.THERMAL_STATUS_MODERATE` / `_CRITICAL`（跟 Anvil 同一套）。
+ */
+const THERMAL_WARN = 2;
+const THERMAL_CRITICAL = 4;
+const thermal = ref(0);
+
+const thermalHint = computed(() => {
+  if (thermal.value >= THERMAL_CRITICAL) return $t("server-detail.thermal-critical");
+  if (thermal.value >= THERMAL_WARN) return $t("server-detail.thermal-warn");
+  return "";
+});
+
+function refreshThermal() {
+  api
+    .deviceThermalStatus()
+    .then((v) => {
+      thermal.value = v ?? 0;
+    })
+    .catch(() => {
+      /* 读不到就当正常，不打扰用户 */
+    });
+}
+
+/** 从系统设置返回 / 回到前台时，把设备状态（电池放行 + 发热）一起刷一遍 */
+function refreshDeviceState() {
+  refreshBattery();
+  refreshThermal();
+}
+
+/**
+ * 打开服务器文件目录。
+ *
+ * 服务器文件在应用私有区（`/data/data/<包名>/files/servers/<id>`），系统文件管理器默认
+ * 进不去 —— 所以后端走 FileProvider 把它包成 `content://` 目录 URI 交给系统。**能不能被
+ * 打开取决于本机装了哪个管理器**（返回 0 就是没有能认目录的应用），这时直接切到内置的
+ * 「服务器文件」页：那个页面本来就是同一个目录，用户不会「点了没反应」。
+ */
+const openingDir = ref(false);
+async function openDir() {
+  openingDir.value = true;
+  try {
+    const r = await api.openHostedServerDirectory(serverId);
+    if (r === 1) return;
+    message.info($t("server-detail.open-dir-fallback"));
+    tab.value = "files";
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    openingDir.value = false;
+  }
 }
 
 /* ── 内存滑块 ────────────────────────────────────────────────────────
@@ -155,8 +281,18 @@ function startPolling() {
     const s = server.value;
     if (!s) return;
     try {
-      const now = await api.isHostedServerRunning(s.id);
+      // 一次拿全：在不在跑、是不是休眠、唤醒失败没有。
+      // 原来只问 `isHostedServerRunning` —— 休眠中的服务器 JVM 确实停了，
+      // 于是它在界面上与「用户自己停掉的」长得一模一样，用户不知道该点「启动」还是「唤醒」。
+      const rt = await api.hostedServerRuntime(s.id);
+      const now = !!rt?.running;
       if (now !== servers.isRunning(s.id)) servers.setRunning(s.id, now);
+      const sl = !!rt?.sleeping;
+      if (sl !== servers.isSleeping(s.id)) servers.setSleeping(s.id, sl);
+      const err = rt?.wakeError ?? null;
+      if (sl !== sleepInfo.value.sleeping || err !== sleepInfo.value.error) {
+        sleepInfo.value = { sleeping: sl, since: rt?.sleepSince ?? 0, error: err };
+      }
       if (now) {
         const addr = await api.hostedServerAddress(s.id);
         if (addr !== address.value) address.value = addr;
@@ -165,6 +301,9 @@ function startPolling() {
       // 服务端在另一个进程里跑，不轮询的话日志就停在打开那一刻，
       // 用户看到的是「死」的日志，还以为服务器挂了。
       if (tab.value === "logs" && now) await loadLogs();
+      // 发热也要跟着更新：不刷新的话「手机热到降频」这条提示要等用户切出去再回来才出现，
+      // 而那正是最需要它的时候。取一次热状态只是个 JNI getter，比上面那次 IPC 便宜得多。
+      refreshThermal();
     } catch {
       /* 忽略：下一轮再试 */
     }
@@ -197,17 +336,25 @@ async function toggleRun() {
   const s = server.value;
   if (!s) return;
   busy.value = "run";
+  // 先记下来：启动成功后状态会被清掉，之后就没法判断这次是「启动」还是「唤醒」了
+  const wasSleeping = sleeping.value;
   try {
     if (running.value) {
       const note = await api.stopHostedServer(s.id);
       servers.setRunning(s.id, false);
+      sleepInfo.value = { sleeping: false, since: 0, error: null };
       message.success(note || $t("multiplayer.server-stopped"));
       await loadLogs();
     } else {
-      startStage.value = $t("server-detail.starting");
+      // 休眠中手动唤醒：把按钮文案与阶段提示都换成用户自己配的那句，
+      // 别让「点了唤醒」看起来和「点了启动」一模一样。
+      startStage.value = wasSleeping ? wakeText.value : $t("server-detail.starting");
       await watchStage();
       await servers.start(s.id);
-      message.success($t("multiplayer.server-started"));
+      sleepInfo.value = { sleeping: false, since: 0, error: null };
+      message.success(
+        wasSleeping ? $t("server-detail.woken") : $t("multiplayer.server-started")
+      );
     }
   } catch (e) {
     message.error(String(e));
@@ -280,7 +427,15 @@ async function save() {
       motd: form.value.motd.trim(),
       jvm_args: form.value.jvmArgs,
       stop_command: form.value.stopCommand,
+      sleep_timeout_min: Number(form.value.sleepTimeout) || 0,
+      // 空串表示「用界面自带文案」，后端会收成 null
+      sleep_hint: form.value.sleepHint.trim(),
+      wake_hint: form.value.wakeHint.trim(),
     });
+    // `server.properties` 那几项单独写：它们是服务端自己读的文件，不是 server.json 的字段。
+    // 以返回值为准刷新界面 —— 后端会做范围校验（距离 3–32、人数 1–100），
+    // 用户填了超范围的值得让他看见真正落盘的是什么。
+    world.value = await api.setHostedServerProperties(s.id, { ...world.value });
     message.success($t("common.save"));
   } catch (e) {
     message.error(String(e));
@@ -486,11 +641,16 @@ onMounted(async () => {
     // 从没配过 JVM 参数（后端是 null）才预填；用户存过空串就尊重他的选择，别反复填回来
     if (s.jvm_args == null) form.value.jvmArgs = AIKAR_PHONE_FLAGS;
     form.value.stopCommand = s.stop_command ?? "stop";
+    form.value.sleepTimeout = s.sleep_timeout_min ?? 30;
+    form.value.sleepHint = s.sleep_hint ?? "";
+    form.value.wakeHint = s.wake_hint ?? "";
     // 读设备可用内存（只用于提示，失败无所谓）
     deviceMemMb.value = await api.deviceAvailableMemory().catch(() => null);
     try {
       coreReady.value = await api.hostedServerCoreInstalled(s.id);
       address.value = await api.hostedServerAddress(s.id);
+      // server.properties 那几项不在 server.json 里，单独读一次
+      world.value = await api.getHostedServerProperties(s.id);
     } catch {
       /* 忽略 */
     }
@@ -498,12 +658,13 @@ onMounted(async () => {
   // 电池优化状态：用户去系统设置点完「允许」再返回时，WebView 会重新拿到焦点，
   // 靠 focus 事件刷新按钮（不会去设置页就不会触发，无害）。
   refreshBattery();
-  window.addEventListener("focus", refreshBattery);
+  refreshThermal();
+  window.addEventListener("focus", refreshDeviceState);
   startPolling();
 });
 
 onUnmounted(() => {
-  window.removeEventListener("focus", refreshBattery);
+  window.removeEventListener("focus", refreshDeviceState);
   if (timer) {
     clearInterval(timer);
     timer = null;
@@ -521,20 +682,16 @@ onUnmounted(() => {
         <div class="hn">{{ server?.name ?? "" }}</div>
         <div class="hs">{{ server?.core }} · {{ server?.mc_version }} · :{{ server?.port }}</div>
       </div>
-      <span class="dot" :class="{ on: running }"></span>
+      <span class="dot" :class="{ on: running, sleep: sleeping && !running }"></span>
     </div>
 
-    <!-- 联机地址：朋友在电脑上填这个就能连进来 -->
-    <div class="addr glass">
-      <div class="addr-l">
-        <div class="addr-t">{{ $t("server-detail.address") }}</div>
-        <div class="addr-v">{{ address ?? $t("server-detail.no-wifi") }}</div>
-      </div>
-      <van-button v-if="address" size="small" class="addr-b" @click="copyAddress">
-        {{ $t("server-detail.copy-address") }}
-      </van-button>
+    <!-- 休眠提示条：必须说清「现在没在跑，但有人连就会自动起来」。
+         少了这段，用户看到一个灰点只会以为服务器关了、地址失效了。 -->
+    <div v-if="sleeping && !running" class="sleep-note glass">
+      <div class="sleep-t">{{ $t("server-detail.sleeping") }}</div>
+      <p class="sleep-h">{{ sleepText }}</p>
+      <p v-if="sleepInfo.error" class="sleep-err">{{ sleepInfo.error }}</p>
     </div>
-    <p class="addr-hint">{{ $t("server-detail.address-hint") }}</p>
 
     <!-- 核心没装时先给「下载核心」，装了才允许启动 -->
     <van-button
@@ -560,7 +717,9 @@ onUnmounted(() => {
           ? $t("multiplayer.stop")
           : busy === "run" && startStage
             ? startStage
-            : $t("server-detail.start")
+            : sleeping
+              ? $t("server-detail.wake")
+              : $t("server-detail.start")
       }}
     </van-button>
     <p v-if="!coreReady && !running" class="addr-hint">{{ $t("server-detail.memory-hint") }}</p>
@@ -621,11 +780,26 @@ onUnmounted(() => {
           </div>
           <van-button size="small" @click="askBattery">{{ $t("server-detail.battery-open") }}</van-button>
         </div>
+        <!-- 设备发热：手机开服跑久了必被降频，服务器跟着变卡。
+             说出来，用户才知道这不是服务器坏了（详见表盘脚本里的 refreshThermal）。 -->
+        <p v-if="thermalHint" class="set-warn">{{ thermalHint }}</p>
       </section>
 
       <!-- ── 联机 ── -->
       <section class="set-card">
         <h3 class="set-card-title">{{ $t("server-detail.sec-online") }}</h3>
+        <!-- 联机地址：朋友在电脑上填这个就能连进来。
+             它属于「联机」，放进设置里 —— 主页面只留标题和启动按钮，上面那块空间别摆卡片。 -->
+        <div class="addr">
+          <div class="addr-l">
+            <div class="addr-t">{{ $t("server-detail.address") }}</div>
+            <div class="addr-v">{{ address ?? $t("server-detail.no-wifi") }}</div>
+          </div>
+          <van-button v-if="address" size="small" class="addr-b" @click="copyAddress">
+            {{ $t("server-detail.copy-address") }}
+          </van-button>
+        </div>
+        <p class="addr-hint">{{ $t("server-detail.address-hint") }}</p>
         <!-- 对外开房：把本机这台服务器经陶瓦联机暴露给朋友（端口可以自定义） -->
         <div class="choice">
           <div class="choice-info">
@@ -645,6 +819,81 @@ onUnmounted(() => {
         </div>
         <div v-if="shareRoom" class="tc-actions">
           <van-button size="small" @click="copyShareRoom">{{ $t("terracotta.copy") }}</van-button>
+        </div>
+
+        <!-- 空闲休眠：手机开服「要常在线」与「要省电」的答案 ——
+             无人在线时自动停服省电，游戏端口继续听着，有人连就自动起来。
+             所以它放在「联机」卡里：改的是「别人能不能连进来」这件事的行为。 -->
+        <div class="field">
+          <label>{{ $t("server-detail.sleep-timeout") }}</label>
+          <app-select v-model:value="form.sleepTimeout" :options="sleepOptions" />
+          <p class="field-hint">{{ $t("server-detail.sleep-timeout-hint") }}</p>
+        </div>
+        <div class="field">
+          <label>{{ $t("server-detail.sleep-hint") }}</label>
+          <app-input v-model:value="form.sleepHint" :placeholder="$t('server-detail.sleep-default')" />
+        </div>
+        <div class="field">
+          <label>{{ $t("server-detail.wake-hint") }}</label>
+          <app-input v-model:value="form.wakeHint" :placeholder="$t('server-detail.wake-default')" />
+        </div>
+      </section>
+
+      <!-- ── 世界与规则 ──
+           这几项写在服务端自己的 `server.properties` 里，与后端白名单一一对应
+           （见 servers.rs 的 editable_props）：只放玩家真会调的，其它键写错会让服务端起不来。 -->
+      <section class="set-card">
+        <h3 class="set-card-title">{{ $t("server-detail.sec-world") }}</h3>
+        <p class="set-warn">{{ $t("server-detail.props-need-restart") }}</p>
+        <div class="choice">
+          <div class="choice-info">
+            <span class="choice-label">{{ $t("server-detail.prop-online-mode") }}</span>
+            <p class="choice-hint">{{ $t("server-detail.prop-online-mode-hint") }}</p>
+          </div>
+          <app-switch :value="world.onlineMode" @update:value="(v: boolean) => (world.onlineMode = v)" />
+        </div>
+        <div class="choice">
+          <div class="choice-info">
+            <span class="choice-label">{{ $t("server-detail.prop-white-list") }}</span>
+            <p class="choice-hint">{{ $t("server-detail.prop-white-list-hint") }}</p>
+          </div>
+          <app-switch :value="world.whiteList" @update:value="(v: boolean) => (world.whiteList = v)" />
+        </div>
+        <!-- 视野/模拟距离用滑块：手机上填数字既看不见范围也看不见当前值。
+             两项都会明显影响手机上的性能与内存，所以都在同一张卡里、配上范围端点。 -->
+        <div class="field">
+          <label>{{ $t("server-detail.prop-view-distance") }} <b class="mem-live">{{ world.viewDistance }}</b></label>
+          <app-slider
+            :value="world.viewDistance"
+            :min="3"
+            :max="32"
+            :step="1"
+            @update:value="(v: number) => (world.viewDistance = v)" />
+          <p class="field-hint">{{ $t("server-detail.prop-view-distance-hint") }}</p>
+        </div>
+        <div class="field">
+          <label>
+            {{ $t("server-detail.prop-simulation-distance") }}
+            <b class="mem-live">{{ world.simulationDistance }}</b>
+          </label>
+          <app-slider
+            :value="world.simulationDistance"
+            :min="3"
+            :max="32"
+            :step="1"
+            @update:value="(v: number) => (world.simulationDistance = v)" />
+        </div>
+        <div class="field">
+          <label>{{ $t("server-detail.prop-max-players") }}</label>
+          <app-input v-model:value="world.maxPlayers" type="text" />
+        </div>
+        <div class="field">
+          <label>{{ $t("server-detail.prop-difficulty") }}</label>
+          <app-select v-model:value="world.difficulty" :options="difficultyOptions" />
+        </div>
+        <div class="field">
+          <label>{{ $t("server-detail.prop-game-mode") }}</label>
+          <app-select v-model:value="world.gameMode" :options="gameModeOptions" />
         </div>
       </section>
 
@@ -675,7 +924,17 @@ onUnmounted(() => {
 
       <van-button class="save" block type="primary" :loading="busy === 'save'" @click="save">{{ $t("common.save") }}</van-button>
     </div>
-    <div v-else-if="tab === 'files'" class="pane"><ServerFileManager :server-id="serverId" /></div>
+    <div v-else-if="tab === 'files'" class="pane files">
+      <!-- 「打开目录」放这里：它本来就是文件相关的操作，摆在主页面只是多占一张卡片。
+           打不开（本机没有能认文件夹的应用）时脚本会提示一句，用户继续用下面的内置管理器。 -->
+      <div class="dirbar">
+        <span class="dirbar-h">{{ $t("server-detail.open-dir-hint") }}</span>
+        <van-button size="small" :loading="openingDir" @click="openDir">
+          {{ $t("server-detail.open-dir") }}
+        </van-button>
+      </div>
+      <ServerFileManager :server-id="serverId" />
+    </div>
     <div v-else-if="tab === 'logs'" class="pane logs">
       <!-- 字号那一组：A− / 当前字号 / A+，与实例日志页同一套（useLogZoom） -->
       <div class="zoombar">
@@ -758,6 +1017,11 @@ onUnmounted(() => {
 .dot.on {
   background: #7ad08a;
 }
+/* 休眠：绿色看着像「正在跑」、灰色看着像「已停止」，都不对。
+   用琥珀色 —— 它既没在跑也不是被关掉，是「睡着等被叫醒」。 */
+.dot.sleep {
+  background: #e0a33e;
+}
 .run {
   min-height: 48px;
   flex-shrink: 0;
@@ -796,6 +1060,47 @@ onUnmounted(() => {
   line-height: 1.5;
   color: var(--text-3);
   flex-shrink: 0;
+}
+/* 文件页顶部那行「打开目录」：固定不动，说明文字弱一档 */
+.dirbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.dirbar-h {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+/* ── 休眠提示条 ──
+   与联机地址卡同宽同风格；标题用琥珀色（与状态点一致），正文不用警告色 ——
+   休眠是正常工作状态，不是错误。 */
+.sleep-note {
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+.sleep-t {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0a33e;
+}
+.sleep-h {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  word-break: break-all;
+}
+/* 唤醒失败的原因才需要显眼：用户点过「唤醒」或有人连过，服务器却没起来 */
+.sleep-err {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e5534b;
+  word-break: break-all;
 }
 /* 控制台：输出区可滚，输入固定在底部（不被键盘顶飞） */
 .console {
@@ -888,6 +1193,18 @@ onUnmounted(() => {
 .pane.logs {
   overflow: hidden;
   gap: 8px;
+}
+/* 文件页：同日志页的道理——外层不再滚，顶上那行「打开目录」固定不动，
+   滚动交给文件管理器内部。子组件根元素带着本组件的 scope id，所以能直接选到 `.fm`；
+   它自带的 `height: 100%` 在这里要换成 flex，否则会跟上面那行一起把面板撑出滚动条。 */
+.pane.files {
+  overflow: hidden;
+  gap: 8px;
+}
+.pane.files > .fm {
+  flex: 1;
+  min-height: 0;
+  height: auto;
 }
 .zoombar {
   display: flex;

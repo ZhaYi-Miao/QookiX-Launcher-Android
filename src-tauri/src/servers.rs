@@ -113,12 +113,25 @@ fn total_device_memory_mb() -> Option<u32> {
 
 #[tauri::command]
 pub fn list_hosted_servers() -> Vec<ServerConfig> {
-    list_servers()
+    list_servers().into_iter().map(with_props).collect()
 }
 
 #[tauri::command]
 pub fn get_hosted_server(id: String) -> Result<ServerConfig, String> {
-    get_server(&id)
+    Ok(with_props(get_server(&id)?))
+}
+
+/// 补上那些「不在 server.json 里、但界面要显示」的字段。
+///
+/// 目前只有一个：`max-players`。它在服务端自己的 `server.properties` 里，
+/// 服务器卡片要照竞品 Anvil 的副标题写「Paper 1.21.4 · 最多 20 名玩家」，
+/// 而这个数随用户在设置页改属性变化，所以**每次返回配置时现读一次**，
+/// 而不是存进 server.json（存了就会和文件打架）。
+///
+/// 读不到（键缺失 / 文件还没生成）就是 None，界面退回显示端口。
+fn with_props(mut s: ServerConfig) -> ServerConfig {
+    s.max_players = read_server_property(&s.id, "max-players").and_then(|v| v.trim().parse().ok());
+    s
 }
 
 #[tauri::command]
@@ -157,6 +170,11 @@ pub fn create_hosted_server(
         java_path: None,
         jvm_args: None,
         stop_command: None,
+        // 默认 30 分钟：无人在线才触发，不打断正在玩的人（见 models.rs 的说明）。
+        sleep_timeout_min: 30,
+        sleep_hint: None,
+        wake_hint: None,
+        max_players: None,
     };
     std::fs::create_dir_all(server_dir(&s.id)?).map_err(|e| e.to_string())?;
     save_server(&s)?;
@@ -198,13 +216,51 @@ pub fn update_hosted_server(patch: serde_json::Value) -> Result<ServerConfig, St
     if let Some(v) = patch.get("jvm_args") {
         s.jvm_args = v.as_str().map(|x| x.to_string());
     }
+    // 空闲休眠时长：0 = 关闭，其余按分钟。上限给到 24 小时 —— 再大就等于「永不休眠」了，
+    // 那种需求直接选「关」更清楚。
+    if let Some(v) = patch.get("sleep_timeout_min").and_then(|v| v.as_u64()) {
+        s.sleep_timeout_min = v.min(24 * 60) as u32;
+    }
+    // 两个提示语是「留空则用界面自带文案」，所以这里必须区分「没传这个键」与「传了空值」：
+    // 传 null 或空串都表示清空自定义、回到默认。
+    if let Some(v) = patch.get("sleep_hint") {
+        s.sleep_hint = v
+            .as_str()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty());
+    }
+    if let Some(v) = patch.get("wake_hint") {
+        s.wake_hint = v
+            .as_str()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty());
+    }
+    // 关掉休眠功能时，正在休眠的服务器要**解除**休眠：它现在是停着的，
+    // 只是靠唤醒监听「随时能被叫起来」。留着监听而设置里写着「关」，等同于
+    // 用户以为不会自动启动、实际朋友一连就起来了 —— 状态与预期相反。
+    if s.sleep_timeout_min == 0 && crate::sleep::is_sleeping(&id) {
+        crate::sleep::disarm(&id);
+    }
+    // 改设置时正在跑的那台要**立刻**跟着变，不能等下次启动：
+    // 巡检只在启动成功时挂一次，用户把「关闭」改成「30 分钟」后如果没有任何反应，
+    // 他会以为设置没保存（而界面显示已保存），下次还是得手动重启服务端才生效。
+    if is_server_up(&id) {
+        if s.sleep_timeout_min == 0 {
+            crate::sleep::cancel_supervisor(&id);
+        } else {
+            crate::sleep::arm_supervisor(&id);
+        }
+    }
     save_server(&s)?;
-    Ok(s)
+    Ok(with_props(s))
 }
 
 #[tauri::command]
 pub fn delete_hosted_server(id: String) -> Result<(), String> {
     validate_server_id(&id)?;
+    // 先撤掉后台任务：休眠中的服务器有监听占着游戏端口，目录删了、监听还在，
+    // 这个端口就被一台「已经不存在的服务器」永久占住，之后新建的服务器再也 bind 不上。
+    crate::sleep::disarm(&id);
     let dir = server_dir(&id)?;
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("删除失败: {e}"))?;
@@ -333,6 +389,188 @@ pub fn read_server_property(id: &str, key: &str) -> Option<String> {
                 None
             }
         })
+}
+
+// ── server.properties 的可编辑项 ──────────────────────────────────────
+//
+// ## 为什么要有白名单
+//
+// `server.properties` 有六十多个键，其中不少**写错就让服务端起不来**
+// （`level-type`、`level-seed`、`max-world-size`…）；更要紧的是 `enable-rcon` /
+// `rcon.password` / `server-port` 这几个是启动器自己要用或已有专门入口的键 ——
+// 让设置页能改它们等于把优雅停服（以及端口冲突检查）绕过去了。
+// 所以只开放玩家真正会调的这几项，每项都带取值范围。
+//
+// ## 生效时机
+//
+// Minecraft **只在启动时读** `server.properties`。所以改完必须重启服务端才生效，
+// 界面上要写明这一点（前端文案 `server-detail.props-need-restart`）。
+// 唯一的例外是 `motd`：它在每次 ping 时都要读，但我们的 MOTD 走的是重启时重写文件。
+
+/// 一个可编辑项的取值类型与范围
+enum PropKind {
+    Bool,
+    Int { min: i64, max: i64 },
+    Choice(&'static [&'static str]),
+}
+
+struct PropSpec {
+    /// 前端用的名字（camelCase，与 `ServerConfig` 的字段风格一致）
+    field: &'static str,
+    /// `server.properties` 里的键名
+    key: &'static str,
+    kind: PropKind,
+}
+
+/// 允许设置页读写的项。
+fn editable_props() -> &'static [PropSpec] {
+    static SPECS: &[PropSpec] = &[
+        PropSpec {
+            field: "onlineMode",
+            key: "online-mode",
+            kind: PropKind::Bool,
+        },
+        PropSpec {
+            field: "whiteList",
+            key: "white-list",
+            kind: PropKind::Bool,
+        },
+        PropSpec {
+            field: "viewDistance",
+            key: "view-distance",
+            kind: PropKind::Int { min: 3, max: 32 },
+        },
+        PropSpec {
+            field: "simulationDistance",
+            key: "simulation-distance",
+            kind: PropKind::Int { min: 3, max: 32 },
+        },
+        PropSpec {
+            field: "maxPlayers",
+            key: "max-players",
+            kind: PropKind::Int { min: 1, max: 100 },
+        },
+        PropSpec {
+            field: "difficulty",
+            key: "difficulty",
+            kind: PropKind::Choice(&["peaceful", "easy", "normal", "hard"]),
+        },
+        PropSpec {
+            field: "gameMode",
+            key: "gamemode",
+            kind: PropKind::Choice(&["survival", "creative", "adventure", "spectator"]),
+        },
+    ];
+    SPECS
+}
+
+/// 键在文件里缺失时的取值：用 Minecraft 自己那一份默认值。
+/// **不能**用「我们生成模板里的值」当默认 —— 老服务器是 Minecraft 自己生成的
+/// 完整文件，拿模板值会让界面显示的数和实际跑的数对不上。
+fn prop_default(spec: &PropSpec) -> serde_json::Value {
+    match spec.kind {
+        PropKind::Bool => match spec.key {
+            "white-list" => serde_json::json!(false),
+            _ => serde_json::json!(true),
+        },
+        PropKind::Int { .. } => match spec.key {
+            "max-players" => serde_json::json!(20),
+            // view / simulation distance 的原版默认都是 10
+            _ => serde_json::json!(10),
+        },
+        PropKind::Choice(_) => match spec.key {
+            "difficulty" => serde_json::json!("easy"),
+            _ => serde_json::json!("survival"),
+        },
+    }
+}
+
+/// 把文件里读到的字符串按类型还原成 JSON 值。认不出来就退回默认值 ——
+/// 文件被手改坏时界面不该整片报错，显示默认值 + 用户一保存就写回规范值。
+fn prop_value(spec: &PropSpec, raw: &str) -> serde_json::Value {
+    let v = raw.trim();
+    match spec.kind {
+        PropKind::Bool => serde_json::json!(v.eq_ignore_ascii_case("true")),
+        PropKind::Int { .. } => v
+            .parse::<i64>()
+            .map(|n| serde_json::json!(n))
+            .unwrap_or_else(|_| prop_default(spec)),
+        PropKind::Choice(allowed) => {
+            let low = v.to_ascii_lowercase();
+            if allowed.contains(&low.as_str()) {
+                serde_json::json!(low)
+            } else {
+                prop_default(spec)
+            }
+        }
+    }
+}
+
+/// 读设置页要用的那几项 `server.properties`。
+#[tauri::command]
+pub fn get_hosted_server_properties(id: String) -> Result<serde_json::Value, String> {
+    validate_server_id(&id)?;
+    server_dir(&id)?;
+    let mut out = serde_json::Map::new();
+    for spec in editable_props() {
+        let val = match read_server_property(&id, spec.key) {
+            Some(raw) => prop_value(spec, &raw),
+            None => prop_default(spec),
+        };
+        out.insert(spec.field.to_string(), val);
+    }
+    Ok(serde_json::Value::Object(out))
+}
+
+/// 写设置页来的那几项。只认白名单里的键，逐项校验后再落盘。
+/// 返回写入后的完整值，前端直接用返回值刷新界面（避免「界面和文件不一致」）。
+#[tauri::command]
+pub fn set_hosted_server_properties(
+    id: String,
+    patch: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    validate_server_id(&id)?;
+    let obj = patch
+        .as_object()
+        .ok_or_else(|| "参数必须是对象".to_string())?;
+    // 先整批校验、再整批写盘：只要有一项非法就整体拒绝，
+    // 避免「前面的项已写进文件、后面的项报错」这种半截写入。
+    let mut pending: Vec<(&'static str, String)> = Vec::new();
+    for spec in editable_props() {
+        let Some(v) = obj.get(spec.field) else {
+            continue;
+        };
+        let text = match &spec.kind {
+            PropKind::Bool => match v.as_bool() {
+                Some(b) => if b { "true" } else { "false" }.to_string(),
+                None => return Err(format!("{} 只能填 true / false", spec.field)),
+            },
+            PropKind::Int { min, max } => {
+                let n = v
+                    .as_i64()
+                    .ok_or_else(|| format!("{} 需要一个整数", spec.field))?;
+                if n < *min || n > *max {
+                    return Err(format!(
+                        "{} 需要在 {min}–{max} 之间（收到 {n}）",
+                        spec.field
+                    ));
+                }
+                n.to_string()
+            }
+            PropKind::Choice(allowed) => {
+                let s = v.as_str().unwrap_or("").trim().to_ascii_lowercase();
+                if !allowed.contains(&s.as_str()) {
+                    return Err(format!("{} 只能填 {}", spec.field, allowed.join(" / ")));
+                }
+                s
+            }
+        };
+        pending.push((spec.key, text));
+    }
+    for (key, text) in pending {
+        write_server_property(&id, key, &text)?;
+    }
+    get_hosted_server_properties(id)
 }
 
 /// 服务端目录里某个子目录是否存在（给 ServerFileManager 的「打开目录」用）
@@ -1302,6 +1540,9 @@ async fn ensure_server_jre(id: &str, mc_version: &str) -> Result<String, String>
 /// 等于直接杀进程 —— 玩家建筑会回档。
 #[tauri::command]
 pub async fn stop_hosted_server(id: String) -> Result<String, String> {
+    // 手动停服就不再巡检了：用户要的是「停下来」，而空闲巡检的目标是「没人才停」，
+    // 两者目的相反。留着巡检还会让一台停着的服务器被写进 sleep.json（显示成休眠）。
+    crate::sleep::cancel_supervisor(&id);
     let rt = server_runtime(&id).ok_or_else(|| "这个服务器没有运行记录".to_string())?;
     if !rt.running {
         return Ok("服务器本来就没在运行".to_string());
@@ -1417,26 +1658,60 @@ pub struct ServerRuntime {
     pub jvm_up: bool,
     #[serde(rename = "exitNote")]
     pub exit_note: Option<String>,
+    /// 空闲休眠中：JVM 已停，但游戏端口由唤醒监听占着，有人连接会自动启动
+    pub sleeping: bool,
+    #[serde(rename = "sleepSince")]
+    pub sleep_since: u64,
+    /// 最近一次自动休眠 / 唤醒失败的原因（界面直接显示，否则「点了没反应」没法查）
+    #[serde(rename = "wakeError")]
+    pub wake_error: Option<String>,
+}
+
+/// 服务端此刻是否真的在跑（IPC 探活通）。休眠中的服务器返回 false。
+pub fn is_server_up(id: &str) -> bool {
+    server_runtime(id).map(|r| r.running).unwrap_or(false)
 }
 
 /// 读 runtime.json 并探活（IPC /status 通了才算真在跑）。
 pub fn server_runtime(id: &str) -> Option<ServerRuntime> {
     let dir = server_dir(id).ok()?;
-    let rt = dir.join("runtime.json");
-    if !rt.exists() {
-        return None;
-    }
-    let text = std::fs::read_to_string(rt).ok()?;
-    let info: crate::server_process::RuntimeInfo = serde_json::from_str(&text).ok()?;
+    let state = crate::sleep::read_state(id);
+    let sleeping = state.as_ref().map(|s| s.sleeping).unwrap_or(false);
+    let sleep_since = state.as_ref().map(|s| s.since).unwrap_or(0);
+    let wake_error = state.as_ref().and_then(|s| s.error.clone());
 
-    // 探活：连 IPC 端口问一句。进程死了连不上。
-    let alive = ipc_status(info.ipc_port, &info.token).is_some();
-    Some(ServerRuntime {
-        running: alive,
-        started_at: info.started_at,
-        jvm_up: alive,
-        exit_note: info.exit,
-    })
+    let info = std::fs::read_to_string(dir.join("runtime.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok());
+
+    match info {
+        Some(info) => {
+            // 探活：连 IPC 端口问一句。进程死了连不上。
+            let alive = ipc_status(info.ipc_port, &info.token).is_some();
+            Some(ServerRuntime {
+                running: alive,
+                started_at: info.started_at,
+                jvm_up: alive,
+                exit_note: info.exit,
+                sleeping,
+                sleep_since,
+                wake_error,
+            })
+        }
+        // 没有 runtime.json = JVM 已经停了。**休眠时也必须返回 Some**：
+        // 界面靠它区分「用户停掉的」与「睡着等唤醒的」—— 前者按钮是「启动」，
+        // 后者是「唤醒」。返回 None 的话两者在界面上长得一模一样。
+        None if sleeping => Some(ServerRuntime {
+            running: false,
+            started_at: 0,
+            jvm_up: false,
+            exit_note: None,
+            sleeping: true,
+            sleep_since,
+            wake_error,
+        }),
+        None => None,
+    }
 }
 
 /// GET http://127.0.0.1:{port}/status，返回 Some 表示进程活着且鉴权通过
@@ -1528,6 +1803,29 @@ pub fn request_battery_unrestricted() {
     crate::android_bridge::request_ignore_battery_optimizations()
 }
 
+/// 设备当前热状态：0 正常 … 2 中等 … 4 危急 … 6 关机（读不到＝0）。
+///
+/// 界面拿它提示「服务器变卡可能是手机过热降频」，免得用户以为是服务器坏了。
+#[tauri::command]
+pub fn device_thermal_status() -> i32 {
+    crate::android_bridge::thermal_status()
+}
+
+/// 把这台服务器的文件目录交给系统文件管理器打开。
+///
+/// 服务器文件在应用私有区，系统文件管理器默认进不去，所以走 FileProvider 的
+/// `content://` 目录 URI（`file_paths.xml` 里的 `servers` 一项）。**能否真的打开
+/// 取决于本机装了哪个管理器**，返回值让前端能兜底：
+/// 1 = 已交给外部应用；0 = 本机没有能打开文件夹的应用；-1 = 目录还没生成。
+#[tauri::command]
+pub fn open_hosted_server_directory(id: String) -> Result<i32, String> {
+    let dir = server_dir(&id)?;
+    if !dir.is_dir() {
+        return Ok(-1);
+    }
+    Ok(crate::android_bridge::open_directory(&dir.to_string_lossy()))
+}
+
 /// 读 wlan0 的 IPv4（拿不到就 None，UI 显示「未连接 WiFi」）
 fn local_wifi_ip() -> Option<String> {
     // 应用沙盒里没有 `ip` 命令，必须走 JNI 问 NetworkInterface
@@ -1566,6 +1864,11 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
     if !core_installed(&id) {
         return Err("还没下载服务端核心".to_string());
     }
+    // 这台服务器可能正处休眠：唤醒监听占着游戏端口。**必须先把监听让出来**，
+    // 否则服务端起来时 bind 会撞在监听上，报的还是「启动后立刻退出」这种看不懂的话。
+    // 顺带清掉休眠标记：从现在起它是「正在启动」，不是「睡着」。
+    crate::sleep::cancel_wake_listener(&id);
+    crate::sleep::clear_state(&id);
     let dir = server_dir(&id)?;
     if s.eula {
         let _ = std::fs::write(
@@ -1595,12 +1898,34 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
         if other.id == id || other.port != s.port {
             continue;
         }
-        if server_runtime(&other.id).map(|r| r.running).unwrap_or(false) {
+        let other_running = server_runtime(&other.id).map(|r| r.running).unwrap_or(false);
+        // **休眠中的服务器同样占着端口**：它的 JVM 停了，但唤醒监听还挂在那个端口上
+        // （这正是「随时能被叫起来」的代价）。以前只检查「正在运行」的，
+        // 于是启动第二台同端口服务器时 JVM 会 bind 失败，用户看到的还是
+        // 「启动后立刻退出」—— 一句查不到根因的话。
+        let other_sleeping = crate::sleep::is_sleeping(&other.id);
+        if other_running || other_sleeping {
             return Err(format!(
-                "端口 {} 已被「{}」占用（它正在运行）。\n先停掉它，或在设置里给这台换一个端口。",
-                s.port, other.name
+                "端口 {} 已被「{}」占用（{}）。\n先停掉它，或在设置里给这台换一个端口。",
+                s.port,
+                other.name,
+                if other_running {
+                    "它正在运行"
+                } else {
+                    "它休眠中，端口仍被占着"
+                }
             ));
         }
+    }
+    // 端口被**别的应用**占着（我们自己的那几台上面已经查过了）。不提前查的话，
+    // Paper 会在起来十几秒后才在日志深处抛一句英文 "Address already in use",
+    // 用户看到的是「启动后立刻退出」这种指不到根因的话；而这十几秒里还要下载 JRE、
+    // 装核心，白等一场。放在这些重活之前。
+    if !wait_port_free(s.port).await {
+        return Err(format!(
+            "端口 {} 已被别的应用占用。\n先关掉占用它的应用（另一个开服 App 最常见）再启动。",
+            s.port
+        ));
     }
     ensure_rcon_props(&dir, s.port)?;
     // 从这一刻起把「正在干什么」报给界面（按钮上直接显示），别让用户对着转圈白等
@@ -1691,7 +2016,33 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
         .and_then(|t| serde_json::from_str::<crate::server_process::RuntimeInfo>(&t).ok())
         .map(|i| i.pid)
         .unwrap_or(0);
+    // 确认起来了才开始巡检。放在这里（而不是启动前）有两个原因：
+    // ① 没起来时 RCON 问不到人数，巡检白跑；② 更要紧的是「停着的服务器」
+    // 不该被写进 sleep.json —— 界面上的「停止」与「休眠」必须是两回事。
+    if s.sleep_timeout_min > 0 {
+        crate::sleep::arm_supervisor(&id);
+    }
     Ok(serde_json::json!({ "pid": pid }))
+}
+
+/// 这个端口现在能不能绑（= 没有被本机其它东西监听）。
+///
+/// 做法是「试绑一下」。**不用 `/proc/net/tcp`**：Android 16 上应用读它是
+/// `Permission denied`（真机实测），那条路不通。
+///
+/// 试绑为什么不会误报「刚停掉的服务器」：Rust 标准库在 Unix 上建 `TcpListener` 时会设
+/// `SO_REUSEADDR`，只有 TIME_WAIT 残留时仍能绑上；真的还有人在 **LISTEN** 才会失败。
+///
+/// 重试是必须的：**休眠唤醒**这条路上，唤醒监听刚被取消，socket 未必已经松开 ——
+/// 不重试就会把「本来能起来」的服务器误判成端口被占，玩家连进来却永远起不来。
+async fn wait_port_free(port: u16) -> bool {
+    for _ in 0..10 {
+        if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    false
 }
 
 /// 启动失败时给用户看的**短**消息：一句原因 + 一句指点，最多再带一行关键输出。

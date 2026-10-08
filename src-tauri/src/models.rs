@@ -699,6 +699,14 @@ fn default_server_min_mem() -> u32 {
 fn default_server_motd() -> String {
     "A QookiX Server".to_string()
 }
+/// 空闲休眠的默认时长（分钟）。0 = 关闭该功能。
+///
+/// 默认 30 分钟是刻意的：手机开服的核心矛盾是「朋友随时能进来」与「一直挂着费电占内存」，
+/// 无人在线时休眠、有人连接自动唤醒，正好同时满足两边 —— 所以对**新建与既有**的服务器
+/// 默认开启。它只在「一个人都没有」时才会触发，不会打断正在玩的人。
+fn default_sleep_timeout_min() -> u32 {
+    30
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -725,4 +733,19 @@ pub struct ServerConfig {
     pub jvm_args: Option<String>,
     #[serde(default)]
     pub stop_command: Option<String>,
+    /// 空闲休眠：连续无人在线超过这个分钟数就自动优雅停服（0 = 关闭）。
+    #[serde(default = "default_sleep_timeout_min")]
+    pub sleep_timeout_min: u32,
+    /// 休眠期间显示在服务器卡片上的提示语。留空（None）用界面自带的文案。
+    #[serde(default)]
+    pub sleep_hint: Option<String>,
+    /// 唤醒过程中的提示语。留空（None）用界面自带的文案。
+    #[serde(default)]
+    pub wake_hint: Option<String>,
+    /// **只报给界面、不落 `server.json`** 的运行期字段：`server.properties` 里的
+    /// `max-players`。服务器卡片副标题要显示「Paper 1.21.4 · 最多 20 名玩家」，
+    /// 而这个数在 properties 里、不在 server.json 里（见 `servers.rs::with_props`）。
+    /// 读不到就是 None，界面退回显示端口。
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub max_players: Option<i64>,
 }

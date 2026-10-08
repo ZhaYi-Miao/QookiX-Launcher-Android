@@ -7,6 +7,8 @@ export const useServersStore = defineStore("servers", {
     servers: [] as ServerConfig[],
     loaded: false,
     runningIds: {} as Record<string, boolean>,
+    /** 空闲休眠中的服务器：JVM 已停，但端口被唤醒监听占着，有人连接会自动启动 */
+    sleepingIds: {} as Record<string, boolean>,
     // 由标题栏的“创建服务器”按钮递增，多人游戏页监听后打开创建对话框
     createRequest: 0,
     // 仅在“服务器”标签页时标题栏才显示创建按钮
@@ -18,6 +20,7 @@ export const useServersStore = defineStore("servers", {
     count: (state) => (state.servers ?? []).length,
     byId: (state) => (id: string) => (state.servers ?? []).find((s) => s.id === id) ?? null,
     isRunning: (state) => (id: string) => !!state.runningIds[id],
+    isSleeping: (state) => (id: string) => !!state.sleepingIds[id],
   },
   actions: {
     /** 后台静默刷新服务器列表 + 运行状态，失败保留旧数据 */
@@ -27,16 +30,24 @@ export const useServersStore = defineStore("servers", {
         this.servers = (await api.listHostedServers()) ?? [];
         this.loaded = true;
         const next: Record<string, boolean> = {};
+        const sleeping: Record<string, boolean> = {};
         await Promise.all(
           this.servers.map(async (s) => {
             try {
-              next[s.id] = (await api.isHostedServerRunning(s.id)) ?? false;
+              // 一次调用同时拿「在跑」与「休眠」。分两次问（isHostedServerRunning +
+              // 单独的休眠查询）中间隔着一次休眠/唤醒，会拿到自相矛盾的组合 ——
+              // 界面就会同时显示「休眠中」和「运行中」。
+              const rt = await api.hostedServerRuntime(s.id);
+              next[s.id] = !!rt?.running;
+              sleeping[s.id] = !!rt?.sleeping;
             } catch {
               next[s.id] = false;
+              sleeping[s.id] = false;
             }
           }),
         );
         this.runningIds = next;
+        this.sleepingIds = sleeping;
         this.lastLoadedAt = Date.now();
       } catch {
         /* ignore */
@@ -77,7 +88,9 @@ export const useServersStore = defineStore("servers", {
     },
     async start(id: string): Promise<number> {
       const { pid } = await api.startHostedServer(id);
+      // 启动即离开休眠态：唤醒走的也是这条路径
       this.runningIds = { ...this.runningIds, [id]: true };
+      this.setSleeping(id, false);
       const idx = this.servers.findIndex((s) => s.id === id);
       if (idx >= 0) this.servers[idx] = { ...this.servers[idx], last_started: Date.now() };
       return pid;
@@ -87,10 +100,16 @@ export const useServersStore = defineStore("servers", {
       // 这句话要透传给 UI 展示，不能在 store 里吞掉。
       const note = await api.stopHostedServer(id);
       this.runningIds = { ...this.runningIds, [id]: false };
+      // 手动停止是「真的停」：休眠是无人时自动进入的状态，用户主动停掉的服务器
+      // 界面上不该显示成「休眠」（否则他以为有人连就会自己起来）。
+      this.setSleeping(id, false);
       return note;
     },
     setRunning(id: string, running: boolean) {
       this.runningIds = { ...this.runningIds, [id]: running };
+    },
+    setSleeping(id: string, sleeping: boolean) {
+      this.sleepingIds = { ...this.sleepingIds, [id]: sleeping };
     },
     requestCreate() {
       this.createRequest++;

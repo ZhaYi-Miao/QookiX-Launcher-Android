@@ -58,6 +58,15 @@ class MainActivity : TauriActivity() {
       }, 600L)
     }
 
+    // 上次游戏留下的「空任务」：GameActivity 带 documentLaunchMode="intoExisting"，
+    // 任务记录**不随进程消失**，用户在多任务里点那张卡片就会把游戏再启动一遍
+    // （用户反馈的 bug）。游戏确实没在跑时才清 —— 否则会把「切回后台运行中的游戏」也断掉。
+    // 延后一点再判：Rust 侧的游戏状态在 onStart 之后才稳。
+    Handler(Looper.getMainLooper()).postDelayed({
+      val running = runCatching { TauriBridge.isGameRunning() }.getOrDefault(false)
+      if (!running) removeStaleGameTask()
+    }, 800L)
+
     applyStoredOrientation()
     requestNotificationPermission()
     // 启动陶瓦联机隧道（独立进程 :tunnel，.so 只在那里加载，主进程不链接）
@@ -622,6 +631,61 @@ class MainActivity : TauriActivity() {
           }
         }
       }
+    }
+
+    // ── 设备热状态 ──────────────────────────────────────────────────────
+
+    /**
+     * 当前设备热状态（`PowerManager.THERMAL_STATUS_*`，0=正常、1=轻微、2=中等、
+     * 3=严重、4=危急、5=紧急、6=关机）。读不到或系统太老都返回 "0"。
+     *
+     * 手机开服跑久了会被系统降频，表现是「服务器突然变卡」。读它只是为了让界面能说
+     * 一句「不是服务器坏了，是手机热了」。竞品 Anvil-MC 用的是
+     * `OnThermalStatusChangedListener`（监听回调）；我们按需问一次就够，
+     * 不用管回调与界面的生命周期。
+     *
+     * `getCurrentThermalStatus` 是 API 29 才有的，低版本直接返回 "0"。
+     */
+    fun thermalStatus(): String {
+      if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return "0"
+      val pm = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+          ?: return "0"
+      return runCatching { pm.currentThermalStatus }.getOrDefault(0).toString()
+    }
+
+    // ── 打开服务器文件目录 ──────────────────────────────────────────────
+
+    /**
+     * 把服务器文件目录交给系统文件管理器打开。
+     *
+     * 走 `ServerDocsProvider`（DocumentsProvider）的 `content://` 文档 URI —— 只有它能
+     * 让系统文件管理器真正**列出目录内容**（FileProvider 只能给单个文件造 URI，把目录
+     * 交给它时系统文件应用只会打开自己的首页，实测看不到我们的目录）。
+     *
+     * `path` 是绝对路径，这里换算成 provider 的 docId（相对 `files/servers/` 的路径）。
+     *
+     * 返回："1" 已交给外部应用；"0" 没有能打开文件夹的应用；"-1" 路径不在暴露范围内。
+     */
+    fun openDirectory(path: String): String {
+      val base = java.io.File(filesDir, ServerDocsProvider.DIR_NAME).canonicalFile
+      val target = runCatching { java.io.File(path).canonicalFile }.getOrNull() ?: return "-1"
+      if (target != base && !target.path.startsWith(base.path + java.io.File.separator)) return "-1"
+      if (!target.isDirectory) return "-1"
+      val rel = target.toRelativeString(base).trim('/')
+      val docId = if (rel.isEmpty() || rel == ".") ServerDocsProvider.ROOT_ID
+      else ServerDocsProvider.DOC_PREFIX + rel
+      val uri = android.provider.DocumentsContract
+        .buildDocumentUri("$packageName.serverdocs", docId)
+      return runCatching {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+          setDataAndType(uri, "vnd.android.document/directory")
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        "1"
+      }.getOrDefault("0")
     }
 
     // ── 导出实例日志 ────────────────────────────────────────────────────

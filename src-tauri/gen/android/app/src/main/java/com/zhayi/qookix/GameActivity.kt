@@ -169,6 +169,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         }
 
         fun start(context: Context, instanceId: String, accountUuid: String) {
+            markLaunchRequest(context, instanceId)
             val intent = Intent(context, GameActivity::class.java).apply {
                 putExtra(EXTRA_INSTANCE_ID, instanceId)
                 putExtra(EXTRA_ACCOUNT_UUID, accountUuid)
@@ -179,6 +180,41 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
             }
             context.startActivity(intent)
+        }
+
+        // ── 「这次是用户主动点的启动」这张凭条 ────────────────────────────────
+        //
+        // 为什么需要：`GameActivity` 用 `documentLaunchMode="intoExisting"` + 独立
+        // taskAffinity，它的**任务记录不随进程消失**。游戏退出后那张卡片仍留在多任务里，
+        // 用户点它 → 系统拿**原始 Intent**（里面的 instanceId 还在）把界面恢复出来 →
+        // 界面以为「用户要开这一版」，把游戏又启动了一遍（用户反馈：退出后点一下卡片，
+        // 游戏自己又开了一次）。
+        //
+        // 恢复出来的 Intent 与「用户刚点的启动」在参数上完全一样，只能靠**有没有一张刚写的
+        // 凭条**区分。所有正常启动都走 `start()`，所以凭条写在这里；读到即清（只生效一次），
+        // 再配一个时间窗，免得残留的旧凭条把很久以后的卡片点击也放行。
+        private const val GATE_PREF = "qookix_launch_gate"
+        private const val GATE_ID = "instance_id"
+        private const val GATE_AT = "requested_at"
+        private const val GATE_TTL_MS = 2 * 60 * 1000L
+
+        private fun markLaunchRequest(ctx: Context, instanceId: String) {
+            runCatching {
+                ctx.getSharedPreferences(GATE_PREF, Context.MODE_PRIVATE).edit()
+                    .putString(GATE_ID, instanceId)
+                    .putLong(GATE_AT, System.currentTimeMillis())
+                    .apply()
+            }
+        }
+
+        /** 有凭条 = 用户刚点了启动；**读到就清**，所以只有第一次 onCreate 能拿到它。 */
+        private fun consumeLaunchRequest(ctx: Context, instanceId: String): Boolean {
+            val sp = ctx.getSharedPreferences(GATE_PREF, Context.MODE_PRIVATE)
+            val id = sp.getString(GATE_ID, null)
+            val at = sp.getLong(GATE_AT, 0L)
+            sp.edit().clear().apply()
+            return id == instanceId && at > 0L &&
+                System.currentTimeMillis() - at < GATE_TTL_MS
         }
     }
 
@@ -223,6 +259,30 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
 
         instanceId = intent.getStringExtra(EXTRA_INSTANCE_ID) ?: ""
         accountUuid = intent.getStringExtra(EXTRA_ACCOUNT_UUID) ?: ""
+
+        // 从多任务里点回来的旧卡片**不是**「用户要开这一版」：JVM 早就没了，照常走下去
+        // 就会把游戏再启动一遍（见 companion 里的说明）。这里只认「刚点的启动」那张凭条，
+        // 没有凭条且确实没有在跑的游戏 → 收掉这个界面并把启动器带回来。
+        val fromUserTap = consumeLaunchRequest(this, instanceId)
+        val gameAlive = try {
+            TauriBridge.isGameRunning()
+        } catch (e: Throwable) {
+            android.util.Log.w(TAG, "查询游戏状态失败，按未运行处理", e)
+            false
+        }
+        if (!fromUserTap && !gameAlive) {
+            android.util.Log.i(TAG, "从多任务恢复的旧卡片（实例 $instanceId）→ 不再启动游戏，收掉界面")
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    )
+                }
+            )
+            finishAndRemoveTask()
+            return
+        }
 
         // 偏好：控制层（ControlData / Touchpad / QuickSettingSideDialog）直接读这些静态字段
         migrateLegacyPrefs()
@@ -433,7 +493,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         touchpad?.let { minecraftGLView.start(alreadyRunning, it) }
             ?: run {
                 android.util.Log.e("GameActivity", "touchpad 未绑定，无法启动渲染面")
-                finish()
+                finishAndRemoveTask()
             }
     }
 
@@ -558,7 +618,9 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             val exitCode = withContext(Dispatchers.IO) {
                 TauriBridge.launchGame(instanceId, accountUuid)
             }
-            if (exitCode != 0) showCrashDialog(exitCode) else finish()
+            // 游戏正常结束 → **连任务一起收掉**。只 finish() 的话那张卡片还留在多任务里，
+            // 用户点一下就又开一局（实测 bug：退出后点旧卡片，游戏自己重开）。
+            if (exitCode != 0) showCrashDialog(exitCode) else finishAndRemoveTask()
         }
     }
 
@@ -747,7 +809,8 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 lifecycleScope.launch {
                     withContext(Dispatchers.IO) { TauriBridge.killGame() }
-                    finish()
+                    // 同 startGameOnce：退出就收掉任务卡片，别让它变成「点一下又开一局」
+                    finishAndRemoveTask()
                 }
             }
             .show()
@@ -833,6 +896,9 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         }
         if (!running) {
             gameStarted = false   // 让 startGameOnce() 用新实例再跑一遍
+            // recreate() 会重走 onCreate，那里要凭条才肯启动 —— 这是用户明确点的换版本，
+            // 所以补一张新凭条（否则会被当成「多任务里点回来的旧卡片」直接收掉）。
+            markLaunchRequest(this, newId)
             recreate()
         }
     }
@@ -1041,7 +1107,7 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
                     ?: "无法读取日志，可用 adb logcat 查看（游戏崩溃时会保存崩溃报告到实例目录 crash-reports/）"
             )
             .setCancelable(false)
-            .setPositiveButton("知道了") { _, _ -> finish() }
+            .setPositiveButton("知道了") { _, _ -> finishAndRemoveTask() }
             .show()
     }
 

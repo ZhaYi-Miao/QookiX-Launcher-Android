@@ -20,6 +20,8 @@ import type {
   RendererIssue,
   ServerConfig,
   ServerEntry,
+  ServerProperties,
+  ServerRuntime,
   ServerStatus,
   Settings,
   StorageStats,
@@ -590,12 +592,33 @@ export const api = {
         /** 弹系统「忽略电池优化」请求页（用户点「允许」后长期有效） */
         requestBatteryUnrestricted: () =>
           invoke<void>("request_battery_unrestricted", undefined, { silent: true }),
+        /** 设备热状态（0 正常 … 2 中等 … 4 危急 … 6 关机）：服务器变卡可能是手机过热降频 */
+        deviceThermalStatus: () =>
+          invoke<number>("device_thermal_status", undefined, { silent: true }),
     /** 执行一条服务端控制台命令（RCON），返回服务端输出 */
     serverConsoleCommand: (id: string, command: string) =>
       invoke<string>("server_console_command", { id, command }),
     /** 核心是否已就绪（能否启动） */
     hostedServerCoreInstalled: (id: string) =>
       invoke<boolean>("hosted_server_core_installed", { id }, { silent: true }),
+    /**
+     * 把服务器文件目录交给系统文件管理器打开（往服务器里拷插件/存档用）。
+     * 返回 1 = 已交给外部应用；0 = 本机没有能打开文件夹的应用；-1 = 目录不存在。
+     */
+    openHostedServerDirectory: (id: string) =>
+      invoke<number>("open_hosted_server_directory", { id }, { silent: true }),
+    /**
+     * 运行态（含空闲休眠）。休眠时 `running=false` 但 `sleeping=true` ——
+     * 端口仍被唤醒监听占着，有人连接会自动启动，界面要能区分它和「用户停掉的」。
+     */
+    hostedServerRuntime: (id: string) =>
+      invoke<ServerRuntime | null>("hosted_server_runtime", { id }, { silent: true }),
+    /** 读 server.properties 里可编辑的那几项（后端白名单） */
+    getHostedServerProperties: (id: string) =>
+      invoke<ServerProperties>("get_hosted_server_properties", { id }, { silent: true }),
+    /** 写那几项；返回写入后的完整值，直接拿来刷新界面 */
+    setHostedServerProperties: (id: string, patch: Record<string, unknown>) =>
+      invoke<ServerProperties>("set_hosted_server_properties", { id, patch }),
   openHostedServerFolder: (id: string, sub?: string) =>
     invoke<void>("open_hosted_server_folder", { id, sub: sub ?? null }),
   // 这里原来还有 listHostedServerFolders / listHostedServerFiles 两个方法，它们 invoke 的
