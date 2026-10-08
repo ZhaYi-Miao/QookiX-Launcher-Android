@@ -240,9 +240,24 @@ impl MultiRTManager {
             .context("Failed to read next entry")? {
             let release_file = entry.path().join("release");
             if release_file.exists() {
-                let content = fs::read_to_string(&release_file).await?;
-                let runtime: Runtime = serde_json::from_str(&content)?;
-                runtimes.push(runtime);
+                // **单个运行时损坏不能拖垮整张表**：原来这里用 `?` 直接冒泡 ——
+                // 任何一个 runtimes/<x>/release 读不出来（或字段缺失），get_runtimes 就整体报错，
+                // 上层据此判定「没有可用的 Java 运行时」，于是**别的完好的 JRE 也跟着用不了**，
+                // 用户看到的是「请安装 JRE」这种完全指错方向的提示。坏的那个跳过即可。
+                let Ok(content) = fs::read_to_string(&release_file).await else {
+                    crate::util::log_line(&format!(
+                        "运行时 {} 的 release 读取失败，已跳过该目录",
+                        entry.path().display()
+                    ));
+                    continue;
+                };
+                match serde_json::from_str::<Runtime>(&content) {
+                    Ok(runtime) => runtimes.push(runtime),
+                    Err(e) => crate::util::log_line(&format!(
+                        "运行时 {} 的 release 解析失败（{e}），已跳过该目录",
+                        entry.path().display()
+                    )),
+                }
             }
         }
 

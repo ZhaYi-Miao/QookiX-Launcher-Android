@@ -443,11 +443,10 @@ mod tests {
         assert!(JvmLauncher::is_exit_requested());
     }
 
-    #[test]
-    fn test_try_destroy_jvm_no_crash() {
-        init_jvm_state();
-        JvmLauncher::try_destroy_jvm();
-    }
+    // 这里原来有个 `test_try_destroy_jvm_no_crash`，调用 `JvmLauncher::try_destroy_jvm()` ——
+    // 那个方法早已改名成 `shutdown()`（上面 `test_shutdown_no_crash_when_no_jvm` 覆盖的就是它），
+    // 于是 `JvmLauncher` 上根本找不到这个方法：**整个测试目标编译不过（E0599）**，
+    // 也就是 `cargo test` 一直是坏的。功能已被上面那个测试覆盖，直接删掉这个残留。
 
     #[test]
     fn test_find_libjli_path_format() {

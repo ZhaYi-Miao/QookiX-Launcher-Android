@@ -150,19 +150,33 @@ class TerracottaPanel(
         return t
     }
 
+    /** 每 2 秒刷一次状态的轮询任务；`stop()` 里必须能拿到它才能取消掉 */
+    private var tick: Runnable? = null
+
     /** 每 2 秒刷一次状态；面板收起来（mDisplaying=false）就不再占用网络 */
     private fun startPolling() {
-        val tick = object : Runnable {
+        if (tick != null) return // 已经挂着了就别重复挂
+        val t = object : Runnable {
             override fun run() {
                 if (mDisplaying) call("/state")
                 ui.postDelayed(this, 2000)
             }
         }
-        ui.postDelayed(tick, 200)
+        tick = t
+        ui.postDelayed(t, 200)
     }
 
-    /** 面板销毁时收掉线程池（GameActivity.onDestroy 里调） */
+    /**
+     * 面板销毁时收掉线程池**和主线程轮询**（GameActivity.onDestroy 里调）。
+     *
+     * 必须 `removeCallbacks`：`tick` 是每 2 秒自我重投的，只关线程池的话它会一直被
+     * 主线程 Handler 持有并继续重投 —— 而 `tick` 又持有这个 panel、panel 持有
+     * GameActivity 实例，等于**每进一次游戏再退出就泄漏一个 GameActivity**，
+     * 还附赠每 2 秒一次的无效主线程调度。
+     */
     fun stop() {
+        tick?.let { ui.removeCallbacks(it) }
+        tick = null
         runCatching { io.shutdownNow() }
     }
 

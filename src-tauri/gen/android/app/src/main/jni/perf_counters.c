@@ -29,6 +29,15 @@
 #define PERF_WINDOW_MS 2000
 #define PERF_WRITE_INTERVAL_MS 500
 
+/*
+ * 这个环形缓冲由**两个线程**同时访问：
+ *   - `perf_frame()`：渲染线程 / SDL 换帧线程，**每帧**写一次
+ *     （调用点见 gl_bridge.c、osm_bridge.c、lwjgl_dlopen_hook.c 的 SDL_GL_SwapWindow 代理）；
+ *   - `perf_writer_thread`：每 500ms 调 `perf_snapshot()` 读一遍。
+ * 原来这里是三个裸静态变量、没有任何同步 —— head / count 会被撕裂读（读到只更新了一半的值），
+ * 表现就是 FPS 偶发跳变或蹦出莫名其妙的坏值。用一把小锁护住。
+ */
+static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static long long s_stamps[PERF_MAX_FRAMES];
 static int s_count; /* 已写入的样本数（≤ PERF_MAX_FRAMES） */
 static int s_head;  /* 下一个写入位置 */
@@ -49,9 +58,11 @@ void perf_frame(void) {
         if (pthread_create(&tid, NULL, perf_writer_thread, NULL) == 0)
             pthread_detach(tid);
     }
+    pthread_mutex_lock(&s_lock);
     s_stamps[s_head] = now_ms();
     s_head = (s_head + 1) % PERF_MAX_FRAMES;
     if (s_count < PERF_MAX_FRAMES) s_count++;
+    pthread_mutex_unlock(&s_lock);
 }
 
 static int cmp_float_desc(const void* a, const void* b) {
@@ -71,10 +82,23 @@ const char* perf_snapshot(void) {
     int n_gaps = 0;
     int fps = 0;
 
-    int start = (s_head - s_count + PERF_MAX_FRAMES) % PERF_MAX_FRAMES;
+    /* 取一份快照：**持锁只做拷贝**，统计放到锁外算 ——
+     * 这样渲染线程（perf_frame）最多只被阻塞一次拷贝的时间，不会因为面板而掉帧。 */
+    long long stamps[PERF_MAX_FRAMES];
+    int count;
+    pthread_mutex_lock(&s_lock);
+    count = s_count;
+    {
+        int start = (s_head - s_count + PERF_MAX_FRAMES) % PERF_MAX_FRAMES;
+        for (int i = 0; i < count; i++) {
+            stamps[i] = s_stamps[(start + i) % PERF_MAX_FRAMES];
+        }
+    }
+    pthread_mutex_unlock(&s_lock);
+
     long long prev = 0;
-    for (int i = 0; i < s_count; i++) {
-        long long t = s_stamps[(start + i) % PERF_MAX_FRAMES];
+    for (int i = 0; i < count; i++) {
+        long long t = stamps[i];
         if (t < cutoff_2s) {
             prev = 0; /* 窗口外的帧不参与间隔统计 */
             continue;

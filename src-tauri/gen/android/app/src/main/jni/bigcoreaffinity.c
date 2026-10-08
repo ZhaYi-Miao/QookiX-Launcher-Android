@@ -29,13 +29,17 @@ void bigcore_set_affinity() {
         bigcore_format_cpu_path(path_buffer, corecnt);
         int corefreqfd = open(path_buffer, O_RDONLY);
         if(corefreqfd != -1) {
-            ssize_t read_count = read(corefreqfd, freq_buffer, FREQ_MAX);
+            // 留一字节给结尾 NUL，否则 read_count == FREQ_MAX 时 freq_buffer[read_count] 越界
+            ssize_t read_count = read(corefreqfd, freq_buffer, sizeof(freq_buffer) - 1);
             close(corefreqfd);
-            freq_buffer[read_count] = 0;
-            core_freq = strtoul(freq_buffer, &discard, 10);
-            if(core_freq >= max_freq) {
-                max_freq = core_freq;
-                big_core_id = corecnt;
+            // read 失败返回 -1（或返回 0），原来会写下标 -1（数组前面一个字节）—— 必须挡掉
+            if(read_count > 0) {
+                freq_buffer[read_count] = 0;
+                core_freq = strtoul(freq_buffer, &discard, 10);
+                if(core_freq >= max_freq) {
+                    max_freq = core_freq;
+                    big_core_id = corecnt;
+                }
             }
         }else{
             break;

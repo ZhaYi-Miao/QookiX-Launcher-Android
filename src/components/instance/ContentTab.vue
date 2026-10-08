@@ -302,7 +302,14 @@ const confirmCardRef = ref<HTMLElement | null>(null);
 function onDocMouseDown(e: MouseEvent) {
   const t = e.target as Element | null;
   if (!t) return;
-  if (t.closest(".v-binder-follower-container, .n-base-select-menu, .n-popover, .n-dropdown")) return;
+  // 这里原来有一句 naive-ui 弹层的白名单判断
+  // （`.v-binder-follower-container, .n-base-select-menu, .n-popover, .n-dropdown`）。
+  // naive 早已整体换成 Vant，而这几个类名在 Vant 体系里根本不存在 —— 判断恒为 false，
+  // 属于死代码；另外这两张卡片（切换版本 / 确认）里目前也**没有任何会 Teleport 的弹层**，
+  // 所以直接删掉。
+  // 如果以后往卡片里加了 AppSelect 这类会传送出去的小弹层，记得补一条 Vant 的判断
+  // （写法见 InstallDialog.vue 的 onDocMouseDown：`.van-picker, .van-action-sheet, ...`
+  //  注意**不要**写 `#van-layer`，那会把「点遮罩关闭」一起废掉）。
   if (switchState.value.show && switchCardRef.value && !switchCardRef.value.contains(t)) {
     switchState.value.show = false;
     return;

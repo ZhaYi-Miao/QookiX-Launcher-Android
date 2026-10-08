@@ -130,7 +130,9 @@ bool patch_elf_soname(int patchfd, int realfd, uint16_t patchid) {
     if(fstat(realfd, &realstat)) return false;
     if(ftruncate64(patchfd, realstat.st_size) == -1) return false;
     char* target = mmap(NULL, realstat.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, patchfd, 0);
-    if(!target) return false;
+    /* mmap 失败返回的是 MAP_FAILED（即 (void*)-1），**不是 NULL** ——
+     * 原来写成 `if(!target)` 永远不成立，于是下面会往 (void*)-1 上按 ELF 头解析并写内存，直接崩。 */
+    if(target == MAP_FAILED) return false;
     if(read(realfd, target, realstat.st_size) != realstat.st_size) {
         munmap(target, realstat.st_size);
         return false;
@@ -159,6 +161,8 @@ bool patch_elf_soname(int patchfd, int realfd, uint16_t patchid) {
             }
         }
     }
+    // 没找到 DT_SONAME 也要把映射解掉：这条失败路径原来少了一次 munmap，每次都泄漏一块映射
+    munmap(target, realstat.st_size);
     return false;
 }
 

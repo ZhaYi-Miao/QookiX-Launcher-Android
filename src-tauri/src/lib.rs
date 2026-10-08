@@ -60,6 +60,9 @@ mod jni_bridge;
 mod android_bridge;
 mod android_env;
 
+// 只在 `run()` 里用到，而 `run()` 是 `#[cfg(not(test))]` —— 不加同样的 cfg，
+// 编译测试目标时这里会报「unused import」。
+#[cfg(not(test))]
 use tauri::Builder;
 
 #[cfg(not(test))]

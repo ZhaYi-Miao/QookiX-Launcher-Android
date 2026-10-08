@@ -302,16 +302,32 @@ async function copyRoom() {
   }
 }
 
+/** 延迟启动的那个 timeout 句柄；`onBeforeUnmount` 要能取消它 */
+let tcBoot: ReturnType<typeof setTimeout> | null = null;
+/** 组件是否已卸载 —— 延迟回调可能在卸载之后才跑（见下面注释） */
+let mpDisposed = false;
+
 onMounted(async () => {
   void servers.load();
-  setTimeout(async () => {
+  // 延迟 1.5s 再拉一次：等陶瓦服务自己起来。
+  // **这个 timeout 必须记下来**：以前没记 —— 如果用户在 1.5 秒内就返回上一页（手机上很常见），
+  // onBeforeUnmount 执行时 interval 还没被建立（只能清个 null），随后回调才把 interval
+  // 建起来：组件已经销毁，却从此永久每 5 秒轮询一次后端。
+  tcBoot = setTimeout(async () => {
+    tcBoot = null;
+    if (mpDisposed) return;
     await tcRefresh();
+    if (mpDisposed) return;
     tcTimer = setInterval(() => void tcRefresh(), 5000);
   }, 1500);
 });
 
 onBeforeUnmount(() => {
+  mpDisposed = true;
+  if (tcBoot) clearTimeout(tcBoot);
+  tcBoot = null;
   if (tcTimer) clearInterval(tcTimer);
+  tcTimer = null;
 });
 </script>
 

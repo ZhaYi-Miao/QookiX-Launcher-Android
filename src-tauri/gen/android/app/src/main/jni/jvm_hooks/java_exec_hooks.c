@@ -45,8 +45,10 @@ static jint hooked_ProcessImpl_forkAndExec(JNIEnv *env, jobject process, jint mo
     const char *pProg = (char *)((*env)->GetByteArrayElements(env, prog, NULL));
     const char* pProgBaseName = basename(pProg);
     const size_t basename_len = strlen(pProgBaseName);
-    char prog_basename[basename_len];
-    memcpy(&prog_basename, pProgBaseName, basename_len + 1);
+    // **长度必须 +1**：下面 memcpy 拷的是 basename_len + 1 字节（含结尾 NUL），
+    // 而原来 VLA 只开了 basename_len 字节 → 往栈上多写一字节（越界，可能覆盖相邻变量）。
+    char prog_basename[basename_len + 1];
+    memcpy(prog_basename, pProgBaseName, basename_len + 1);
     (*env)->ReleaseByteArrayElements(env, prog, (jbyte *)pProg, 0);
 
     if(strcmp(prog_basename, "xdg-open") == 0) {

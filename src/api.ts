@@ -590,12 +590,11 @@ export const api = {
       invoke<boolean>("hosted_server_core_installed", { id }, { silent: true }),
   openHostedServerFolder: (id: string, sub?: string) =>
     invoke<void>("open_hosted_server_folder", { id, sub: sub ?? null }),
-  listHostedServerFolders: (id: string) =>
-    invoke<{ folders: { name: string; exists: boolean }[] }>("list_hosted_server_folders", { id }),
-  listHostedServerFiles: (id: string, sub: string) =>
-    invoke<{
-      files: { name: string; path: string; size: number; modified: number; isDir: boolean; icon: string | null }[];
-    }>("list_hosted_server_files", { id, sub }),
+  // 这里原来还有 listHostedServerFolders / listHostedServerFiles 两个方法，它们 invoke 的
+  // `list_hosted_server_folders` / `list_hosted_server_files` 后端**根本没注册**
+  // （`lib.rs` 的 generate_handler! 里只有 `list_hosted_server_dir`）—— 一旦被调用就是
+  // 「command not found」。而全仓没有任何调用者：服务器文件浏览走的正是下面这个
+  // `listHostedServerDir`。所以直接删除，免得以后有人顺手用它们踩雷。
   listHostedServerDir: (id: string, rel: string) =>
     invoke<{ rel: string; entries: FsEntry[] }>("list_hosted_server_dir", { id, rel }),
   readHostedServerFile: (id: string, rel: string) =>

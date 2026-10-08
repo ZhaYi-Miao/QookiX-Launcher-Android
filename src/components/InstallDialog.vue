@@ -36,9 +36,18 @@ function onDocMouseDown(e: MouseEvent) {
   if (!props.show) return;
   const t = e.target as Element | null;
   if (!t) return;
-  // 点击弹窗卡片内部、或 naive-ui 的下拉/弹层（teleport 到 body）都不应关闭
+  // 点击弹窗卡片内部不关闭
   if (cardRef.value?.contains(t)) return;
-  if (t.closest(".v-binder-follower-container, .n-base-select-menu, .n-popover, .n-dropdown")) return;
+  // 点「从卡片里弹出的小弹层」也不要关。AppSelect 的滚轮选择器是一个 van-popup，
+  // 会被 Teleport 到 `#van-layer`，**不在卡片 DOM 内部**，所以上面那句 contains() 判不到它。
+  //
+  // 这里原来列的是 naive-ui 的类名（`.n-base-select-menu / .n-popover / .n-dropdown`），
+  // 而 naive 早就整体换成 Vant 了 —— 判断恒为 false，于是用户在「安装到」下拉里点一下选项，
+  // mousedown 被当成「点了外面」，**整个安装对话框直接关掉**（表现就是「一选就没了」）。
+  //
+  // 注意**不能写成 `#van-layer`**：本对话框自己所在的弹层（AppSheet → AppPopup）同样
+  // teleport 在那里，那样连「点遮罩关闭」都会一起失效。只列卡片内部弹出的小弹层。
+  if (t.closest(".van-picker, .van-action-sheet, .van-dropdown-menu__menu")) return;
   emit("update:show", false);
 }
 onMounted(() => document.addEventListener("mousedown", onDocMouseDown));
@@ -287,8 +296,19 @@ async function loadDeps() {
 
 watch(selectedVersion, () => { if (!isModpack.value) loadDeps(); });
 
+/**
+ * 版本列表的请求序号：并发调用时**只认最后一次**，过期响应直接丢弃。
+ *
+ * 为什么需要：`resetForProject()` 会给 `selectedInstance` 赋值（触发下面的 watch → 调一次
+ * loadVersions），紧接着又**显式**调一次 loadVersions —— 于是切项目/切实例时会同时发两次
+ * `projectVersions`，两个响应都去写 `versions` 和 `selectedVersion`。
+ * 后到的那个可能把用户已经手动选好的版本覆盖掉（也能看到「选好了又跳回默认」）。
+ */
+let versionsSeq = 0;
+
 async function loadVersions() {
   if (!props.project) return;
+  const seq = ++versionsSeq;
   loadingVersions.value = true;
   selectedVersion.value = null;
   deps.value = [];
@@ -299,18 +319,22 @@ async function loadVersions() {
     const mc = inst?.mc_version ?? "";
     const ld = inst && inst.loader !== "vanilla" ? inst.loader : "";
     const res = await api.projectVersions(props.project.provider, props.project.id, mc, ld);
+    if (seq !== versionsSeq) return;
     versions.value = res.versions;
     if (inst && !res.versions.length) {
       // 上游按实例筛选无结果时，回退拉取全部版本供选择
       const all = await api.projectVersions(props.project.provider, props.project.id, "", "");
+      if (seq !== versionsSeq) return;
       versions.value = all.versions;
     }
     const picked = versions.value.find((v) => versionType(v) === "release") ?? versions.value[0];
     if (picked) selectedVersion.value = picked.id;
   } catch (e) {
+    if (seq !== versionsSeq) return;
     message.error(String(e));
   } finally {
-    loadingVersions.value = false;
+    // 只有最新那次请求才有资格收掉 loading（否则过期请求会把新请求的 loading 提前关掉）
+    if (seq === versionsSeq) loadingVersions.value = false;
   }
 }
 

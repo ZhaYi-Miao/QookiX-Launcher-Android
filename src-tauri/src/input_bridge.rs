@@ -422,7 +422,6 @@ mod tests {
     #[test]
     fn test_ring_buffer_overflow_drops_oldest() {
         let buffer = EventRingBuffer::new();
-        let table = GlfwCallbackTable::new();
 
         for i in 0..(RING_CAPACITY + 10) {
             buffer.push(GlfwInputEvent {

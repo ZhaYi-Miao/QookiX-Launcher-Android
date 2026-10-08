@@ -140,7 +140,7 @@ pub fn exec(port: u16, password: &str, command: &str) -> Result<String, String> 
  * （lowmemorykiller），所以等待窗口有限（默认 20 秒）。
  */
 pub fn graceful_stop(
-    ipc_port: u16,
+    ipc_port: Option<u16>,
     token: &str,
     rcon: &RconCreds,
     wait_secs: u64,
@@ -157,13 +157,27 @@ pub fn graceful_stop(
         }
     }
 
-    // 等 JVM 退出
+    // 等 JVM 退出。
+    //
+    // **没有可用的 IPC 端口，就不能说「已经退出了」**。调用方原来用
+    // `read_runtime_io(...).unwrap_or((0, ""))` 兜底成端口 0，而 `ipc_alive(0, ..)`
+    // 必然立刻返回 false —— 于是「RCON stop 刚发出去」就直接被判定成
+    // 「已优雅停服（世界已存盘）」。如果 runtime.json 丢了或损坏（进程被系统杀过就会），
+    // 服务器其实可能还在跑，用户却以为已经安全关闭了。
+    // 这两种情况都如实降级措辞，让界面/用户自己去确认。
+    let Some(port) = ipc_port.filter(|p| *p != 0) else {
+        return Ok("已发送 stop，但缺少运行记录，无法确认 JVM 是否已退出".to_string());
+    };
+    if token.is_empty() {
+        return Ok("已发送 stop，但缺少校验 token，无法确认 JVM 是否已退出".to_string());
+    }
+
     let deadline = std::time::Instant::now() + Duration::from_secs(wait_secs);
     while std::time::Instant::now() < deadline {
-        if !crate::servers::ipc_alive(ipc_port, token) {
+        if !crate::servers::ipc_alive(port, token) {
             return Ok("已优雅停服（RCON stop，世界已存盘）".to_string());
         }
         std::thread::sleep(Duration::from_millis(700));
     }
-    Err("RCON 已发 stop，但 20 秒内 JVM 仍未退出".to_string())
+    Err(format!("RCON 已发 stop，但 {wait_secs} 秒内 JVM 仍未退出"))
 }

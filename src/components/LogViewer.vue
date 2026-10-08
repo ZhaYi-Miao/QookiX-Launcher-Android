@@ -20,14 +20,15 @@ const liveLogs = computed(() => tasks.logs[props.instanceId] ?? []);
 // 磁盘上的日志：游戏崩溃会把整个进程带走，重启后内存里的日志就没了 ——
 // 以前日志页此时永远显示「暂无日志」，偏偏在最需要它的时候。
 // 所以内存为空时回退到磁盘文件（启动器日志 + 游戏自己的 latest.log）。
-const fileLines = ref<{ line: string; stream?: string }[]>([]);
+const fileLines = ref<{ line: string; stream?: string; id: number }[]>([]);
 const logs = computed(() => (liveLogs.value.length ? liveLogs.value : fileLines.value));
 
 async function loadFromDisk() {
   if (liveLogs.value.length) return;
   try {
     const text = await api.readInstanceLog(props.instanceId);
-    fileLines.value = text.split("\n").map((line) => ({ line }));
+    // 磁盘日志是一次性整体替换的（不会被 splice 裁剪），所以用行号当 id 就是稳定的
+    fileLines.value = text.split("\n").map((line, i) => ({ line, id: i }));
   } catch {
     fileLines.value = [];
   }
@@ -170,8 +171,8 @@ const { fontSize, applyFontSize, zoomBy, touch } = useLogZoom();
         {{ tasks.runningInstance === instanceId ? $t('log-viewer.game-starting') : $t('log-viewer.no-logs-hint') }}
       </div>
       <div
-        v-for="(l, i) in logs"
-        :key="i"
+        v-for="l in logs"
+        :key="l.id"
         class="log-line"
         :class="l.stream"
       >{{ l.line }}</div>

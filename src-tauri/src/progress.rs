@@ -47,7 +47,10 @@ pub fn set_app_handle(handle: AppHandle) {
     let _ = APP_HANDLE.set(handle);
 }
 
-fn app() -> Option<&'static AppHandle> {
+/// 全局 AppHandle。供 `browse.rs` 之类模块发送自己的业务事件
+/// （如 `content::identified` / `content://update-finished`）——
+/// 没有它时事件静默丢弃（例如单元测试环境）。
+pub fn app() -> Option<&'static AppHandle> {
     APP_HANDLE.get()
 }
 

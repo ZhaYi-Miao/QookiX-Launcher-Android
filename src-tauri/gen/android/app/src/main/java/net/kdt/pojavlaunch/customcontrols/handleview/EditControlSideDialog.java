@@ -94,23 +94,30 @@ public class EditControlSideDialog extends SideDialogView {
     }
 
     /**
-     * 统一属性面板里**非输入框**控件的文字样式。
+     * 统一属性面板里的文字样式。
      *
-     * 做两件事：
+     * 这个面板是从 Pojav 继承来的，**几乎每个控件都没指定文字颜色**，全部落到主题默认色，
+     * 在深色面板上表现为**看不清**（用户 2026-10-08 反馈：「背景是深色的，字儿也是黑色的」）。
      *
-     * ① **修文字颜色**。这个面板是从 Pojav 继承来的，里面几十个标签 TextView 都**没有指定
-     *    `android:textColor`**，于是落到主题默认色 —— 在深色面板上表现为**几乎看不清**
-     *    （用户 2026-10-08 反馈：「背景是深色的，字儿也是黑色的」）。这里统一刷成 QookiX 的
-     *    次要文字色（浅灰 `qk_text_2`）。
-     *    `EditText` 要**排除**：输入框的颜色由主题给（面板里那些「168.0」「右键」本来就是亮的），
-     *    改了反而可能影响可用性。
+     * 三类分别处理：
      *
-     * ② **关掉文本选择**。这是覆盖在游戏画面上的编辑浮层，长按标签弹出系统的
-     *    「复制 / 全选」菜单和选择手柄非常突兀。
+     * ① **标签 TextView**（名称 / 大小 / 按键映射 / 切换触发…）→ `qk_text_2`（浅灰，次要色）。
+     * ② **EditText**（「右键」「168.0」这些**输入的值**）→ `qk_text_1`（近白，最亮）。
+     *    ⚠️ 第一版我**把 EditText 排除在外**了，理由写的是「输入框颜色由主题给、本来就是亮的」——
+     *    **这个判断是错的**：实测那些值同样是深色、一样看不清。输入框必须一起处理，
+     *    顺带把 hint（占位符）设成三级色，否则「Button Name」那种提示也会是暗的。
+     * ③ **关掉文本选择**（仅限非输入框）。这是覆盖在游戏画面上的编辑浮层，长按标签弹出
+     *    系统的「复制 / 全选」菜单和选择手柄非常突兀；输入框当然要保留可选中/粘贴。
      */
     private static void applyPanelTextStyle(View root) {
         if (!(root instanceof ViewGroup)) {
-            if (root instanceof TextView && !(root instanceof EditText)) {
+            if (root instanceof EditText) {
+                EditText et = (EditText) root;
+                et.setTextColor(et.getContext().getColor(R.color.qk_text_1));
+                et.setHintTextColor(et.getContext().getColor(R.color.qk_text_3));
+                return;
+            }
+            if (root instanceof TextView) {
                 TextView tv = (TextView) root;
                 tv.setTextIsSelectable(false);
                 // 用 Context.getColor（API 23+，本项目 minSdk 24），省掉 ContextCompat 依赖

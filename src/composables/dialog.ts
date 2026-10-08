@@ -20,6 +20,24 @@ interface NaiveDialogOpt {
 const fallbackOk = "OK";
 const fallbackCancel = "取消";
 
+/**
+ * 执行「确认」回调，并**单独**兜住它自己的异常。
+ *
+ * 原来是 `.then(() => onPositiveClick?.()).catch(() => onNegativeClick?.())` —— 同一个 catch
+ * 同时承担两件事：「用户点了取消」（Vant 用 reject 表示）和「确认回调自身抛错/reject」。
+ * 于是确认回调一旦失败，就会去执行**取消分支**（比如删除失败却按取消处理、该刷新的不刷新），
+ * 而且异常被静默吞掉，日志里也看不到任何痕迹。
+ */
+function runPositive(o: NaiveDialogOpt) {
+  try {
+    void Promise.resolve(o.onPositiveClick?.()).catch((e) =>
+      console.error("[dialog] 确认回调执行失败", e)
+    );
+  } catch (e) {
+    console.error("[dialog] 确认回调执行失败", e);
+  }
+}
+
 function warn(o: NaiveDialogOpt) {
   confirmDialog({
     title: o.title,
@@ -28,8 +46,9 @@ function warn(o: NaiveDialogOpt) {
     cancelButtonText: o.negativeText ?? fallbackCancel,
     confirmButtonColor: "#e5534b",
   })
-    .then(() => o.onPositiveClick?.())
-    .catch(() => o.onNegativeClick?.());
+    .then(() => runPositive(o))
+    // 走到这里只可能是「用户取消 / 关掉了对话框」
+    .catch(() => void o.onNegativeClick?.());
 }
 
 function info(o: NaiveDialogOpt) {
@@ -40,8 +59,8 @@ function info(o: NaiveDialogOpt) {
     confirmButtonText: o.positiveText ?? fallbackOk,
     cancelButtonText: o.negativeText ?? fallbackCancel,
   })
-    .then(() => o.onPositiveClick?.())
-    .catch(() => o.onNegativeClick?.());
+    .then(() => runPositive(o))
+    .catch(() => void o.onNegativeClick?.());
 }
 
 export interface DialogApi {

@@ -111,6 +111,9 @@ void osm_make_current(osm_render_window_t* bundle) {
 }
 
 void osm_swap_buffers() {
+    /* 同 gl_bridge.c::gl_swap_buffers —— currentBundle 要等 osm_make_current
+     * 成功才有值，窗口重建期间被调到换帧就是 NULL 解引用。 */
+    if(currentBundle == NULL) return;
     if(currentBundle->state == STATE_RENDERER_NEW_WINDOW) {
         osm_swap_surfaces(currentBundle);
         currentBundle->state = STATE_RENDERER_ALIVE;

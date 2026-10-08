@@ -113,7 +113,11 @@ class ServerService : Service() {
      * 不用静态 BroadcastReceiver（那会多一个常驻组件），直接在服务里动态注册：
      * 服务活着才需要收通知，进程都没了通知早就随进程消失了。
      */
+    /** 停服广播的接收器。**必须留引用**，否则没法反注册（见 onDestroy）。 */
+    private var stopReceiver: android.content.BroadcastReceiver? = null
+
     private fun registerStopReceiver() {
+        if (stopReceiver != null) return // 已经注册过就别重复注册
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == ACTION_STOPPED) {
@@ -132,6 +136,7 @@ class ServerService : Service() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(receiver, filter)
         }
+        stopReceiver = receiver
     }
 
     override fun onCreate() {
@@ -266,6 +271,13 @@ class ServerService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "ServerService 销毁")
+        // 动态注册的 receiver **必须反注册**：不反注册的话，服务销毁后系统仍然持有它，
+        // 就等于把 Service 实例（及其 Context）一起留在内存里泄漏掉，
+        // 而且 ACTION_STOPPED 广播还会打到已经销毁的服务上。
+        stopReceiver?.let {
+            runCatching { unregisterReceiver(it) }
+            stopReceiver = null
+        }
         starting.set(false)
         currentServerId = null
         super.onDestroy()

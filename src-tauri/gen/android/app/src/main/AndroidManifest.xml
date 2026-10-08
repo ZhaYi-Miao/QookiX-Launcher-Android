@@ -60,7 +60,13 @@
       服务必须跑在 `:tunnel` 进程 —— `libterracotta.so` 只在那里加载，
       跨进程没法把 `ParcelFileDescriptor` 交给 native。
     -->
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <!--
+      注意：这里**不需要**（也不能）用 `<uses-permission>` 声明 BIND_VPN_SERVICE。
+      它是 signature 级权限，只归系统所有，普通 App 申请也永远不会被授予；
+      真正起作用的是下面 `<service ... android:permission="android.permission.BIND_VPN_SERVICE">`
+      那一句（它保证只有系统能 bind 这个服务，也是 VpnService 框架的识别条件）。
+      原来这里多写了一条 uses-permission，容易被误解成「有它才能用 VPN」。
+    -->
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

@@ -89,7 +89,7 @@ async fn try_download_chunked(
     dest: &Path,
     size: u64,
     threads: usize,
-    cancel: Option<Arc<AtomicBool>>,
+    cancels: &[Arc<AtomicBool>],
 ) -> anyhow::Result<bool> {
     // 调用方传的是设置里的值，这里再夹一次：0 会让下面的循环一片都不下
     let threads = threads.max(1);
@@ -126,7 +126,7 @@ async fn try_download_chunked(
         let client = client.clone();
         let url = url.to_string();
         let dest = dest.to_path_buf();
-        let cancel = cancel.clone();
+        let cancels = cancels.to_vec();
         handles.push(tokio::spawn(async move {
             let mut resp = client
                 .get(&url)
@@ -140,10 +140,8 @@ async fn try_download_chunked(
             use tokio::io::AsyncSeekExt;
             f.seek(std::io::SeekFrom::Start(start)).await?;
             while let Some(chunk) = resp.chunk().await? {
-                if let Some(c) = &cancel {
-                    if c.load(Ordering::Relaxed) {
-                        anyhow::bail!("已取消");
-                    }
+                if cancels.iter().any(|c| c.load(Ordering::Relaxed)) {
+                    anyhow::bail!("已取消");
                 }
                 f.write_all(&chunk).await?;
             }
@@ -151,11 +149,25 @@ async fn try_download_chunked(
         }));
     }
 
-    for h in handles {
-        match h.await {
-            Ok(Ok(())) => {}
-            _ => return Ok(false), // 任一片失败 → 交给调用方回退单流
+    // 任一片失败 → 整个分片下载作废，交给调用方回退单流。**但必须先把手里的任务收干净**：
+    // tokio 里 drop 一个 JoinHandle 只是 detach，被丢下的分片会继续往同一个文件里写，
+    // 而调用方此刻会回退 `stream_to_file`、对同一个 dest 重新 create（截断）+ 顺序写
+    // → 两边交错写，落盘文件损坏（有没有被发现，取决于后面有没有 SHA1 校验）。
+    // 所以失败时先把剩余分片 abort 掉，再逐个 await 等它们真正结束。
+    let mut failed = false;
+    let mut rest = handles.into_iter();
+    while let Some(h) = rest.next() {
+        if !matches!(h.await, Ok(Ok(()))) {
+            failed = true;
+            break;
         }
+    }
+    if failed {
+        for h in rest {
+            h.abort();
+            let _ = h.await;
+        }
+        return Ok(false);
     }
     Ok(true)
 }
@@ -228,7 +240,9 @@ pub async fn download_file_with_cancel(
     // 大文件先试**分片并发**（桌面版早就有的能力，Android 之前没接）。
     // 只在「服务端支持 Range」且内容够大时用；任何一片失败都会回落到下面的单流。
     // `chunk_note` 记录实际走了哪条路（回传在 message 里，便于真机核对）。
-    let mut chunk_note: &str = "single(small)";
+    // 用 `String` 而不是 `&'static str`：原来那几处 `Box::leak` 每下载一次就永久泄漏
+    // 一小段字符串（因为 `format!` 的产物没法变成 `&'static str`，只能 leak）。
+    let mut chunk_note: String = "single(small)".to_string();
     for candidate in &urls {
         // 探「总长度 + 是否支持 Range」：用 1 字节的 Range 请求而不是 HEAD。
         // 实测 libraries.minecraft.net 等 CDN 的 **HEAD 不返回 Content-Length**（len=0），
@@ -251,21 +265,27 @@ pub async fn download_file_with_cancel(
             }
             Ok(r) => (r.content_length().unwrap_or(0), false),
             Err(_) => {
-                chunk_note = "single(probe-failed)";
+                chunk_note = "single(probe-failed)".to_string();
                 continue;
             }
         };
         if len < CHUNK_THRESHOLD {
-            chunk_note = Box::leak(format!("single(len={len})").into_boxed_str());
+            chunk_note = format!("single(len={len})");
             continue;
         }
         if !supports_range {
-            chunk_note = "single(no-range)";
+            chunk_note = "single(no-range)".to_string();
             continue;
         }
-        match try_download_chunked(&client, candidate, &dest_path, len, chunk_threads().await, None)
-            .await
-        {
+        // 两个取消标志都要传下去（「下载中心」的取消 + 安装任务的取消）。原来这里写死 `None`，
+        // 于是 >8MB 的文件一旦走分片，**取消就完全无效** —— 用户点了取消、界面显示已取消，
+        // 后台却把文件下完了。
+        let cancels: Vec<Arc<AtomicBool>> = [Some(cancel.clone()), install_cancel.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let threads = chunk_threads().await;
+        match try_download_chunked(&client, candidate, &dest_path, len, threads, &cancels).await {
             Ok(true) => {
                 // 分片下完必须校验：并发写没法边写边算哈希
                 if let Some(expected) = &expected_sha1 {
@@ -275,13 +295,13 @@ pub async fn download_file_with_cancel(
                             h.update(&content);
                             if format!("{:x}", h.finalize()) != *expected {
                                 let _ = fs::remove_file(&dest_path).await;
-                                chunk_note = "single(bad-hash)";
+                                chunk_note = "single(bad-hash)".to_string();
                                 continue; // 校验不过，当作这个源失败，试下一个
                             }
                         }
                         Err(_) => {
                             let _ = fs::remove_file(&dest_path).await;
-                            chunk_note = "single(read-failed)";
+                            chunk_note = "single(read-failed)".to_string();
                             continue;
                         }
                     }
@@ -290,13 +310,14 @@ pub async fn download_file_with_cancel(
                 return Ok(DownloadProgress {
                     task_id: task_id.clone(),
                     progress: 100.0,
-                    message: "Downloaded (chunked x4)".to_string(),
+                    // 原来写死 "chunked x4"，但实际并发数是 chunk_threads()（默认 2、用户可调）
+                    message: format!("Downloaded (chunked x{threads})"),
                     total_bytes: len as i64,
                     downloaded_bytes: len as i64,
                 });
             }
-            Ok(false) => chunk_note = "single(range-unsupported)",
-            Err(_) => chunk_note = "single(chunk-error)",
+            Ok(false) => chunk_note = "single(range-unsupported)".to_string(),
+            Err(_) => chunk_note = "single(chunk-error)".to_string(),
         }
     }
     let chunk_note = chunk_note.to_string();

@@ -1314,6 +1314,21 @@ pub async fn check_updates(instance_id: &str, kind: &str) -> Result<Vec<Value>, 
     Ok(updates)
 }
 
+/// 把「更新完成」的结果报给前端。
+///
+/// `ContentTab.vue` 监听 `content://update-finished`，用它弹成功/失败提示并重新拉列表 ——
+/// 但这个事件**后端此前从来不发**（监听器一直挂着空等）。表现就是：用户点了「更新」之后
+/// 界面毫无反馈，必须手动退出再进这个页签才知道到底成没成。
+fn emit_update_finished(filename: &str, result: &Result<Value>) {
+    let Some(app) = crate::progress::app() else { return };
+    use tauri::Emitter;
+    let payload = match result {
+        Ok(_) => serde_json::json!({ "filename": filename, "ok": true }),
+        Err(e) => serde_json::json!({ "filename": filename, "ok": false, "error": e.to_string() }),
+    };
+    let _ = app.emit("content://update-finished", payload);
+}
+
 /// 应用更新：后台下载新版本并移除旧文件，返回 `{ queued: true }`。
 pub async fn apply_update(
     instance_id: &str,
@@ -1324,9 +1339,10 @@ pub async fn apply_update(
     new_version_id: &str,
 ) -> Result<Value, String> {
     // 先安装新版本（同名文件会覆盖；不同名则额外下载）
-    let result = install_content(instance_id, provider, project_id, new_version_id, kind)
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = install_content(instance_id, provider, project_id, new_version_id, kind).await;
+    // 成败都要报给前端（失败时把原因一起带上，前端会显示）
+    emit_update_finished(old_filename, &result);
+    let result = result.map_err(|e| e.to_string())?;
     // 移除旧文件 + 记录（若与新版文件名不同）
     let dir = settings::instance_dir(instance_id)
         .await
@@ -1367,6 +1383,31 @@ pub async fn identify_content(instance_id: &str, kind: &str) -> Result<(), Strin
     };
     let client = crate::util::http_client().await;
 
+    // 每识别成功一个文件，就把这一行推给前端。
+    // `ContentTab.vue` 监听 `content::identified`，收到后直接就地填 name / icon / authors 等 ——
+    // 这个事件此前同样**从不发送**，所以「识别」按钮在界面上等于没有可见效果（只能整页重刷）。
+    // pass1（hash 命中）和 pass2（名称搜索）都要用，所以收在一处，避免两边各写一遍。
+    let emit_identified = |rec: &crate::models::InstalledContent| {
+        let Some(app) = crate::progress::app() else { return };
+        use tauri::Emitter;
+        let _ = app.emit(
+            "content::identified",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "kind": kind,
+                "filename": rec.filename,
+                "source": rec.source,
+                "projectId": rec.project_id.clone().unwrap_or_default(),
+                "versionId": rec.version_id.clone().unwrap_or_default(),
+                "slug": rec.slug,
+                "name": rec.name,
+                "description": rec.description,
+                "icon": rec.icon,
+                "authors": rec.authors,
+            }),
+        );
+    };
+
     // ---- pass 1: hash lookup ----
     let hashes: Vec<String> = to_identify.iter().map(|(_, h)| h.clone()).collect();
     let resolved = resolve_by_hashes(&client, &hashes).await;
@@ -1393,6 +1434,7 @@ pub async fn identify_content(instance_id: &str, kind: &str) -> Result<(), Strin
                 if let Some(d) = desc.clone() { rec.description = Some(d); }
                 if let Some(ic) = icon.clone() { rec.icon = Some(ic); }
                 let _ = crate::instances::add_content_batch(instance_id, kind, vec![rec.clone()]).await;
+                emit_identified(rec);
             }
             resolved_files.insert(filename.clone());
             eprintln!("[identify] {filename} → {pid}@{vid}");
@@ -1428,6 +1470,7 @@ pub async fn identify_content(instance_id: &str, kind: &str) -> Result<(), Strin
                 if !hit.icon_url.is_empty() { rec.icon = Some(hit.icon_url.clone()); }
                 if !hit.author.is_empty() { rec.authors = Some(vec![hit.author.clone()]); }
                 let _ = crate::instances::add_content_batch(instance_id, kind, vec![rec.clone()]).await;
+                emit_identified(rec);
             }
             eprintln!("[identify] {filename} → {pid} (name search)");
         }

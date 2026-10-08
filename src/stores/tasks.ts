@@ -12,7 +12,18 @@ import type {
 interface LogEntry {
   stream: "out" | "err";
   line: string;
+  /**
+   * 稳定自增的 id，专门给 `v-for` 当 key 用。
+   *
+   * 日志超过 4000 行时会从**头部** splice 裁掉旧行（见下面的 `launch://log` 监听）。
+   * 那种情况下用数组下标当 key，前面每删一行、后面所有行的 key 就整体位移，
+   * Vue 只能把整段 DOM 全部重新 patch 一遍 —— 日志页本来就在高频刷新，代价很实在。
+   */
+  id: number;
 }
+
+/** 日志行 id 的自增源（模块级，跨实例也不会重复） */
+let nextLogId = 1;
 
 export interface TaskFile {
   name: string;
@@ -131,7 +142,7 @@ export const useTasksStore = defineStore("tasks", {
         const { instanceId, stream, line } = e.payload;
         if (!this.logs[instanceId]) this.logs[instanceId] = [];
         const buf = this.logs[instanceId];
-        buf.push({ stream, line });
+        buf.push({ stream, line, id: nextLogId++ });
         if (buf.length > 4000) buf.splice(0, buf.length - 4000);
       });
       listen<LaunchStateEvent>("launch://state", (e) => {

@@ -160,6 +160,11 @@ void gl_make_current(gl_render_window_t* bundle) {
 }
 
 void gl_swap_buffers() {
+    /* currentBundle 只在 gl_make_current() 里 makeCurrent 成功之后才被赋值。
+     * 渲染线程若在「还没 makeCurrent / makeCurrent 失败」的窗口期被调到换帧
+     * （SDL watchdog 重绑、窗口销毁时序都会造成这种窗口期），下一行就是
+     * NULL->state → SIGSEGV。换帧在没 bundle 时本就无事可做，直接返回。 */
+    if(currentBundle == NULL) return;
     if(currentBundle->state == STATE_RENDERER_NEW_WINDOW) {
         eglMakeCurrent_p(g_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT); //detach everything to destroy the old EGLSurface
         gl_swap_surface(currentBundle);

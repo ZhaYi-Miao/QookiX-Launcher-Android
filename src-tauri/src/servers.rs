@@ -176,6 +176,11 @@ pub fn update_hosted_server(patch: serde_json::Value) -> Result<ServerConfig, St
         s.name = v.trim().to_string();
     }
     if let Some(v) = patch.get("port").and_then(|v| v.as_u64()) {
+        // **必须校验范围**：原来直接 `v as u16` 截断 —— 前端传 70000 会静默变成 4464，
+        // 用户以为「端口已改成 70000」，实际服务器监听在 4464，别人根本连不上。
+        if !(1..=65535).contains(&v) {
+            return Err(format!("端口号必须在 1–65535 之间（收到 {v}）"));
+        }
         s.port = v as u16;
     }
     if let Some(v) = patch.get("motd").and_then(|v| v.as_str()) {
@@ -1259,10 +1264,14 @@ pub async fn stop_hosted_server(id: String) -> Result<String, String> {
     let dir = server_dir(&id)?;
     let creds = crate::rcon::load_or_create_creds(&dir, get_server(&id)?.port)?;
 
-    // runtime.json 里有 IPC 端口与 token（等 JVM 退出用）
-    let (ipc_port, token) = read_runtime_io(&id).unwrap_or((0, String::new()));
+    // runtime.json 里有 IPC 端口与 token（用来确认 JVM 真的退出了）。
+    // **必须原样传 Option，不能 `unwrap_or` 成 0**：端口为 0 时 `ipc_alive` 恒为 false，
+    // graceful_stop 会立刻谎报「已优雅停服（世界已存盘）」（详见那边的注释）。
+    let runtime_io = read_runtime_io(&id);
+    let ipc_port = runtime_io.as_ref().map(|(p, _)| *p);
+    let token = runtime_io.as_ref().map(|(_, t)| t.as_str()).unwrap_or("");
 
-    match crate::rcon::graceful_stop(ipc_port, &token, &creds, 20) {
+    match crate::rcon::graceful_stop(ipc_port, token, &creds, 20) {
         Ok(msg) => {
             // JVM 已自行退出，:server 进程会随之结束；这里只清通知
             let _ = crate::android_bridge::notify_server_stopped(&id);

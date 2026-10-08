@@ -226,14 +226,11 @@ async function pasteClipboard() {
  * 对它 `preventDefault` 等于把粘贴的最后一条路也封死
  * （`main.ts` 里给 input/textarea 留的白名单会被组件自己的 `.prevent` 反压掉）。
  */
+/** 最近一次 pointerdown 是不是触摸（用来区分「长按出系统菜单」和「鼠标右键」） */
 let lastPointerWasTouch = false;
-window.addEventListener(
-  "pointerdown",
-  (e) => {
-    lastPointerWasTouch = e.pointerType === "touch";
-  },
-  true
-);
+function onPointerProbe(e: PointerEvent) {
+  lastPointerWasTouch = e.pointerType === "touch";
+}
 
 function onContextMenu(e: MouseEvent) {
   const touch =
@@ -292,11 +289,16 @@ onMounted(() => {
   updateCursor();
   measureViewport();
   window.addEventListener("resize", measureViewport);
+  // **必须挂在这里，不能挂在 setup 顶层**：setup 顶层每实例化一次就往 window 上多挂
+  // 一个 capture 监听、且卸载时从不移除。FileManager / ServerFileManager 每打开一个文件
+  // 都会新建一个 CodeEditor，来回切几个文件就会线性泄漏监听器（并一直持有闭包）。
+  window.addEventListener("pointerdown", onPointerProbe, true);
 });
 
 onBeforeUnmount(() => {
   if (hlTimer) clearTimeout(hlTimer);
   window.removeEventListener("resize", measureViewport);
+  window.removeEventListener("pointerdown", onPointerProbe, true);
 });
 </script>
 

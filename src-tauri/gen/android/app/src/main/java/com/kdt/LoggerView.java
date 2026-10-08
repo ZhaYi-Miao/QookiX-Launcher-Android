@@ -153,6 +153,19 @@ public class LoggerView extends ConstraintLayout {
         mOffset = 0;
     }
 
+    /**
+     * 从窗口树上摘下来时必须停掉轮询。
+     *
+     * 原先只有「用户手动关掉开关」才会走 stopPolling()。如果日志面板开着的时候直接销毁
+     * Activity（退出游戏、旋转屏幕导致重建），mPoller 会一直挂在主线程 Handler 上每 500ms
+     * 自我重投，并持有这个 View 及其 Context —— 等于**泄漏整个 Activity**，还持续读文件。
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        stopPolling();
+    }
+
     /** 读出自 mOffset 起的新增内容并按完整行追加。经 Handler 投递，运行在主线程。 */
     private void readNewLines() {
         if (mLogFile == null || !mLogFile.isFile()) return;

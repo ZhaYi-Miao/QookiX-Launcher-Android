@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「可以进入下一层」的向右箭头（按键属性面板里「背景颜色 / 边框颜色」两项的 drawableEnd）。
+
+  原来是同名的 `spinner_arrow_right.png` —— 一张 **25×45、200 字节的调色板 PNG
+  （colorType=3，带 tRNS 透明）**，在真机上渲染成了**黑白棋盘格**（用户 2026-10-08 反馈的
+  「面板右边有个奇怪的格子」就是它）。调色板 + 透明的 PNG 被 AAPT 压缩/优化后出问题是常见坑，
+  这里直接换成 vector：不依赖 PNG cruncher，也不受屏幕密度影响。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="44">
+    <path
+        android:fillColor="@color/qk_text_2"
+        android:pathData="M4,4 L18,22 L4,40 L4,34 L12,22 L4,10 Z" />
+</vector>

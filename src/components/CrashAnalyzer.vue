@@ -4,6 +4,7 @@ import { computed, ref, watch } from "vue";
 import AppButton from "../ui/AppButton.vue";
 import { Loading as VanLoading } from "vant";
 import { useMessage } from "../composables/message";
+import { useDialog } from "../composables/dialog";
 import { api } from "../api";
 import { fmtDateLocale as fmtTime, fmtSize } from "../utils/format";
 import { error as devError } from "../utils/logger";
@@ -21,6 +22,7 @@ import {
 
 const props = defineProps<{ instanceId: string }>();
 const message = useMessage();
+const dialog = useDialog();
 
 const loading = ref(false);
 const analyzing = ref(false);
@@ -145,19 +147,28 @@ async function toggleRaw() {
   if (showRaw.value) await ensureRaw();
 }
 
-async function deleteLog(filename: string) {
-  if (!confirm($t("crash-analyzer.confirm", { p1: filename }))) return;
-  try {
-    await api.deleteInstancePath(props.instanceId, `crash-reports/${filename}`);
-    // 顺手清掉对应诊断缓存，避免留下孤儿数据
-    localStorage.removeItem(diagKey(props.instanceId, filename));
-    message.success($t("crash-analyzer.on-positive-click"));
-    await loadLogs();
-    diagnosis.value = null;
-    rawContent.value = "";
-  } catch (e) {
-    message.error(String(e));
-  }
+function deleteLog(filename: string) {
+  // 原来这里用的是 WebView 原生的 `window.confirm()`：与全项目自绘的对话框风格不一致
+  // （Android 上是系统 AlertDialog 的样式），而且它的返回非常依赖宿主 WebChromeClient。
+  // 换成与「删除服务器」等处一致的 `dialog.warning({ ... onPositiveClick })`。
+  dialog.warning({
+    content: $t("crash-analyzer.confirm", { p1: filename }),
+    positiveText: $t("common.delete"),
+    negativeText: $t("common.cancel"),
+    onPositiveClick: async () => {
+      try {
+        await api.deleteInstancePath(props.instanceId, `crash-reports/${filename}`);
+        // 顺手清掉对应诊断缓存，避免留下孤儿数据
+        localStorage.removeItem(diagKey(props.instanceId, filename));
+        message.success($t("crash-analyzer.on-positive-click"));
+        await loadLogs();
+        diagnosis.value = null;
+        rawContent.value = "";
+      } catch (e) {
+        message.error(String(e));
+      }
+    },
+  });
 }
 
 /**

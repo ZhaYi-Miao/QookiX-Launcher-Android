@@ -323,8 +323,27 @@ pub async fn is_instance_installed(instance_id: &str) -> bool {
     is_version_installed(ver).await
 }
 
+/// 版本 JSON 的 `inherits_from` 链最大深度。
+///
+/// 真实继承链最多两三层（`1.20.1-forge-47.2.0` → `1.20.1`），8 已经非常宽松。
+/// **这个上限是用来防栈溢出的**：原来是「只要发现 inherits_from 就递归」，只用
+/// `inherits_from != version_id` 挡了自环 —— 一份损坏或被改坏的版本 JSON 只要造出
+/// A↔B 互相继承，就会无限递归直到栈溢出崩溃。而且这条路在启动流程里，用户只会看到闪退。
+const MAX_INHERIT_DEPTH: usize = 8;
+
 pub fn get_version_info(version_id: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MinecraftVersion>> + Send + '_>> {
+    get_version_info_depth(version_id, 0)
+}
+
+/// `get_version_info` 的实际实现，额外带一个继承深度（递归时 +1，见 `MAX_INHERIT_DEPTH`）。
+fn get_version_info_depth(version_id: &str, depth: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MinecraftVersion>> + Send + '_>> {
     Box::pin(async move {
+        if depth > MAX_INHERIT_DEPTH {
+            return Err(anyhow::anyhow!(
+                "版本 {version_id} 的 inherits_from 继承链过深（超过 {MAX_INHERIT_DEPTH} 层），\
+                 通常是版本 JSON 损坏造成的，删掉这个版本重新装一次即可"
+            ));
+        }
         let data_dir = get_data_dir().await?;
         let version_dir = Path::new(&data_dir).join("versions").join(version_id);
         let json_file = version_dir.join(format!("{}.json", version_id));
@@ -367,7 +386,8 @@ pub fn get_version_info(version_id: &str) -> std::pin::Pin<Box<dyn std::future::
         // Handle inheritance
         if let Some(inherits_from) = &version_info.inherits_from {
             if inherits_from != version_id {
-                let parent_info = get_version_info(inherits_from).await?;
+                // 递归时带上深度，挡住 A↔B 互相继承造成的无限递归（见 MAX_INHERIT_DEPTH）
+                let parent_info = get_version_info_depth(inherits_from, depth + 1).await?;
                 
                 // Merge libraries (child overrides parent)
                 let parent_libs = parent_info.libraries.unwrap_or_default();
@@ -549,25 +569,33 @@ async fn download_asset_objects(
     use futures::StreamExt;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    let Ok(raw) = fs::read_to_string(index_path).await else {
-        return Ok(());
-    };
-    let Ok(idx) = serde_json::from_str::<Value>(&raw) else {
-        return Ok(());
-    };
+    // **这四处原来全是 `return Ok(())`（静默成功）**：索引读不到、解析失败或缺 objects
+    // 字段时，安装会「成功」返回，但一个资源对象都没下 —— 用户要到启动游戏时才发现
+    // 缺贴图/音效（游戏直接崩），而错误信息完全指不到真凶。
+    // 调用方 `install_version` 是**刚下载并校验过索引之后**才走到这里，所以索引不可用
+    // 就是真错误，必须如实抛出去。
+    let raw = fs::read_to_string(index_path)
+        .await
+        .with_context(|| format!("读取资源索引失败：{}", index_path.display()))?;
+    let idx = serde_json::from_str::<Value>(&raw)
+        .with_context(|| format!("资源索引格式错误：{}", index_path.display()))?;
     let Some(objects) = idx.get("objects").and_then(|v| v.as_object()) else {
-        return Ok(());
+        return Err(anyhow::anyhow!(
+            "资源索引缺少 objects 字段：{}",
+            index_path.display()
+        ));
     };
 
-    let Ok(settings) = crate::settings::get_settings().await else {
-        return Ok(());
-    };
+    let settings = crate::settings::get_settings().await?;
     let mirror_base = crate::mirror::resolve_from(
         &settings.mirror,
         settings.mirror_custom.as_deref().unwrap_or(""),
     );
     let client = crate::util::http_client().await;
     let objects_dir = Path::new(data_dir).join("assets").join("objects");
+    // 并发数跟着设置走（`download_threads`）。这里原来写死 8 —— 于是同一个「并行下载」
+    // 设置在库/本体上生效、到资源对象上却不生效，用户调了也白调。
+    let concurrency = crate::download::file_concurrency().await;
 
     let mut total_bytes: u64 = 0;
     let mut total_files: usize = 0;
@@ -621,7 +649,14 @@ async fn download_asset_objects(
                 return;
             }
             let name = url.rsplit('/').next().unwrap_or("").to_string();
-            if dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            // 已存在且**大小对得上**才跳过。原来只判「非空」：进程被杀（用户手动杀后台、
+            // 系统回收）留下的半截文件会被当成完整文件，之后永远不再补，
+            // 直到游戏启动时缺资源崩掉 —— 库文件早就踩过一模一样的坑。
+            let exists_ok = dest
+                .metadata()
+                .map(|m| if size > 0 { m.len() == size } else { m.len() > 0 })
+                .unwrap_or(false);
+            if exists_ok {
                 counter.tick(&name, size);
                 return;
             }
@@ -667,7 +702,7 @@ async fn download_asset_objects(
             counter.tick(&name, 0);
         }
     }))
-    .buffer_unordered(8)
+    .buffer_unordered(concurrency)
     .collect::<Vec<_>>()
     .await;
 

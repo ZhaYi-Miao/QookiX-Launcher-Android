@@ -165,8 +165,13 @@ class PerfOverlayView(context: Context) : LinearLayout(context) {
         if (!collapsed) {
             val cpuSample = readCpuSample()
             var cpuPercent = -1
-            lastCpuSample?.let { last ->
-                val dTotal = (cpuSample!![0] + cpuSample[1]) - (last[0] + last[1])
+            // **两个都要判空**。readCpuSample() 在 /proc/self/stat 读失败或解析失败时返回 null，
+            // 而 lastCpuSample 在游戏跑起来之后基本都非 null —— 原来写成
+            // `lastCpuSample?.let { ... cpuSample!! ... }`，于是「上一轮采样成功 + 本轮失败」
+            // 就是 NPE。这段跑在主线程 tick 里，NPE = 直接把游戏崩掉。
+            val last = lastCpuSample
+            if (cpuSample != null && last != null) {
+                val dTotal = (cpuSample[0] + cpuSample[1]) - (last[0] + last[1])
                 val dMs = cpuSample[2] - last[2]
                 val ticksPerMs = getClkTck() / 1000.0
                 if (dMs > 0 && ticksPerMs > 0) cpuPercent = (dTotal / (dMs * ticksPerMs) * 100.0).roundToInt()

@@ -57,9 +57,22 @@ public class ColorSelector extends SideDialogView implements HueSelectionListene
 
         // Set elevation to show above other side dialogs.
         // Jank, should be done better
-        View contentParent = mDialogContent.findViewById(R.id.side_dialog_scrollview);
-        if(contentParent != null) {
-            ViewGroup dialogLayout = (ViewGroup) mDialogContent.getParent();
+        // 注意：原来写的是 `mDialogContent.findViewById(R.id.side_dialog_scrollview)` ——
+        // 但 side_dialog_scrollview 是 mDialogContent 的**祖先**（dialog_side_dialog.xml 是
+        // LinearLayout(root) > DefocusableScrollView(id=side_dialog_scrollview) > 颜色面板），
+        // 而 findViewById 只往下找，所以那个判断恒为 null：下面抬层级的两行从来没执行过，
+        // 等于一段死代码。这里改成**向上**遍历祖先去找它，再抬它父节点的层级。
+        ViewGroup dialogLayout = null;
+        for (View p = mDialogContent; p != null; p = (View) p.getParent()) {
+            if (p.getId() == R.id.side_dialog_scrollview) {
+                View parent = (View) p.getParent();
+                if (parent instanceof ViewGroup) {
+                    dialogLayout = (ViewGroup) parent;
+                }
+                break;
+            }
+        }
+        if (dialogLayout != null) {
             dialogLayout.setElevation(11);
             dialogLayout.setTranslationZ(11);
         }
