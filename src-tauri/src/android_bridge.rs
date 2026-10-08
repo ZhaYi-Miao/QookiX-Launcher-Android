@@ -92,6 +92,32 @@ pub fn wifi_ipv4() -> Option<String> {
     android::call_activity_str("wifiIpv4", "()Ljava/lang/String;").filter(|s| !s.is_empty())
 }
 
+/// 系统「电池优化」是否已对本应用放行（`MainActivity.isBatteryUnrestricted`）。
+///
+/// false = 后台服务可能被 ROM 的省电策略掐掉（ColorOS/OnePlus 息屏一会儿就动手），
+/// 表现是「开服玩一会儿服自己没了」。`foregroundServiceType=specialUse` 只挡得住
+/// Android 15 的 6h/24h 硬上限，**挡不住 ROM 自己的省电策略**。
+#[cfg(target_os = "android")]
+pub fn is_battery_unrestricted() -> bool {
+    android::call_activity_str("isBatteryUnrestricted", "()Ljava/lang/String;").as_deref() == Some("1")
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn is_battery_unrestricted() -> bool {
+    true
+}
+
+/// 弹系统「忽略电池优化」请求页（`MainActivity.requestIgnoreBatteryOptimizations`）。
+///
+/// 用户点「允许」后长期有效。不引导的话用户根本不知道要去设置里放行，也就一直被掐。
+#[cfg(target_os = "android")]
+pub fn request_ignore_battery_optimizations() {
+    let _ = android::call_activity("requestIgnoreBatteryOptimizations", "()V", None);
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn request_ignore_battery_optimizations() {}
+
 #[cfg(not(target_os = "android"))]
 pub fn wifi_ipv4() -> Option<String> {
     None

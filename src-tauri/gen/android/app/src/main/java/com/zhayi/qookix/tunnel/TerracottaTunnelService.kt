@@ -325,13 +325,17 @@ class TerracottaTunnelService : Service() {
      * 只在 logcat 留一行 W/TcTunnel）。
      */
     private fun startForegroundCompat(n: android.app.Notification) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        // 类型必须与 manifest 的 foregroundServiceType 一致（Android 14+ 校验，不匹配就抛
+        // IllegalArgumentException 直接崩进程）。用 specialUse 而不是 dataSync：
+        // dataSync 在 Android 15+ 有 6h/24h 硬上限，开着房被系统停掉隧道就断了。
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
                 n,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
             )
         } else {
+            // Android 13 及以下不认识 specialUse，走 2 参重载由平台按 manifest 取类型
             startForeground(NOTIFICATION_ID, n)
         }
     }

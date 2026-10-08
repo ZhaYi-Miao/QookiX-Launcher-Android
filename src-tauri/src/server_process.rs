@@ -118,6 +118,45 @@ fn server_tmp_dir(work_dir: &str) -> String {
     dir.to_string_lossy().to_string()
 }
 
+/// 设备当前**可用**内存（MB）。读 `/proc/meminfo` 的 `MemAvailable`。
+///
+/// 用 `MemAvailable` 而不是 `MemTotal`：后者把内核收回、内核仍保留的内存也算进来，
+/// 会严重高估「真能拿来分配」的量 —— 这一点在手机上尤其致命（按 MemTotal 给 JVM 设堆，
+/// 结果是系统先动手 lowmemorykiller）。
+pub fn device_available_memory_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb / 1024);
+        }
+    }
+    None
+}
+
+/// 服务端 `-Xmx` 的最终值：**不超过设备当前可用内存的 60%**，且不低于 512MB。
+///
+/// ## 为什么必须钳制
+///
+/// 手机上「总内存」不是能全部分给服务端的钱：主进程（Rust + WebView）要几百 MB、
+/// `:tunnel` 陶瓦隧道几十 MB、系统与前台服务要留余量、还有相机/GPU 等其它进程。
+/// 用户按「总内存的一半」填一个看着合理的数，JVM 会照 `-Xmx` 去预留，于是**系统先动手**：
+/// lowmemorykiller 把 :server（甚至主进程）杀掉 —— 表现是「开服后过一会儿应用被杀 /
+/// 服务器自己没了」，logcat 里能看到 `low watermark is breached`。
+/// 竞品 Anvil-MC 也做了「内存钳制 + 内存看门狗」这一层。
+///
+/// 60% 是留给非服务端的余量；下限 512MB —— 低于这个数的 Minecraft 服务端基本跑不动
+/// （加载世界就 OOM），与其让它起来就崩，不如给一个能活的最小值。
+fn clamp_server_heap_mb(requested_mb: u32) -> u32 {
+    const MIN_HEAP_MB: u32 = 512;
+    // 读不到就**不干预**：宁可按用户填的值启动（顶多被杀），也不要凭空砍配置。
+    let Some(avail_mb) = device_available_memory_mb() else {
+        return requested_mb;
+    };
+    let cap = ((avail_mb as f64) * 0.6) as u32;
+    requested_mb.min(cap.max(MIN_HEAP_MB))
+}
+
 fn rand_token() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
@@ -566,8 +605,17 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
             // 「预览」，排查「`-D` 参数到底有没有传进去」时从日志里根本看不出来
             // （2026-10-08 查 JNA 临时目录问题时就被它误导过一次）。
             let tmp_dir = server_tmp_dir(&spec2.work_dir);
+            // 堆上限按**设备当前可用内存**钳制，不照抄用户填的值（理由见 clamp_server_heap_mb）。
+            // 钳制后的真实值会出现在下面的启动日志里，所以「实际跑了多少内存」始终查得到。
+            let xmx_mb = clamp_server_heap_mb(spec2.xmx_mb);
+            if xmx_mb != spec2.xmx_mb {
+                tracing::warn!(
+                    "[server] -Xmx 由 {}M 钳到 {xmx_mb}M：设备可用内存不足，避免被 lowmemorykiller 杀",
+                    spec2.xmx_mb
+                );
+            }
             let jvm_args = vec![
-                format!("-Xmx{}M", spec2.xmx_mb),
+                format!("-Xmx{xmx_mb}M"),
                 // -Xms 用配置里的「最小内存」，但要夹紧：
                 // ① 下限 256M —— 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server
                 //    起步就占 500MB），主进程 + :tunnel + :server 一起会被
@@ -575,7 +623,7 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                 // ② 上限不超过 -Xmx —— 配置里的 min_memory_mb 默认值可能比用户设的
                 //    max 还大（实测新建服就是 min=1024 / max=512），照抄会让 JVM
                 //    启动即报「初始堆大于最大堆」而拒绝启动。
-                format!("-Xms{}M", spec2.xmin_mb.clamp(256, spec2.xmx_mb)),
+                format!("-Xms{}M", spec2.xmin_mb.clamp(256, xmx_mb)),
                 "-XX:+UseG1GC".to_string(),
                 "-Dfile.encoding=UTF-8".to_string(),
                 // 服务端不需要窗口
@@ -598,6 +646,13 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                 // 插件里凡是用 JNA / 落临时文件的也会各种诡异失败。
                 format!("-Djava.io.tmpdir={tmp_dir}"),
                 format!("-Djna.tmpdir={tmp_dir}"),
+                // **关掉 JVM 对 jar/zip 的内存映射**。
+                // JVM 读 jar 靠 mmap，而 Android 的 bionic 上 mmap 行为和桌面差异很大
+                // （页大小、文件锁、写回时机），容易出现「类加载到一半失败」「随机崩溃」
+                // 「NoSuchMethodError / NoClassDefFoundError 之类找不到的怪错」这类
+                // 很难定位的问题。关掉后改走 read + copy，代价是启动和首次读盘慢一点，
+                // 开服场景完全值得换。竞品 Anvil-MC 的服务端 JVM 也设了同一个参数。
+                "-Dsun.zip.disableMemoryMapping=true".to_string(),
             ];
             // JvmLauncher::launch 成功时会把自己的 jre_home 写进内部 state，
             // /stop 时 JvmLauncher::shutdown() 直接从那里取，不用在这里传。

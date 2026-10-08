@@ -581,7 +581,15 @@ export const api = {
   readHostedServerLog: (id: string) => invoke<string[]>("read_hosted_server_log", { id }),
     /** 联机地址（WiFi IP:端口）；未连 WiFi 时为 null */
     hostedServerAddress: (id: string) =>
-      invoke<string | null>("hosted_server_address", { id }, { silent: true }),
+        invoke<string | null>("hosted_server_address", { id }, { silent: true }),
+      /** 设备当前可用内存（MB）：用来提示「服务端内存最多会被用到多少」 */
+        deviceAvailableMemory: () =>
+          invoke<number | null>("device_available_memory_mb", undefined, { silent: true }),
+        /** 电池优化是否已放行；false = 后台服务可能被 ROM 省电策略掐掉 */
+        batteryUnrestricted: () => invoke<boolean>("battery_unrestricted", undefined, { silent: true }),
+        /** 弹系统「忽略电池优化」请求页（用户点「允许」后长期有效） */
+        requestBatteryUnrestricted: () =>
+          invoke<void>("request_battery_unrestricted", undefined, { silent: true }),
     /** 执行一条服务端控制台命令（RCON），返回服务端输出 */
     serverConsoleCommand: (id: string, command: string) =>
       invoke<string>("server_console_command", { id, command }),

@@ -49,6 +49,17 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!--
+      电池优化（Doze / App Standby）豁免。
+      服务器跑在 `:server` 前台服务里，但 ColorOS / OnePlus 这类 ROM 的省电策略会在
+      息屏一段时间后把**不在白名单**的应用的后台服务掐掉 —— 表现就是「开服玩一会儿，
+      服自己没了、通知也消失」。
+      ⚠️ 这条权限**不会自动生效**：系统会弹窗让用户点「允许」，我们只负责引导
+      （`MainActivity.requestIgnoreBatteryOptimizations`）。不引导的话用户根本不知道
+      要去设置里放行，也就一直被掐。竞品 Anvil-MC 也申请了这条。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
       陶瓦联机的 VPN（TUN）。
 
       EasyTier 的**数据面**必须走 TUN：房主把mesh 上的入站流量转成「连本机 25565」，
@@ -218,8 +229,13 @@
         <service
             android:name=".tunnel.TerracottaTunnelService"
             android:exported="false"
-            android:foregroundServiceType="dataSync"
-            android:process=":tunnel" />
+            android:foregroundServiceType="specialUse"
+            android:process=":tunnel">
+            <!-- specialUse 必须说明具体用途（Android 14+ 强制要求，否则装不上/被杀） -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持 Minecraft 联机隧道（陶瓦/EasyTier 房间）常驻，使房间码与对外地址持续可用" />
+        </service>
 
         <!-- 陶瓦联机的 VPN（TUN）：必须与 :tunnel 同进程，详见上方 BIND_VPN_SERVICE 处的说明 -->
         <service
@@ -247,8 +263,17 @@
             android:name=".services.ServerService"
             android:exported="false"
             android:process=":server"
-            android:foregroundServiceType="dataSync"
-            android:stopWithTask="false" />
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <!-- 同上：specialUse 要带 subtype 说明。
+                 之前这里是 dataSync，在 Android 15+ 有 6h/24h 硬上限，
+                 长期开服会被系统停掉（表现「玩一会儿服就没了」）。
+                 注意 ServerService.startForegroundCompat() 里传的运行时类型
+                 必须同步改成 FOREGROUND_SERVICE_TYPE_SPECIAL_USE，否则会崩。 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="托管用户自行创建的 Minecraft 服务端，需要以后台进程长时间运行 Java 服务端 JVM" />
+        </service>
 
         <provider
           android:name="androidx.core.content.FileProvider"

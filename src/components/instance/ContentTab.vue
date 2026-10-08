@@ -69,15 +69,18 @@ function openActions(item: ContentItem) {
   actionTarget.value = item;
 }
 
-/** 执行动作并关闭面板（面板里点完还停在那会挡住结果） */
-async function runAction(fn: () => unknown) {
+/**
+ * 执行动作并关闭面板（面板里点完还停在那会挡住结果）。
+ *
+ * **目标条目必须作为参数传给 fn**：原来模板写 `runAction(() => toggleContent(actionTarget!))`，
+ * 闭包里的 `actionTarget` 是模板 ref、调用时才解包 —— 而 runAction 在调用前已把它置 null，
+ * 所有动作实际拿到 null（KeysTab 的重命名就是这样坏的，同款写法）。
+ */
+async function runAction(fn: (t: ContentItem) => unknown) {
   const target = actionTarget.value;
   actionTarget.value = null;
-  try {
-    await fn();
-  } finally {
-    void target;
-  }
+  if (!target) return;
+  await fn(target);
 }
 
 const filteredItems = computed(() => {
@@ -490,26 +493,26 @@ defineExpose({
         <button
           v-if="updates[actionTarget.record.filename]"
           class="ct-act primary"
-          @click="runAction(() => applyUpdate(updates[actionTarget!.record.filename]))"
+          @click="runAction((t) => applyUpdate(updates[t.record.filename]))"
         >
           <IconDownload />{{ $t("instance-content.update-to", { p1: updates[actionTarget.record.filename].latestVersion }) }}
         </button>
         <button
           v-if="(actionTarget.record.source === 'modrinth' || actionTarget.record.source === 'curseforge') && actionTarget.record.project_id"
           class="ct-act"
-          @click="runAction(() => openSwitchVersion(actionTarget!))"
+          @click="runAction(openSwitchVersion)"
         >
           <IconRepeat />{{ $t("instance-content.switch-version") }}
         </button>
-        <button class="ct-act" @click="runAction(() => router.push({ name: 'browse', query: buildModSearchQuery(actionTarget!) }))">
+        <button class="ct-act" @click="runAction((t) => router.push({ name: 'browse', query: buildModSearchQuery(t) }))">
           <IconSearch />{{ $t("instance-content.search-in-browse") }}
         </button>
-        <button class="ct-act" @click="runAction(() => toggleContent(actionTarget!))">
+        <button class="ct-act" @click="runAction(toggleContent)">
           <IconCheck v-if="!actionTarget.record.enabled" />
           <IconClose v-else />
           {{ actionTarget.record.enabled ? $t("instance-content.disable") : $t("instance-content.enable") }}
         </button>
-        <button class="ct-act danger" @click="runAction(() => removeContent(actionTarget!))">
+        <button class="ct-act danger" @click="runAction(removeContent)">
           <IconTrash />{{ $t("account-chip.positive-text") }}
         </button>
       </div>

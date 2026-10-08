@@ -249,9 +249,18 @@ class ServerService : Service() {
     }
 
     private fun startForegroundCompat(n: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        // 传的类型**必须和 manifest 的 foregroundServiceType 一致**：Android 14+ 会校验
+        // 「运行时类型是不是 manifest 声明类型的子集」，不是就抛 IllegalArgumentException
+        // （未捕获 → 直接崩进程）。所以下面两处（manifest + 这里）必须同时改。
+        //
+        // 为什么用 specialUse 而不是 dataSync：dataSync 在 Android 15+ 有「6 小时 / 24 小时」
+        // 的硬上限，超时后系统会停掉这个前台服务 —— 对「长期挂着的开服」是致命的
+        // （表现就是玩一会儿服务器就没了）。specialUse 没有这个上限，正合这里。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
+            // Android 13 及以下根本不认识 specialUse 这个类型，走 2 参重载 ——
+            // 由平台自己按 manifest 取类型，不会出现「运行时类型不匹配」。
             startForeground(NOTIF_ID, n)
         }
     }

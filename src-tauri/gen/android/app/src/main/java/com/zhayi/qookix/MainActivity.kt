@@ -577,6 +577,53 @@ class MainActivity : TauriActivity() {
     fun vpnConsentGranted(): String =
       if (runCatching { android.net.VpnService.prepare(this) == null }.getOrDefault(false)) "1" else "0"
 
+    // ── 电池优化豁免 ──────────────────────────────────────────────────
+
+    /**
+     * 系统「电池优化」是否已对本应用放行（"1"/"0"）。
+     *
+     * 服务器跑在 `:server` 前台服务里，但 ColorOS / OnePlus 的省电策略会在息屏一段时间后
+     * 把**不在白名单**的应用的后台服务掐掉 —— 表现就是「开服玩一会儿，服自己没了、
+     * 通知也消失了」。`foregroundServiceType=specialUse` 只是绕开了 Android 15 的
+     * 6h/24h 硬上限，**挡不住 ROM 自己的省电策略**。
+     */
+    fun isBatteryUnrestricted(): String {
+      val pm = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+          ?: return "0"
+      val ok = runCatching { pm.isIgnoringBatteryOptimizations(packageName) }.getOrDefault(false)
+      return if (ok) "1" else "0"
+    }
+
+    /**
+     * 弹系统的「忽略电池优化」请求页（用户点「允许」后长期生效）。
+     *
+     * 少数 ROM 没有这个页面（抛 ActivityNotFoundException），退一步打开应用详情页 ——
+     * 那里也能手动放行，只是多一步。总比什么都不做、让服务被悄悄掐掉强。
+     */
+    fun requestIgnoreBatteryOptimizations() {
+      runOnUiThread {
+        val pkg = "package:$packageName"
+        val launched = runCatching {
+          startActivity(
+            android.content.Intent(
+              android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+              android.net.Uri.parse(pkg),
+            )
+          )
+        }.isSuccess
+        if (!launched) {
+          runCatching {
+            startActivity(
+              android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.parse(pkg),
+              )
+            )
+          }
+        }
+      }
+    }
+
     // ── 导出实例日志 ────────────────────────────────────────────────────
 
   /**

@@ -1048,27 +1048,73 @@ async fn download_sha1(
     Err("下载未完成".to_string())
 }
 
-/** Fabric 服务端安装器（官方 meta API） */
+/**
+ * 下载 Fabric 服务端（官方 meta API）。
+ *
+ * **直接下 meta 组装好的 `fabric-server-launch.jar`**，而不是安装器。
+ *
+ * 原来只下 `fabric-installer.jar`（约 1MB，几秒就完）—— 但注释里说的
+ * 「Stage 3 再接安装流程」**根本不存在**：全仓没有任何代码会去运行这个安装器，
+ * 而 `core_installed()` 只认 `server.jar` / `fabric-server-launch*.jar`。
+ * 于是 Fabric 服是一条死路，用户的实测体验就是：
+ *   「下载核心」秒完成 → 按钮变「启动」→ 点启动 → 「还没下载服务端核心」。
+ *
+ * `fabric-server-launch.jar` 自带 Main-Class（`server_process.rs::read_main_class`
+ * 从 manifest 读，不硬编码），首次启动会自己把 libraries 与原版 server jar
+ * 拉下来 —— 与官方「java -jar fabric-server-launch.jar」用法等价。
+ */
 async fn download_fabric(
     client: &reqwest::Client,
     id: &str,
-    // 目前按「最新安装器」下，版本号暂时用不上；保留参数是为了调用方语义完整（以后按版本取）
-    _mc_version: &str,
+    mc_version: &str,
 ) -> Result<(), String> {
     let mc = meta_client().await?;
-    let meta = get_json_retry(&mc, "https://meta.fabricmc.net/v2/versions/installer", 4)
+    // loader 版本：取第一个 stable；整个列表都没标 stable 就退回第一个
+    let loaders = get_json_retry(&mc, "https://meta.fabricmc.net/v2/versions/loader", 4)
         .await
-        .map_err(|e| format!("获取 Fabric 版本信息失败: {e}"))?;
-    let url = meta
+        .map_err(|e| format!("获取 Fabric loader 版本失败: {e}"))?;
+    let loader = loaders
+        .as_array()
+        .and_then(|a| {
+            a.iter()
+                .find(|v| v.get("stable").and_then(|s| s.as_bool()) == Some(true))
+                .or_else(|| a.first())
+        })
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Fabric loader 列表为空".to_string())?
+        .to_string();
+    // installer 版本：取最新的（第一个）
+    let installers = get_json_retry(&mc, "https://meta.fabricmc.net/v2/versions/installer", 4)
+        .await
+        .map_err(|e| format!("获取 Fabric installer 版本失败: {e}"))?;
+    let installer = installers
         .as_array()
         .and_then(|a| a.first())
-        .and_then(|v| v.get("url"))
+        .and_then(|v| v.get("version"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "Fabric 安装器列表为空".to_string())?
+        .ok_or_else(|| "Fabric installer 列表为空".to_string())?
         .to_string();
+
     let dir = server_dir(id)?;
-    download_verified(client, &url, &dir.join("fabric-installer.jar"), None).await?;
-    // 顺便写一份 server.properties 里的推荐项（Fabric 也认）
+    let dest = dir.join("fabric-server-launch.jar");
+    // 已有非空 launcher 就不重下：重复点「安装核心」秒回（对齐 paper/vanilla 的跳过逻辑）
+    if std::fs::metadata(&dest).map(|m| m.len() > 0).unwrap_or(false) {
+        tracing::info!("[core] Fabric launcher 已存在，跳过下载");
+        return Ok(());
+    }
+    let url = format!(
+        "https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader}/{installer}/server/jar"
+    );
+    if let Err(e) = download_verified(client, &url, &dest, None).await {
+        // 404 = 这个 MC 版本还没有对应的 loader 组合，如实说清而不是甩一条 HTTP 码
+        if e.contains("404") {
+            return Err(format!(
+                "Fabric 还没有支持 {mc_version} 的服务端（loader {loader}），换个 MC 版本试试"
+            ));
+        }
+        return Err(format!("下载 Fabric 服务端失败: {e}"));
+    }
     Ok(())
 }
 
@@ -1102,7 +1148,7 @@ lazy_static::lazy_static! {
     static ref INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
 
-/// 下载/安装服务端核心。Paper 与原版是单文件；Fabric 先下安装器（Stage 3 再接安装流程）。
+/// 下载/安装服务端核心。Paper 与原版是单文件；Fabric 下组装好的 launcher jar。
 #[tauri::command]
 pub async fn install_hosted_server_core(id: String) -> Result<String, String> {
     let _guard = INSTALL_LOCK.lock().await;
@@ -1116,7 +1162,7 @@ pub async fn install_hosted_server_core(id: String) -> Result<String, String> {
         }
         ServerCore::Fabric => {
             download_fabric(&client, &id, &s.mc_version).await?;
-            "fabric-installer.jar".to_string()
+            "fabric-server-launch.jar".to_string()
         }
         other => {
             return Err(format!(
@@ -1458,6 +1504,28 @@ pub fn hosted_server_address(id: String) -> Option<String> {
     let s = get_server(&id).ok()?;
     let ip = local_wifi_ip()?;
     Some(format!("{ip}:{}", s.port))
+}
+
+/// 设备当前**可用**内存（MB）。界面用它提示「服务端内存最多会被用到多少」。
+///
+/// 配合 `server_process::clamp_server_heap_mb` 的钳制。只钳制不提示的话，用户会以为
+/// 自己填的 4G 在跑、实际只有 1.5G，出问题都不知道该调哪个旋钮。
+#[tauri::command]
+pub fn device_available_memory_mb() -> Option<u64> {
+    crate::server_process::device_available_memory_mb()
+}
+
+/// 系统「电池优化」是否已对本应用放行。false = 后台服务可能被 ROM 省电策略掐掉
+/// （ColorOS/OnePlus 息屏一会儿就动手），表现是「开服玩一会儿服自己没了」。
+#[tauri::command]
+pub fn battery_unrestricted() -> bool {
+    crate::android_bridge::is_battery_unrestricted()
+}
+
+/// 弹系统「忽略电池优化」请求页，用户点「允许」后长期有效。
+#[tauri::command]
+pub fn request_battery_unrestricted() {
+    crate::android_bridge::request_ignore_battery_optimizations()
 }
 
 /// 读 wlan0 的 IPv4（拿不到就 None，UI 显示「未连接 WiFi」）

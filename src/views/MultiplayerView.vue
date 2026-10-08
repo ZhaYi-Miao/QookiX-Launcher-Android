@@ -8,7 +8,7 @@ import { useServersStore } from "../stores/servers";
 import { useAccountsStore } from "../stores/accounts";
 import { api } from "../api";
 import { Button as VanButton, Empty as VanEmpty } from "vant";
-import { IconPlus } from "../components/icons";
+import { IconFolder, IconPlus, IconSettings, IconTrash } from "../components/icons";
 import AppPopup from "../ui/AppPopup.vue";
 import AppInput from "../ui/AppInput.vue";
 import AppSelect from "../ui/AppSelect.vue";
@@ -19,9 +19,10 @@ const message = useMessage();
 const dialog = useDialog();
 const router = useRouter();
 
-/** 进入服务器详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数） */
-function openDetail(id: string) {
-  void router.push(`/multiplayer/${id}`);
+/** 进入服务器详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数）。
+ *  `tab` 可选：卡片上的「文件 / 设置」图标直达对应页签，不用进了详情页再翻。 */
+function openDetail(id: string, tab?: string) {
+  void router.push(tab ? `/multiplayer/${id}?tab=${tab}` : `/multiplayer/${id}`);
 }
 const showCreate = ref(false);const form = ref({ name: "", core: "paper", mcVersion: "" });
 const saving = ref(false);
@@ -338,35 +339,72 @@ onBeforeUnmount(() => {
     <!-- 「创建服务器」按钮必须**常驻**：以前它只长在下面的 van-empty 里，
          于是列表一旦有了一台服务器，空状态消失、按钮跟着消失，
          就再也点不出第二台的创建入口了。 -->
-    <div v-if="servers.servers.length" class="mp-top">
-      <span class="mp-count">{{ $t("multiplayer.servers-count", { p1: servers.servers.length }) }}</span>
-      <van-button size="small" type="primary" @click="showCreate = true">
-        <IconPlus /> {{ $t("title-bar.new-server") }}
-      </van-button>
-    </div>
-
-    <div v-if="servers.servers.length" class="list">
-      <div v-for="s in servers.servers" :key="s.id" class="srv glass">
-        <!-- 整块可点进详情页（控制面板：状态 / 日志 / 控制台 / 联机地址 / 参数）。
-             没有这个入口的话，服务器详情页只能靠手输路由到达，等于进不去。 -->
-        <div class="srv-main" role="button" tabindex="0" @click="openDetail(s.id)" @keydown.enter="openDetail(s.id)">
-          <div class="srv-name">{{ s.name }}</div>
-          <div class="srv-meta">{{ s.core }} · {{ s.mc_version }} · :{{ s.port }}</div>
-        </div>
-        <van-button size="small" :type="servers.isRunning(s.id) ? 'default' : 'primary'" :loading="starting === s.id" @click="toggleRun(s.id)">
-          {{ servers.isRunning(s.id) ? $t("multiplayer.stop") : $t("instance-card.launch") }}
+    <!-- ── 我的服务器 ──────────────────────────────────────────────────
+       分区标题照竞品 Anvil 的做法：一页拆成「服务器」和「陶瓦联机」两个明确的区，
+       各带自己的标题行，不再混在一列里。 -->
+    <section class="sec">
+      <div class="sec-head">
+        <h2 class="sec-title">{{ $t("multiplayer.sec-servers") }}</h2>
+        <van-button size="small" type="primary" @click="showCreate = true">
+          <IconPlus /> {{ $t("title-bar.new-server") }}
         </van-button>
-        <van-button size="small" @click="confirmRemove(s)">{{ $t("common.delete") }}</van-button>
       </div>
-    </div>
-    <van-empty v-else :description="$t('instance-saves.no-servers')">
-      <van-button type="primary" @click="showCreate = true"><IconPlus /> {{ $t("title-bar.new-server") }}</van-button>
-    </van-empty>
+
+      <div v-if="servers.servers.length" class="list">
+        <div
+          v-for="s in servers.servers"
+          :key="s.id"
+          class="srv glass"
+          role="button"
+          tabindex="0"
+          @click="openDetail(s.id)"
+          @keydown.enter="openDetail(s.id)"
+        >
+          <!-- 状态行：一个点 + 文字，一眼看出在不在跑 -->
+          <div class="srv-state">
+            <span class="srv-dot" :class="{ on: servers.isRunning(s.id) }"></span>
+            {{ servers.isRunning(s.id) ? $t("multiplayer.running") : $t("multiplayer.offline") }}
+          </div>
+          <div class="srv-name">{{ s.name }}</div>
+          <div class="srv-meta">{{ s.core }} {{ s.mc_version }} · :{{ s.port }}</div>
+          <!-- 操作行：**视觉权重 = 操作频率**（照 Anvil 的卡片逻辑）——
+               启动给大面积，文件/设置收成图标，删除用最弱对比。
+               ⚠️ 内部按钮必须 .stop：整张卡可点进详情，不拦的话点「启动」会顺带跳页。 -->
+          <div class="srv-acts">
+            <van-button
+              class="run"
+              size="small"
+              :type="servers.isRunning(s.id) ? 'default' : 'primary'"
+              :loading="starting === s.id"
+              @click.stop="toggleRun(s.id)"
+            >
+              {{ servers.isRunning(s.id) ? $t("multiplayer.stop") : $t("instance-card.launch") }}
+            </van-button>
+            <button class="srv-ico" :aria-label="$t('instance-detail.files')" @click.stop="openDetail(s.id, 'files')">
+              <IconFolder />
+            </button>
+            <button class="srv-ico" :aria-label="$t('router.settings')" @click.stop="openDetail(s.id, 'config')">
+              <IconSettings />
+            </button>
+            <button class="srv-ico weak" :aria-label="$t('common.delete')" @click.stop="confirmRemove(s)">
+              <IconTrash />
+            </button>
+          </div>
+        </div>
+      </div>
+      <van-empty v-else :description="$t('instance-saves.no-servers')">
+        <van-button type="primary" @click="showCreate = true"><IconPlus /> {{ $t("title-bar.new-server") }}</van-button>
+      </van-empty>
+    </section>
 
     <!-- ── 陶瓦联机（Terracotta）：和朋友异地联机 ──────────────────────
          .so 跑在独立进程 :tunnel，主进程只通过 localhost HTTP 通信（不链接它，
          这样启动器保持 GPL-3.0，署名见本页底部与设置→第三方声明）。 -->
-    <section class="tc glass">
+    <section class="sec">
+      <div class="sec-head">
+        <h2 class="sec-title">{{ $t("multiplayer.sec-terracotta") }}</h2>
+      </div>
+      <section class="tc glass">
       <div class="tc-head">
         <span class="tc-title">{{ $t("terracotta.title") }}</span>
         <span class="tc-dot" :class="tcState"></span>
@@ -403,6 +441,7 @@ onBeforeUnmount(() => {
       <p class="tc-credit">
         {{ $t("terracotta.credit") }}
       </p>
+      </section>
     </section>
 
     <app-popup :show="showCreate" position="bottom" round @update:show="(v: boolean) => (showCreate = v)">
@@ -436,31 +475,91 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
 }
-.mp-top {
+/* ── 分区（照 Anvil 的「一页两区」逻辑：服务器 / 陶瓦联机）── */
+.sec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sec-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.mp-count {
-  font-size: 13px;
-  color: var(--text-3);
+.sec-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-1);
 }
 .srv {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 12px 14px;
 }
-.srv-main {
-  flex: 1;
-  min-width: 0;
-  /* 可点进详情：加按压反馈，否则用户不知道这块能点 */
+/* 整张卡可点进详情：加按压反馈，否则用户不知道这块能点 */
+.srv {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.srv-main:active {
+.srv:active {
+  opacity: 0.7;
+}
+/* 状态行：一个点 + 文字（离线灰点、运行中主题色点带光晕） */
+.srv-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.srv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.srv-dot.on {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+/* 操作行：启动占大头，文件/设置/删除收成图标按钮 */
+.srv-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.srv-acts .run {
+  flex: 1;
+}
+.srv-ico {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.srv-ico:active {
   opacity: 0.6;
+}
+/* 删除：最弱对比 —— 它是破坏性操作，但不该和「启动」抢注意力 */
+.srv-ico.weak {
+  color: var(--text-3);
+  border-color: transparent;
+}
+.srv-ico svg {
+  width: 16px;
+  height: 16px;
 }
 .srv-name {
   font-weight: 600;

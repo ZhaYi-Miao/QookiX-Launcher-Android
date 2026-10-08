@@ -154,12 +154,20 @@ function askName(initial: string): Promise<string | null> {
 }
 let renameResolve: ((v: string | null) => void) | null = null;
 
-/** 面板动作统一包装：先收起面板再执行 */
-function runK(fn: () => unknown) {
+/**
+ * 面板动作统一包装：先收起面板再执行。
+ *
+ * **目标名字必须作为参数传给 fn**。原来模板里写的是 `runK(() => openRename(kTarget!))`：
+ * 闭包里的 `kTarget` 是模板 ref，**调用时才解包** —— 而 runK 在调用 fn 之前已经把它置成
+ * null，于是每个动作实际拿到 null。重命名一提交就在 `renameTo.value.trim()` 上抛
+ * TypeError（用户实测「重命名会报错」就是这个）；复制/删除则是拿着 null 去发请求、
+ * 后端报「布局不存在」。SavesTab 的 worldTarget 是正确写法（先捕获再置空），照它改。
+ */
+function runK(fn: (name: string) => unknown) {
   const name = kTarget.value;
   kTarget.value = null;
   if (!name) return;
-  void fn();
+  void fn(name);
 }
 
 const currentLayout = computed(() => layouts.value.find((l) => l.current) ?? null);
@@ -420,22 +428,22 @@ function fmtTime(sec: number): string {
     >
       <div v-if="kTarget" class="k-panel">
         <div class="k-panel-title text-ellipsis">{{ kTarget }}</div>
-        <button class="k-act" :disabled="!!busy" @click="runK(() => editLayout(kTarget!))">
+        <button class="k-act" :disabled="!!busy" @click="runK(editLayout)">
           <IconEdit />{{ $t("instance-keys.edit-layout") }}
         </button>
-        <button class="k-act" :disabled="!!busy" @click="runK(() => exportLayout(kTarget!))">
+        <button class="k-act" :disabled="!!busy" @click="runK(exportLayout)">
           <IconDownload />{{ $t("instance-keys.export") }}
         </button>
-        <button class="k-act" :disabled="!!busy" @click="runK(() => duplicate(kTarget!))">
+        <button class="k-act" :disabled="!!busy" @click="runK(duplicate)">
           <IconCopy />{{ $t("common.copy") }}
         </button>
-        <button class="k-act" :disabled="!!busy" @click="runK(() => openRename(kTarget!))">
+        <button class="k-act" :disabled="!!busy" @click="runK(openRename)">
           <IconEdit />{{ $t("common.rename") }}
         </button>
         <button
           class="k-act danger"
           :disabled="!!busy || kTarget === 'default'"
-          @click="runK(() => remove(kTarget!))"
+          @click="runK(remove)"
         >
           <IconTrash />{{ $t("common.delete") }}
         </button>

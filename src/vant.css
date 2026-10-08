@@ -196,3 +196,21 @@
 #van-layer > * {
   pointer-events: auto;
 }
+
+/*
+ * 滑杆圆钮：`AppSlider.vue` 用 `#button` 插槽自绘气泡，于是 Vant 自带的
+ * `.van-slider__button` 不再渲染，而插槽里的 `.sl-thumb` 没有任何尺寸
+ * —— 结果是**全应用所有滑杆都只剩一条变色轨道、圆钮 0×0 看不见**，
+ * 只能靠拖轨道（好在 AppSlider 补过命中区）。
+ * 这里给圆钮补回尺寸/底色，一处修全局生效。
+ * 取色面板里那份 `:deep(.sl-thumb)` 是更具体的选择器，会覆盖这里的尺寸（18px），
+ * 互不打架。
+ */
+.sl-thumb {
+  position: relative; /* 让气泡（absolute）锚到圆钮上 */
+  width: var(--van-slider-button-width, 20px);
+  height: var(--van-slider-button-height, 20px);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
