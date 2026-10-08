@@ -478,8 +478,9 @@ pub async fn install_version_tracked(
     counter.set_phase("libraries");
     if let Some(libraries) = &version_info.libraries {
         // 手机上装实例慢的主因：原来几百个库是**串行**下的（一个接一个等往返）。
-        // 现在 4 并发（`LIB_CONCURRENCY`），SHA1 校验与取消语义保持不变。
-        const LIB_CONCURRENCY: usize = 4;
+        // 现在 N 并发（并发数读设置里的 `download_threads`，见 `download::file_concurrency`），
+        // SHA1 校验与取消语义保持不变。
+        let concurrency = crate::download::file_concurrency().await;
         let lib_dir = Path::new(&data_dir).join("libraries");
         let jobs: Vec<(String, String, Option<String>)> = libraries
             .iter()
@@ -492,7 +493,7 @@ pub async fn install_version_tracked(
                 ))
             })
             .collect();
-        crate::download::download_files_concurrent(&jobs, LIB_CONCURRENCY, install_cancel.clone())
+        crate::download::download_files_concurrent(&jobs, concurrency, install_cancel.clone())
             .await
             .map_err(|e| cancelled_or(e, ctx, "下载依赖库"))?;
         for lib in libraries {

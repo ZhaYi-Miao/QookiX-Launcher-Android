@@ -340,6 +340,15 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (isInEditor) {
+                    // **逐层退出**：颜色选择器 → 属性面板 → 才问「要不要退出编辑器」。
+                    //
+                    // 原来这里直接 `askToExit()`，于是用户在属性面板里点进「背景颜色 /
+                    // 边框颜色」那层颜色选择器后，按返回键看到的是「您确定要离开？」，
+                    // 一按就把整个编辑器退掉 —— 主观感受就是「点进去退不出来了」
+                    // （2026-10-08 用户反馈）。
+                    // 游戏内这条和 `CustomControlsActivity` 那条是**两处独立代码**，
+                    // 两处都要逐层关（同一个 `ControlLayout.collapseEditLayers()`）。
+                    if (mControlLayout.collapseEditLayers()) return
                     mControlLayout.askToExit(this@GameActivity)
                     return
                 }
@@ -754,7 +763,15 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (isInEditor) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-                if (event.action == KeyEvent.ACTION_DOWN) mControlLayout.askToExit(this)
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    // **逐层退出**，与上面 `onBackPressedDispatcher` 回调同一套逻辑。
+                    //
+                    // 这条是**物理返回键**的通路：它会 `return true` 把事件吃掉，
+                    // 根本走不到 dispatcher —— 所以两处必须都改，否则「手势返回能逐层退、
+                    // 按返回键却直接弹『确定要离开』并退掉整个编辑器」。
+                    // （2026-10-08 用户反馈：在颜色面板里按返回键退不出来。）
+                    if (!mControlLayout.collapseEditLayers()) mControlLayout.askToExit(this)
+                }
                 return true
             }
             return super.dispatchKeyEvent(event)

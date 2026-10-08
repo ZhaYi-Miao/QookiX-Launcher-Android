@@ -52,6 +52,16 @@ public class ControlButton extends TextView implements ControlInterface {
         // 游戏画面明暗不定，给标签加一层很淡的投影，保证任何背景下都读得清
         setShadowLayer(3f, 0f, 1f, 0xAA000000);
 
+        // 编辑模式下点/长按按键是「打开属性面板」（见 ControlInterface#injectTouchEventBehavior），
+        // 这里明确关掉文本相关的交互。用户反馈过「长按按键后按键上的文字被选中，还冒出
+        // 系统的复制/删除菜单和选择手柄」—— 按键只是个按钮，不该有任何文本选择行为。
+        // （触摸事件本来就被 injectTouchEventBehavior 消费掉了，但那是**一个** View 的行为，
+        //  这里从控件本身关掉更保险，也避免以后有人调整触摸逻辑时又漏出来。）
+        setTextIsSelectable(false);
+        setLongClickable(false);
+        setFocusable(false);
+        setFocusableInTouchMode(false);
+
         //setOnLongClickListener(this);
 
         //When a button is created, the width/height has yet to be processed to fit the scaling.

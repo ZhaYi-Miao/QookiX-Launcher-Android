@@ -44,8 +44,34 @@ pub async fn download_file(
 
 /// 分片并发下载的阈值：小于这个大小分片反而得不偿失（多连接握手 + 落盘开销）
 const CHUNK_THRESHOLD: u64 = 8 * 1024 * 1024;
-/// 大文件分片并发数。移动网络 4 条是甜点：再高互相抢带宽，单流反而更慢。
-const CHUNK_THREADS: usize = 4;
+
+/// 并发数的安全范围。下限 1（串行），上限 8：移动网络下再多只会互相抢带宽。
+const CONCURRENCY_MIN: i32 = 1;
+const CONCURRENCY_MAX: i32 = 8;
+
+/// 「文件级并发数」—— 从设置读（`download_threads`），读不到就用 4。
+///
+/// 这个字段和 `download_chunk_threads` **一直存在于 `Settings` 里**（从桌面版移植时
+/// 一起带过来的，`settings.rs` 的读写也都齐），但 Android 侧的下载器从来没用过它们 ——
+/// 从 `version.rs` 到 `download.rs` 全是硬编码 `const LIB_CONCURRENCY: usize = 4`，
+/// 界面上也没有任何可调项。于是用户看到的就是「并行下载没得调」。
+pub async fn file_concurrency() -> usize {
+    match crate::settings::get_settings().await {
+        Ok(s) => s.download_threads.clamp(CONCURRENCY_MIN, CONCURRENCY_MAX) as usize,
+        Err(_) => 4,
+    }
+}
+
+/// 「单文件分片并发数」—— 从设置读（`download_chunk_threads`），读不到就用 2。
+///
+/// 默认比文件级并发**更低**：分片是对同一个文件的同一条链路，条数多了收益递减，
+/// 而且并发的连接都在抢同一份带宽（`download_threads` 管的是「同时下几个文件」）。
+pub async fn chunk_threads() -> usize {
+    match crate::settings::get_settings().await {
+        Ok(s) => s.download_chunk_threads.clamp(CONCURRENCY_MIN, CONCURRENCY_MAX) as usize,
+        Err(_) => 2,
+    }
+}
 
 /// 用 HTTP Range 分片并发下载一个大文件，返回是否成功。
 ///
@@ -62,8 +88,11 @@ async fn try_download_chunked(
     url: &str,
     dest: &Path,
     size: u64,
+    threads: usize,
     cancel: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<bool> {
+    // 调用方传的是设置里的值，这里再夹一次：0 会让下面的循环一片都不下
+    let threads = threads.max(1);
     // 探 Range 支持
     let head = match client.head(url).send().await {
         Ok(r) => r,
@@ -86,9 +115,9 @@ async fn try_download_chunked(
     let file = fs::File::create(dest).await?;
     file.set_len(size).await?;
 
-    let chunk_size = size.div_ceil(CHUNK_THREADS as u64);
+    let chunk_size = size.div_ceil(threads as u64);
     let mut handles = Vec::new();
-    for i in 0..CHUNK_THREADS {
+    for i in 0..threads {
         let start = i as u64 * chunk_size;
         if start >= size {
             break;
@@ -234,7 +263,9 @@ pub async fn download_file_with_cancel(
             chunk_note = "single(no-range)";
             continue;
         }
-        match try_download_chunked(&client, candidate, &dest_path, len, None).await {
+        match try_download_chunked(&client, candidate, &dest_path, len, chunk_threads().await, None)
+            .await
+        {
             Ok(true) => {
                 // 分片下完必须校验：并发写没法边写边算哈希
                 if let Some(expected) = &expected_sha1 {
@@ -522,8 +553,7 @@ pub async fn download_libraries(
 ) -> Result<()> {
     let libraries_dir = Path::new(data_dir).join("libraries");
 
-    // 串行 → 4 并发（与安装流程同一套逻辑，见 download_files_concurrent 的注释）
-    const LIB_CONCURRENCY: usize = 4;
+    // 串行 → N 并发（并发数读设置，见 file_concurrency）
     let jobs: Vec<(String, String, Option<String>)> = libraries
         .iter()
         .filter_map(|lib| {
@@ -542,7 +572,7 @@ pub async fn download_libraries(
         })
         .collect();
 
-    download_files_concurrent(&jobs, LIB_CONCURRENCY, None).await
+    download_files_concurrent(&jobs, file_concurrency().await, None).await
 }
 
 /// 本地文件是否与期望的 SHA1 一致（用于「已存在就跳过」之前的完整性校验）。

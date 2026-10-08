@@ -90,6 +90,38 @@ public class EditControlSideDialog extends SideDialogView {
         buildColorSelector();
         loadAdapter();
         setupRealTimeListeners();
+        applyPanelTextStyle(mDialogContent);
+    }
+
+    /**
+     * 统一属性面板里**非输入框**控件的文字样式。
+     *
+     * 做两件事：
+     *
+     * ① **修文字颜色**。这个面板是从 Pojav 继承来的，里面几十个标签 TextView 都**没有指定
+     *    `android:textColor`**，于是落到主题默认色 —— 在深色面板上表现为**几乎看不清**
+     *    （用户 2026-10-08 反馈：「背景是深色的，字儿也是黑色的」）。这里统一刷成 QookiX 的
+     *    次要文字色（浅灰 `qk_text_2`）。
+     *    `EditText` 要**排除**：输入框的颜色由主题给（面板里那些「168.0」「右键」本来就是亮的），
+     *    改了反而可能影响可用性。
+     *
+     * ② **关掉文本选择**。这是覆盖在游戏画面上的编辑浮层，长按标签弹出系统的
+     *    「复制 / 全选」菜单和选择手柄非常突兀。
+     */
+    private static void applyPanelTextStyle(View root) {
+        if (!(root instanceof ViewGroup)) {
+            if (root instanceof TextView && !(root instanceof EditText)) {
+                TextView tv = (TextView) root;
+                tv.setTextIsSelectable(false);
+                // 用 Context.getColor（API 23+，本项目 minSdk 24），省掉 ContextCompat 依赖
+                tv.setTextColor(tv.getContext().getColor(R.color.qk_text_2));
+            }
+            return;
+        }
+        ViewGroup group = (ViewGroup) root;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            applyPanelTextStyle(group.getChildAt(i));
+        }
     }
 
     @Override

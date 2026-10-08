@@ -419,6 +419,38 @@ public class ControlLayout extends FrameLayout {
 		return true;
 	}
 
+	/**
+	 * 逐层关闭编辑界面：**颜色选择器 → 属性面板**。
+	 *
+	 * 返回 true 表示「这次返回键已经被我处理掉了」（关掉了某一层），调用方
+	 * （{@code CustomControlsActivity.onBackPressed}）就不该再做别的 ——
+	 * 尤其是不能弹「退出编辑器」确认框。
+	 * 两层都没开时返回 false，返回键才会走到「是否退出编辑器」。
+	 *
+	 * 与 `onTouchEvent` 里那段逻辑的区别：那个只在**键盘没显示**时才关面板
+	 * （「第一次收键盘、第二次收面板」的常见交互），而返回键是用户明确的
+	 * 「我要退出去」意图，键盘在不在都该退一层。
+	 */
+	public boolean collapseEditLayers() {
+		// **必须判「面板是否真的在显示」**：`mControlDialog` 一旦被创建就永远非 null
+		// （按钮第一次被点开后就常驻了，只是 `disappear()` 而已）。只判 null 的话，
+		// 第二次之后的返回键会被一直吃掉、`askToExit()` 永远轮不到 ——
+		// 表现成「面板早关了，但怎么按返回键都退不出编辑器」。
+		if (mControlDialog == null || !mControlDialog.isDisplaying()) return false;
+
+		// 名称/尺寸是 EditText，键盘很可能还开着，一起收掉
+		InputMethodManager imm = (InputMethodManager) getContext().getSystemService(INPUT_METHOD_SERVICE);
+		imm.hideSoftInputFromWindow(getWindowToken(), 0);
+
+		// disappearLayer() 内部自己判断：颜色选择器开着就只关它（返回 false），
+		// 否则关属性面板（返回 true）
+		if (mControlDialog.disappearLayer()) {
+			if (mActionRow != null) mActionRow.setFollowedButton(null);
+			if (mHandleView != null) mHandleView.hide();
+		}
+		return true;
+	}
+
 	public void removeEditWindow() {
 		InputMethodManager imm = (InputMethodManager) getContext().getSystemService(INPUT_METHOD_SERVICE);
 

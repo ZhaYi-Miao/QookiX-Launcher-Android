@@ -10,6 +10,7 @@ import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
 import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.activity.OnBackPressedCallback;
 
 import net.kdt.pojavlaunch.customcontrols.ControlData;
 import net.kdt.pojavlaunch.customcontrols.ControlDrawerData;
@@ -82,6 +83,22 @@ public class CustomControlsActivity extends androidx.appcompat.app.AppCompatActi
 		mDrawerLayout = findViewById(R.id.customctrl_drawerlayout);
 		mDrawerNavigationView = findViewById(R.id.customctrl_navigation_view);
 		View mPullDrawerButton = findViewById(R.id.drawer_button);
+
+		// **返回键必须走 `OnBackPressedDispatcher`**。
+		//
+		// manifest 里 `android:enableOnBackInvokedCallback="true"`（Android 13+ 预测式返回），
+		// 这时框架**不再调用** `onBackPressed()` —— 本 Activity 之前只有那个旧通路，
+		// 于是按返回键直接 finish 掉整个编辑器，连 `askToExit()`（保存 / 退出确认）
+		// 都从来没执行过。MainActivity / GameActivity / WryActivity 早就都注册了
+		// dispatcher 回调，这里是最后一个漏掉的。
+		getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+			@Override
+			public void handleOnBackPressed() {
+				// 逐层退出：颜色选择器 → 属性面板 → 才问「要不要退出编辑器」
+				if (mControlLayout != null && mControlLayout.collapseEditLayers()) return;
+				mControlLayout.askToExit(CustomControlsActivity.this);
+			}
+		});
 
 		mPullDrawerButton.setOnClickListener(v -> mDrawerLayout.openDrawer(mDrawerNavigationView));
 				mDrawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
@@ -219,11 +236,17 @@ public class CustomControlsActivity extends androidx.appcompat.app.AppCompatActi
 
 	@Override
 	public void onBackPressed() {
+		// 旧通路（`enableOnBackInvokedCallback` 下不会被调用），保留一份兜底，
+		// 逻辑与上面注册的 dispatcher 回调保持一致。详见那里和 GameActivity 的注释。
+		if (mControlLayout != null && mControlLayout.collapseEditLayers()) return;
 		mControlLayout.askToExit(this);
 	}
 
 	@Override
 	public void exitEditor() {
-		super.onBackPressed();
+		// **不能** `super.onBackPressed()`：那会绕回上面注册的 dispatcher 回调，
+		// 又走一次 `askToExit()`（重复弹框，甚至死循环）。
+		// 这里就是「保存 / 退出」确认之后要真正离开编辑器。
+		finish();
 	}
 }

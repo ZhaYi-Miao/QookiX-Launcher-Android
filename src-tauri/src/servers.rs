@@ -1132,28 +1132,115 @@ pub fn hosted_server_core_installed(id: String) -> bool {
 
 // ── 服务端运行（主进程侧，:server 独立进程配合） ────────────────────────
 
-/// 找一个可用的 JRE：优先用户装的（runtimes/），退回系统 JRE。
-fn find_server_jre() -> Result<String, String> {
-    let data = crate::settings::data_dir_sync()
-        .ok_or_else(|| "数据目录不可用".to_string())?;
-    let runtimes = PathBuf::from(&data).join("runtimes");
-    if let Ok(rd) = std::fs::read_dir(&runtimes) {
-        for e in rd.flatten() {
-            let home = e.path();
-            // 有 libjli.so 才算可用
-            if home.join("lib").join("arm64").join("libjli.so").exists()
-                || home.join("lib").join("libjli.so").exists()
-            {
-                return Ok(home.to_string_lossy().to_string());
+/// 这台服务器需要哪个 Java 版本。
+///
+/// 精确值在版本清单的 `javaVersion` 字段里，但服务器启动**不该强依赖联网清单** ——
+/// 用户完全可能「刚下完核心、开着飞行模式」去启动。所以用本地规则表，规则就是
+/// Minecraft 历史上几次 Java 要求变更的节点：
+///
+/// | MC 版本 | 所需 Java |
+/// |---|---|
+/// | 1.16 及以前 | 8 |
+/// | 1.17 ~ 1.19.x | 17 |
+/// | 1.20.0 ~ 1.20.4 | 17 |
+/// | 1.20.5 ~ 1.21.x | 21 |
+/// | 26.x 起（新版本号方案） | 25 |
+///
+/// 26.3 实测就是 Java 25 —— 用户日志里那行 `runtimes/JRE-25` 即由此而来。
+/// 取不到版本号时按 8 走（最宽松，任何已装 JRE 都能满足它）。
+fn required_java_for_mc(mc_version: &str) -> i32 {
+    let mut it = mc_version.split('.').filter_map(|p| p.parse::<i32>().ok());
+    let major = it.next().unwrap_or(1);
+    let minor = it.next().unwrap_or(0);
+    let patch = it.next().unwrap_or(0);
+    if major != 1 {
+        // 2.x / 26.x 之类的新方案：统一按 Java 25（首个采用新号段的版本就是 26.x）
+        return 25;
+    }
+    if minor >= 21 {
+        return 21;
+    }
+    if minor >= 20 {
+        // 1.20.5 是分界点：之前 17，之后 21
+        return if patch >= 5 { 21 } else { 17 };
+    }
+    if minor >= 17 {
+        return 17;
+    }
+    8
+}
+
+/// 找一个可用的 JRE；一个都没有就按这台服务器需要的版本**自动下载**。
+///
+/// ## 为什么必须自动下载
+///
+/// 游戏启动（`launch.rs`）缺 JRE 会自动下（那套 `JreManager::install`），服务器这边
+/// 原来却是直接报错：
+///
+/// ```text
+/// 没有可用的 Java 运行时：请先在「设置 → 运行环境」里装一个 JRE
+/// ```
+///
+/// 而**设置页根本没有「运行环境」这一项**（只有 常规/外观/下载/内容服务/游戏内/存储/关于）——
+/// 用户照着提示找过去是死路，最后只能靠「先启动一次游戏」把 JRE 顺手带下来，
+/// 而没人会想到这一步。现在与游戏端行为对齐：缺什么就下什么。
+///
+/// 选版本用 `get_compatible_runtime`（要求「已装版本 ≥ 所需版本**且架构匹配**」），
+/// 所以离线时只要本地有够新的 JRE 就直接用，不会无谓联网。
+async fn ensure_server_jre(id: &str, mc_version: &str) -> Result<String, String> {
+    let required = required_java_for_mc(mc_version);
+
+    // 已装的能满足就直接用（离线也能走通这条）
+    if let Ok(Some(rt)) = crate::java::MultiRTManager::get_compatible_runtime(required).await {
+        return Ok(rt.path);
+    }
+
+    let arch = crate::java::get_device_arch();
+    // 先确认这个版本**下得下来**：镜像表里没有的话，报「没有可用的 Java 运行时」
+    // 会让用户以为是自己没装，实际是这个版本我们没有对应包。
+    if let Err(e) = crate::java::resolve_download_url(required, arch) {
+        return Err(format!(
+            "这台服务器（{mc_version}）需要 Java {required}，但镜像里没有 {arch} 对应的包（{e}）。\
+             可以改用其它版本的服务端核心。"
+        ));
+    }
+
+    crate::progress::emit_server_stage(
+        id,
+        &format!("正在下载 Java {required} 运行时（约 27MB）…"),
+    );
+    // 5% 一档地上报：JRE 下载很慢，不报进度用户以为卡死；报太密又会频繁跨 FFI
+    let last_pct = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(-100));
+    let last_pct_progress = last_pct.clone();
+    let progress_id = id.to_string();
+    let phase_id = id.to_string();
+    let installed = crate::java::JreManager::install(
+        required,
+        arch,
+        move |p: f32| {
+            let pct = (p * 100.0).round() as i32;
+            if pct - last_pct_progress.load(std::sync::atomic::Ordering::Relaxed) >= 5 {
+                last_pct_progress.store(pct, std::sync::atomic::Ordering::Relaxed);
+                crate::progress::emit_server_stage(
+                    &progress_id,
+                    &format!("正在下载 Java {required} 运行时 {pct}%"),
+                );
             }
-        }
+        },
+        move |phase| crate::progress::emit_server_stage(&phase_id, phase),
+    )
+    .await
+    .map_err(|e| format!("下载 Java {required} 运行时失败：{e}"))?;
+
+    if !crate::java::JREValidator::validate(&installed)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "Java {required} 解压后找不到 libjli.so（可能下载不完整），请重试或换个网络"
+        ));
     }
-    // 系统 JRE
-    let sys = std::env::var("JAVA_HOME").unwrap_or_default();
-    if !sys.is_empty() {
-        return Ok(sys);
-    }
-    Err("没有可用的 Java 运行时：请先在「设置 → 运行环境」里装一个 JRE".to_string())
+    Ok(installed.path)
 }
 
 
@@ -1441,7 +1528,8 @@ pub async fn start_hosted_server(id: String) -> Result<serde_json::Value, String
     ensure_rcon_props(&dir, s.port)?;
     // 从这一刻起把「正在干什么」报给界面（按钮上直接显示），别让用户对着转圈白等
     crate::progress::emit_server_stage(&id, "正在检查服务端配置…");
-    let jre_home = find_server_jre()?;
+    // 缺 JRE 会自动下载（原来只报一句指向「设置 → 运行环境」的错，而那个入口并不存在）
+    let jre_home = ensure_server_jre(&id, &s.mc_version).await?;
     let base_jar = dir.join("server.jar");
     let base_jar = if base_jar.exists() {
         base_jar

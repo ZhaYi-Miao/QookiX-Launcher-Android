@@ -20,7 +20,9 @@
  * 所以计数器每 500ms 把快照写到 $TMPDIR/perf.txt，面板直接读文件 ——
  * TMPDIR 与 Java 的 cacheDir 是同一个目录，跨实例天然成立。
  *
- * 26.3 的 SDL 路径换帧发生在 SDL 内部，当前没有计数点，FPS 一行会停在 0。
+ * 26.3 的 SDL 路径换帧发生在 SDL 内部（Pojav 的 gl_swap_buffers 不被调用），
+ * 计数点补在 `jvm_hooks/lwjgl_dlopen_hook.c` 的 ndlsym 代理里 ——
+ * 拦 `SDL_GL_SwapWindow`，调完真函数再 perf_frame()。详见 perf_counters.h。
  */
 
 #define PERF_MAX_FRAMES 512

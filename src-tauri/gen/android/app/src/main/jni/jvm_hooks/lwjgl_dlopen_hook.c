@@ -7,6 +7,8 @@
 #include <android/api-level.h>
 
 #include "environ/environ.h"
+// 帧率计数：SDL_GL_SwapWindow 代理里要调 perf_frame()（26.3 的性能面板数据源）
+#include "../perf_counters.h"
 
 #include <dlfcn.h>
 #include <string.h>
@@ -212,6 +214,43 @@ static void qookix_SDL_DestroyWindow(void *window) {
     }
 }
 
+/* ===================== 26.3：帧率计数点 =====================
+ *
+ * 性能面板的帧率来自 `perf_counters.c`，而它只在两个地方被喂数据：
+ *   - `gl_bridge.c`：EGL swap 之后（GL4ES / MobileGlues 路径）
+ *   - `osm_bridge.c`：`ANativeWindow_unlockAndPost` 之后（Zink 路径）
+ * **26.3 都不走** —— 它用 SDL3 自建窗口自绘，换帧发生在 libSDL3 内部，
+ * 于是 `perf.txt` 里 fps 恒为 0，面板上「帧率」勾了也只显示 `--`，
+ * 而 CPU/内存/分辨率（Java 侧自己读的）一切正常 —— 用户看到的就是
+ * 「只有 CPU、内存和分辨率能显示」。
+ *
+ * 修法：MC 26.3 的 SDL 符号也是从 `DynamicLinkLoader.ndlsym` 拿的（LWJGL 的 SDL 绑定），
+ * 就在下面那个已经存在的出口把 **`SDL_GL_SwapWindow`** 换成代理 ——
+ * 它是 SDL 的换帧函数，每帧必经，位置正好等于 gl_bridge 里的 EGL swap。
+ * 其余符号照旧透传，不影响窗口复用那套。
+ */
+typedef int (*sdl_gl_swap_window_fn)(void *);
+
+static int qookix_SDL_GL_SwapWindow(void *window) {
+    static sdl_gl_swap_window_fn real = NULL;
+    static int logged = 0;
+    if (real == NULL) {
+        real = (sdl_gl_swap_window_fn) resolve_sdl_symbol("SDL_GL_SwapWindow");
+        if (real == NULL) {
+            /* 拿不到真函数就别拦：宁可没有帧率，也不能让游戏画不出来 */
+            LOGE("SDL 代理：找不到真正的 SDL_GL_SwapWindow，帧率计数点未生效");
+            return 0;
+        }
+    }
+    if (!logged) {
+        logged = 1;
+        LOGI("SDL 代理：SDL_GL_SwapWindow 已接管（26.3 帧率计数点生效）");
+    }
+    int ret = real(window);
+    perf_frame(); /* 性能面板的帧计数（26.3 / SDL 路径） */
+    return ret;
+}
+
 /** `DynamicLinkLoader.ndlsym` 的替身：只换 SDL 窗口相关的那几个，其余透传。 */
 static jlong ndlsym_bugfix(__attribute__((unused)) JNIEnv *env,
                            __attribute__((unused)) jclass class,
@@ -230,6 +269,10 @@ static jlong ndlsym_bugfix(__attribute__((unused)) JNIEnv *env,
         if (strcmp(name, "SDL_DestroyWindow") == 0) {
             LOGI("SDL 代理：SDL_DestroyWindow 换成忽略销毁版");
             return (jlong) (intptr_t) qookix_SDL_DestroyWindow;
+        }
+        // 帧率计数点：SDL 每帧换帧的必经函数（26.3 的性能面板靠它拿 FPS）
+        if (strcmp(name, "SDL_GL_SwapWindow") == 0) {
+            return (jlong) (intptr_t) qookix_SDL_GL_SwapWindow;
         }
     }
     return (jlong) (intptr_t) dlsym((void *) (intptr_t) handle, name);

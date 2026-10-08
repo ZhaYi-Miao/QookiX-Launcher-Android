@@ -17,12 +17,21 @@ import { api } from "../api";
 /**
  * 「并行下载」两个滑杆的开关。
  *
- * 目前后端是**串行**下载（`download::download_libraries` 逐个 `await`），
- * 单文件分片也没实现，所以滑杆拖了不会有任何效果 —— 先隐藏，
- * 假开关比缺功能更伤（用户会以为自己调过了、然后去排查为什么没用）。
- * 后端实现并发/分片后打开它即可。
+ * **曾经是关着的**，理由是「后端串行下载、分片没实现，拖了不会有任何效果，
+ * 假开关比缺功能更伤」。那个理由**现在已经不成立**：
+ *   - 文件级并发：`download::download_files_concurrent`（`index` 那几百个库走它）
+ *   - 单文件分片：`download::try_download_chunked`（≥8MB 走 HTTP Range 拆段）
+ * 后端也已经改成**读设置**（`download::file_concurrency` / `chunk_threads`），
+ * 所以滑杆是真生效的。上限统一成 8：后端做的是 `clamp(1, 8)`，
+ * 界面给 32 的话拖到 20 实际只有 8 —— 那又变回假开关了。
  */
-const DOWNLOAD_SLIDERS_ENABLED = false;
+const DOWNLOAD_SLIDERS_ENABLED = true;
+
+/**
+ * 并发数的上限，与后端 `download.rs` 的 `CONCURRENCY_MAX = 8` **必须一致**。
+ * 移动网络下再高只会互相抢带宽，单流反而更慢。
+ */
+const CONCURRENCY_MAX = 8;
 
 /**
  * 「手柄死区」滑杆。
@@ -91,7 +100,7 @@ import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
 import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.3.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.3.1 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -1299,26 +1308,21 @@ onUnmounted(() => {
       <!-- 下载 -->
       <div v-show="tab === 'download'" class="settings-pane">
         <div class="grid">
-          <!-- 「并行下载」整张卡片先隐藏。
-               这两个滑杆目前是**假开关**：`download::download_libraries` 是逐个 `await`
-               的串行循环，单文件分片（HTTP Range 并行）根本没实现 —— 拖动它们不会
-               改变任何下载行为。假开关比缺功能更伤（用户会以为自己调过了、在排查为什么没用）。
-               真要做的话：给 `download_libraries` 上并发（信号量限流），分片下载则要
-               在 `download::stream_to_file` 里按 Range 拆段并合并哈希。
-               实现完把 DOWNLOAD_SLIDERS_ENABLED 打开即可。 -->
+          <!-- 「并行下载」：后端已真实生效（见 DOWNLOAD_SLIDERS_ENABLED 的注释）。
+               上限与后端 clamp 保持一致，别给界面更大的值。 -->
           <div v-if="DOWNLOAD_SLIDERS_ENABLED" class="card glass">
             <h3>{{ $t("settings.parallel-download") }}</h3>
             <label class="row-label">{{ $t("settings.concurrent-files", { p1: settings.settings.download_threads }) }}<app-slider
                 v-model:value="settings.settings.download_threads"
                 :min="1"
-                :max="32"
+                :max="CONCURRENCY_MAX"
                 :step="1" />
             </label>
             <p class="hint">{{ $t("settings.parallel-download-desc") }}</p>
             <label class="row-label" style="margin-top: 16px;">{{ $t("settings.chunk-threads", { p1: settings.settings.download_chunk_threads }) }}<app-slider
                 v-model:value="settings.settings.download_chunk_threads"
                 :min="1"
-                :max="16"
+                :max="CONCURRENCY_MAX"
                 :step="1" />
             </label>
             <p class="hint">{{ $t("settings.chunk-threads-desc") }}</p>
@@ -1923,7 +1927,7 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.3.0</span>
+            >v1.3.1</span>
           </div>
           <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>

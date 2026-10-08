@@ -95,12 +95,27 @@ fn server_dir(id: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(base).join("servers").join(id))
 }
 
-/// 启动参数预览（只写进日志，不含敏感信息）
-fn all_jvm_preview(spec: &LaunchSpec) -> Vec<String> {
-    vec![
-        format!("-Duser.dir={}", spec.work_dir),
-        format!("-Xmx{}M", spec.xmx_mb),
-    ]
+/// 服务端 JVM 用的临时目录（保证存在、可写）。
+///
+/// **为什么不能用 `/tmp`**：Android 上 `/tmp` 是系统根的目录，应用进程既没有写权限、
+/// 也不该往里写。默认情况下 JVM 的 `java.io.tmpdir` 就是它，于是任何用临时文件的库
+/// 都会失败 —— 最典型的是 JNA（进而 oshi），Paper 启动时那一大屏
+/// `JNA temporary directory '/tmp' is not writable` 就是这么来的。
+///
+/// 取值顺序：
+///   1. `TMPDIR` 环境变量 —— Android 给每个应用进程都设了它，指向该应用的 cache 目录，
+///      也就是和 Java 侧 `context.getCacheDir()` 同一个地方（`perf_counters.c` 也用它）；
+///   2. 兜底：服务器目录下的 `cache/`（`:server` 进程切换 CWD 后仍能解析）。
+fn server_tmp_dir(work_dir: &str) -> String {
+    let dir = std::env::var("TMPDIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(work_dir).join("cache"));
+    // 建不出来也不致命（真失败了 JNA 会照旧报错，但至少不是必然失败）
+    let _ = std::fs::create_dir_all(&dir);
+    dir.to_string_lossy().to_string()
 }
 
 fn rand_token() -> String {
@@ -545,6 +560,50 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                 tracing::error!("{msg}");
                 let _ = std::fs::write(Path::new(&spec2.work_dir).join("launch-error.txt"), &msg);
             }
+            // JVM 参数在这里先构造好，**因为下面的启动日志要打印真实参数**。
+            //
+            // 原来日志打的是 `all_jvm_preview()` —— 一个只有 `user.dir` + `Xmx` 两项的
+            // 「预览」，排查「`-D` 参数到底有没有传进去」时从日志里根本看不出来
+            // （2026-10-08 查 JNA 临时目录问题时就被它误导过一次）。
+            let tmp_dir = server_tmp_dir(&spec2.work_dir);
+            let jvm_args = vec![
+                format!("-Xmx{}M", spec2.xmx_mb),
+                // -Xms 用配置里的「最小内存」，但要夹紧：
+                // ① 下限 256M —— 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server
+                //    起步就占 500MB），主进程 + :tunnel + :server 一起会被
+                //    lowmemorykiller 杀（logcat: "low watermark is breached"）。
+                // ② 上限不超过 -Xmx —— 配置里的 min_memory_mb 默认值可能比用户设的
+                //    max 还大（实测新建服就是 min=1024 / max=512），照抄会让 JVM
+                //    启动即报「初始堆大于最大堆」而拒绝启动。
+                format!("-Xms{}M", spec2.xmin_mb.clamp(256, spec2.xmx_mb)),
+                "-XX:+UseG1GC".to_string(),
+                "-Dfile.encoding=UTF-8".to_string(),
+                // 服务端不需要窗口
+                "-Djava.awt.headless=true".to_string(),
+                // **让 Paper 跳过它自己的 Java 版本校验**。新版 Paper（26.x）会检查运行时的
+                // 版本串是不是「正式发布版」，而安卓这套自带 JRE 报的是 `25.0.5-internal`
+                // 这种自定义后缀，于是直接被拒：
+                //   Unsupported Java detected (25.0.5-internal) … Only general availability
+                //   versions of Java are supported.
+                // （真机 26.3 实测。）这个属性是 Paper 提供的官方开关，设置后它只警告不拦。
+                // 老版本核心没有这个检查，属性无副作用。
+                "-DPaper.IgnoreJavaVersion=true".to_string(),
+                // 临时目录必须指到应用可写的地方，**`java.io.tmpdir` 和 `jna.tmpdir` 都要**：
+                // JNA 优先看 `jna.tmpdir`，没设才退回 `java.io.tmpdir`。Android 上两者默认
+                // 都是 `/tmp`，而应用没有它的写权限，于是服务端日志里会刷：
+                //   JNA Warning: IOException removing temporary files
+                //   java.io.IOException: JNA temporary directory '/tmp' is not writable
+                //   java.lang.NoClassDefFoundError: Could not initialize class com.sun.jna.Native
+                // 后果不只是难看：**oshi**（Paper 用它采硬件信息）整个初始化失败，
+                // 插件里凡是用 JNA / 落临时文件的也会各种诡异失败。
+                format!("-Djava.io.tmpdir={tmp_dir}"),
+                format!("-Djna.tmpdir={tmp_dir}"),
+            ];
+            // JvmLauncher::launch 成功时会把自己的 jre_home 写进内部 state，
+            // /stop 时 JvmLauncher::shutdown() 直接从那里取，不用在这里传。
+            let mut all_jvm = vec![format!("-Duser.dir={}", spec2.work_dir)];
+            all_jvm.extend(jvm_args);
+
             // **把 stdout/stderr 重定向到文件**。
             //
             // JLI_Launch 起来后 JVM 会自己接管 fd 1/2（游戏那边靠 attach 收集日志），
@@ -574,7 +633,7 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
                     "=== 启动 {} | cwd={} | jvm_args={:?} | args={:?} ===",
                     main_class,
                     spec2.work_dir,
-                    all_jvm_preview(&spec2),
+                    all_jvm,
                     spec2.args
                 );
                 let _ = f.flush();
@@ -589,37 +648,6 @@ pub extern "C" fn Java_com_zhayi_qookix_services_ServerService_nativeStart(
             // 的真正前提，缺了它 JVM 会立刻 abort，且只在 stderr 里留一行
             // UnsatisfiedLinkError（不重定向 stdout 就完全看不见）。
             crate::android_env::preload_jre_libraries(Path::new(&spec2.jre_home));
-
-            let jvm_args = vec![
-                format!("-Xmx{}M", spec2.xmx_mb),
-                // -Xms 用配置里的「最小内存」，但要夹紧：
-                // ① 下限 256M —— 初始堆会**立即**提交给系统（实测 -Xms512M 让 :server
-                //    起步就占 500MB），主进程 + :tunnel + :server 一起会被
-                //    lowmemorykiller 杀（logcat: "low watermark is breached"）。
-                // ② 上限不超过 -Xmx —— 配置里的 min_memory_mb 默认值可能比用户设的
-                //    max 还大（实测新建服就是 min=1024 / max=512），照抄会让 JVM
-                //    启动即报「初始堆大于最大堆」而拒绝启动。
-                format!(
-                    "-Xms{}M",
-                    spec2.xmin_mb.clamp(256, spec2.xmx_mb)
-                ),
-                "-XX:+UseG1GC".to_string(),
-                "-Dfile.encoding=UTF-8".to_string(),
-                // 服务端不需要窗口
-                "-Djava.awt.headless=true".to_string(),
-                // **让 Paper 跳过它自己的 Java 版本校验**。新版 Paper（26.x）会检查运行时的
-                // 版本串是不是「正式发布版」，而安卓这套自带 JRE 报的是 `25.0.5-internal`
-                // 这种自定义后缀，于是直接被拒：
-                //   Unsupported Java detected (25.0.5-internal) … Only general availability
-                //   versions of Java are supported.
-                // （真机 26.3 实测。）这个属性是 Paper 提供的官方开关，设置后它只警告不拦。
-                // 老版本核心没有这个检查，属性无副作用。
-                "-DPaper.IgnoreJavaVersion=true".to_string(),
-            ];
-            // JvmLauncher::launch 成功时会把自己的 jre_home 写进内部 state，
-            // /stop 时 JvmLauncher::shutdown() 直接从那里取，不用在这里传。
-            let mut all_jvm = vec![format!("-Duser.dir={}", spec2.work_dir)];
-            all_jvm.extend(jvm_args);
 
             // 注意：**不要**给 paperclip 加 `-javaagent:<paperclip.jar>`。
             // 它看起来是对的（paperclip 的报错就是这么提示的），但在 JRE-25 安卓版上

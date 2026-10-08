@@ -66,6 +66,15 @@ public class ActionRow extends LinearLayout {
         // This is not pretty code, don't do this.
         for(ActionButtonInterface buttonInterface: actionButtons){
             View button = ((View)(buttonInterface));
+            // 这三个按钮（删除 / 复制 / 加子键）都是 `Button`（即 TextView）：
+            // 关掉文本选择相关的东西，否则长按它们会冒出系统的文本选择菜单
+            // （选中文字 + 选择手柄），跟「游戏内的编辑浮层」完全不搭。
+            if (button instanceof android.widget.TextView) {
+                android.widget.TextView tv = (android.widget.TextView) button;
+                tv.setTextIsSelectable(false);
+                tv.setFocusable(false);
+                tv.setFocusableInTouchMode(false);
+            }
             addView(button, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1F));
         }
 
