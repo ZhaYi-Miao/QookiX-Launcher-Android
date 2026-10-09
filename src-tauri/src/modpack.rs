@@ -3,8 +3,6 @@ use std::path::Path;
 use tokio::fs;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use uuid::Uuid;
-use chrono::Utc;
 use crate::models::*;
 
 const MODRINTH_API: &str = "https://api.modrinth.com/api/v2";
@@ -365,7 +363,52 @@ fn extract_overrides_sync(
     Ok(extracted)
 }
 
-pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
+/// 导入中途失败时的回滚守卫：未 `defuse()` 就 drop 会删掉这个目录。
+///
+/// 只在**结构性失败**（包坏了 / 解压炸了）时生效 —— 那时留下的目录是个打不开的半成品，
+/// 只会在实例列表里多出一个点不动的条目。内容下载阶段的失败不走回滚，见 `import_modpack`。
+struct IncompleteInstance {
+    dir: Option<std::path::PathBuf>,
+}
+
+impl IncompleteInstance {
+    fn new(dir: &std::path::Path) -> Self {
+        Self { dir: Some(dir.to_path_buf()) }
+    }
+    /// 实例已经可用，不要再回滚
+    fn defuse(&mut self) {
+        self.dir = None;
+    }
+}
+
+impl Drop for IncompleteInstance {
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.take() {
+            tracing::warn!("整合包导入中断，回滚实例目录 {}", dir.display());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+/// 整合包导入结果。
+///
+/// `failed` / `skipped_no_url` 不为 0 时界面必须如实提示：只写日志的后果就是
+/// 用户拿着一个缺 mod 的包去启动、进游戏才炸，而错误信息指不到真凶。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModpackImportResult {
+    pub instance: MinecraftProfile,
+    /// overrides 里解出来的文件数
+    pub extracted: usize,
+    /// `files[]` 下载成功的数量
+    pub downloaded: usize,
+    /// `files[]` 下载失败的数量
+    pub failed: usize,
+    /// CurseForge 之类只有 projectID/fileID、拿不到直链而跳过的数量
+    pub skipped_no_url: usize,
+}
+
+pub async fn import_modpack(file_path: &str) -> Result<ModpackImportResult> {
     use std::io::Read;
 
     // 兜底：安卓文件选择器给的是 SAF 的 `content://` URI，对它 `File::open` 必然 ENOENT。
@@ -415,9 +458,25 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
         .unwrap_or("1.20.1")
         .to_string();
     let (loader, loader_version) = parse_loader(&modpack_info);
-    let instance_id = Uuid::new_v4().to_string();
-    let instance_dir = crate::settings::instances_root().await?.join(&instance_id);
-    fs::create_dir_all(&instance_dir).await.context("Failed to create instance directory")?;
+    // 走 `instances::create_instance` 而不是自己建目录 —— 它会**同时**写 `instance.json`。
+    // 这一步以前漏了：本函数建了目录、铺了 overrides，却没写 `instance.json`，
+    // 结果是「导入成功但实例列表里根本没有这个实例」= 白导一场。
+    // 复用创建流程还顺带拿到创建时间、默认分辨率/内存、渲染器「自动」等一整套默认值，
+    // 不必在这条路径上再抄一遍（抄出来的副本迟早和创建页不一致）。
+    let instance = crate::instances::create_instance(serde_json::json!({
+        "name": instance_name.clone(),
+        "mcVersion": mc_version.clone(),
+        "loader": serde_json::to_value(&loader).unwrap_or(serde_json::json!("vanilla")),
+        "loaderVersion": loader_version,
+    }))
+    .await
+    .context("创建实例失败")?;
+    let instance_id = instance.id.clone();
+    let instance_dir = std::path::PathBuf::from(&instance.game_dir);
+
+    // 结构性失败（清单解析不了 / 包坏了 / 解压炸了）要**回滚**：留一个半成品目录
+    // 只会在实例列表里多出一个打不开的条目。内容下载阶段的失败不走这里（见下面）。
+    let mut rollback = IncompleteInstance::new(&instance_dir);
     // `overrides` 字段是**目录名**（默认 "overrides"），不是相对路径，所以前缀是 `{名字}/`。
     // 旧代码拼成 "overrides/overrides"，只靠后面 `starts_with("overrides/")` 兜底才歪打正着。
     let overrides_dir = modpack_info["overrides"]
@@ -478,6 +537,8 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
     //      解压期间前端连进度都刷不动。
     // 这里重新打开一次 zip 而不是把 `archive` move 进闭包：闭包要求 `Send`，
     // 而重开只读一次目录头，代价可忽略。
+    let ctx = crate::progress::TaskCtx::new(&instance_id, &instance_name, "整合包导入");
+    crate::progress::emit_install(&ctx, "extract", "正在解压整合包内容…", 0, 1);
     let zip_path = std::path::PathBuf::from(file_path);
     let instance_dir_for_extract = instance_dir.clone();
     let prefix_for_extract = prefix.clone();
@@ -493,11 +554,17 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
     // ── 下载 `files[]` 里的远程内容（mods / resourcepacks / shaderpacks…）──
     // 走 `download::download_file` 而不是自己发请求，是为了复用镜像改写、SHA1 校验
     // 和「镜像失败回退官方源」那套逻辑。
+    //
+    // 失败**不再只是写日志**：数量如实报给调用方，界面据此提示「有 N 个文件没下下来」。
+    // 但实例不再回滚 —— 几百 MB 的包因为最后两个文件失败就整个丢掉太亏，而且实例本身
+    // 已经可用（游戏本体由 `check_files_on_launch` 在启动时补全，缺的 mod 可在内容页补装）。
+    let mut downloaded = 0usize;
+    let mut failed = 0usize;
     if !pack_files.is_empty() {
-        let ctx = crate::progress::TaskCtx::new(&instance_id, &instance_name, "整合包内容");
         let total = pack_files.len();
-        let mut failed = 0usize;
         for (i, pf) in pack_files.iter().enumerate() {
+            // 下载中心里点了取消就立刻停手（已下好的部分保留）
+            ctx.check_cancelled()?;
             let dest = instance_dir.join(&pf.rel_path);
             crate::progress::emit_install(
                 &ctx,
@@ -506,49 +573,373 @@ pub async fn import_modpack(file_path: &str) -> Result<MinecraftProfile> {
                 i,
                 total,
             );
-            if let Err(e) =
-                crate::download::download_file(&pf.url, &dest.to_string_lossy(), pf.sha1.clone())
-                    .await
+            match crate::download::download_file(
+                &pf.url,
+                &dest.to_string_lossy(),
+                pf.sha1.clone(),
+            )
+            .await
             {
-                failed += 1;
-                tracing::warn!("整合包文件下载失败 {}: {e}", pf.rel_path);
+                Ok(_) => downloaded += 1,
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!("整合包文件下载失败 {}: {e}", pf.rel_path);
+                }
             }
         }
         crate::progress::emit_install_done(
             &ctx,
             failed == 0,
-            &format!("整合包内容：成功 {} / 失败 {failed}", total - failed),
-            total - failed,
+            &format!("整合包内容：成功 {downloaded} / 失败 {failed}"),
+            downloaded,
             total,
         );
-        tracing::info!("整合包内容下载完成：{} 个，失败 {failed} 个", total - failed);
+        tracing::info!("整合包内容下载完成：{downloaded} 个，失败 {failed} 个");
     }
     if no_url_files > 0 {
         tracing::warn!(
             "整合包有 {no_url_files} 个文件没有下载直链（CurseForge 格式需要官方 API），已跳过"
         );
     }
+    // 整包没有 `files[]`（纯 overrides 的离线包）也要把任务收尾，否则下载中心里
+    // 这条任务会一直挂在「进行中」。
+    if pack_files.is_empty() {
+        crate::progress::emit_install_done(&ctx, true, "整合包导入完成", 1, 1);
+    }
 
-    Ok(MinecraftProfile {
-        id: instance_id, name: instance_name, mc_version, loader, loader_version,
-        // 整合包导入不带别名（用户可事后在设置页加，用于 qookix://launch/<别名>）
-        alias: None,
-        created: Utc::now().timestamp(), last_played: None, total_play_time: 0,
-        game_dir: instance_dir.to_string_lossy().to_string(), java_dir: String::new(),
-        java_args: None, game_args: None, resolution: Some((854, 480)),
-        max_memory_mb: Some(4096), memory_mode: Some("auto".to_string()),
-        account_id: None, icon: None, mods: Vec::new(), resource_packs: Vec::new(),
-        shaders: Vec::new(), group: None, is_symlink: None,
-        source_path: Some(file_path.to_string()),
-        // 必须是 false：全项目**唯一**的「安装游戏」按钮由 `installed` 控制
-        // （`InstanceDetailView.vue` 的 `v-if="!instance.installed"`）。整合包导入
-        // 只铺了 mods/配置，游戏本体还没装 —— 这里写 true 会让那个按钮永久消失，
-        // 游戏本体再也装不上。
-        installed: false,
-        // 整合包导入的实例同样走「按版本自动挑渲染器」。
-        renderer: None,
-        // 整合包导入最需要这项：它的游戏本体还没装，启动时正好顺带补全。
-        check_files_on_launch: Some(true),
+    // 把「导入来源」写回 `instance.json`（`create_instance` 不知道这些）。
+    // 其余默认值沿用创建流程那一套，不再手抄一遍。
+    let mut instance = instance;
+    instance.source_path = Some(file_path.to_string());
+    // 整合包导入最需要这项：游戏本体还没装，启动时正好顺带补全。
+    instance.check_files_on_launch = Some(true);
+    crate::instances::write_instance(&instance).await?;
+    // 走到这里实例已经完整可用，不再需要回滚
+    rollback.defuse();
+
+    Ok(ModpackImportResult {
+        instance,
+        extracted,
+        downloaded,
+        failed,
+        skipped_no_url: no_url_files,
+    })
+}
+
+// ==================== 导出：实例 → .mrpack ====================
+
+/// 内容类型 ↔ 实例内目录。导出只认这三类（与 `instances::kind_folder` 一致）。
+const EXPORT_KINDS: [&str; 3] = ["mod", "resourcepack", "shader"];
+
+/// 「非内容」里可选的配置类条目（目录或单文件）。
+const CONFIG_EXTRAS: [&str; 4] = ["config", "defaultconfigs", "options.txt", "servers.dat"];
+const SAVE_EXTRAS: [&str; 1] = ["saves"];
+const SHOT_EXTRAS: [&str; 1] = ["screenshots"];
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOptions {
+    /// 存档：体积大且含个人内容，默认不带
+    #[serde(default)]
+    pub include_saves: bool,
+    #[serde(default)]
+    pub include_screenshots: bool,
+    #[serde(default)]
+    pub include_config: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPlanItem {
+    pub label: String,
+    pub count: usize,
+    pub bytes: u64,
+}
+
+/// 导出前的「体检」：先让用户看清包里有什么、大概多大，再决定导不导。
+/// 纯本地统计（不联网），所以点开就能立刻显示。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPlan {
+    /// 建议的包名（同时也作文件名）
+    pub file_name: String,
+    pub mc_version: String,
+    pub loader: String,
+    /// 能对上来源记录、导出时**只存下载链接**的内容数量
+    pub linked: usize,
+    /// 必须把文件本体打进包的部分
+    pub bundled: Vec<ExportPlanItem>,
+    pub bundled_bytes: u64,
+    pub has_saves: bool,
+    pub has_screenshots: bool,
+    pub has_config: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub path: String,
+    pub file_name: String,
+    pub linked: usize,
+    pub bundled: usize,
+    pub bytes: u64,
+}
+
+/// 这条内容记录能不能「只存链接」：得同时有来源和版本号，才能反查出下载直链。
+fn can_link(rec: &InstalledContent) -> bool {
+    matches!(rec.source.as_str(), "modrinth" | "curseforge") && rec.version_id.is_some()
+}
+
+/// 目录/文件的（条目数, 字节数）；不存在就是 0。
+fn path_stats(p: &Path) -> (usize, u64) {
+    if p.is_file() {
+        return (1, std::fs::metadata(p).map(|m| m.len()).unwrap_or(0));
+    }
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![p.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                count += 1;
+                bytes += std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    (count, bytes)
+}
+
+/// 建议的包文件名：`<实例名>-<MC 版本>-<加载器>.mrpack`。
+fn export_file_name(inst: &MinecraftProfile) -> String {
+    let loader = serde_json::to_value(&inst.loader)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "vanilla".to_string());
+    format!(
+        "{}-{}-{}.mrpack",
+        crate::util::safe_stem(&inst.name),
+        crate::util::safe_stem(&inst.mc_version),
+        loader
+    )
+}
+
+pub async fn plan_modpack_export(instance_id: &str) -> Result<ExportPlan> {
+    let inst = crate::instances::get_instance(instance_id).await?;
+    let root = std::path::PathBuf::from(&inst.game_dir);
+
+    let mut linked = 0usize;
+    let mut bundled: Vec<ExportPlanItem> = Vec::new();
+    let mut bundled_bytes = 0u64;
+
+    for kind in EXPORT_KINDS {
+        let folder = crate::instances::kind_folder(kind);
+        let mut count = 0usize;
+        let mut bytes = 0u64;
+        for rec in crate::instances::list_content_records(instance_id, kind).await {
+            let p = root.join(folder).join(&rec.filename);
+            if !p.is_file() {
+                continue;
+            }
+            if can_link(&rec) {
+                linked += 1;
+            } else {
+                count += 1;
+                bytes += std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            }
+        }
+        if count > 0 {
+            bundled.push(ExportPlanItem { label: folder.to_string(), count, bytes });
+            bundled_bytes += bytes;
+        }
+    }
+
+    for (label, rel) in [
+        ("config", "config"),
+        ("config", "defaultconfigs"),
+        ("config", "options.txt"),
+        ("config", "servers.dat"),
+        ("saves", "saves"),
+        ("screenshots", "screenshots"),
+    ] {
+        let (count, bytes) = path_stats(&root.join(rel));
+        if count > 0 {
+            bundled.push(ExportPlanItem { label: label.to_string(), count, bytes });
+            bundled_bytes += bytes;
+        }
+    }
+
+    Ok(ExportPlan {
+        file_name: export_file_name(&inst),
+        mc_version: inst.mc_version.clone(),
+        loader: serde_json::to_value(&inst.loader)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "vanilla".to_string()),
+        linked,
+        bundled,
+        bundled_bytes,
+        has_saves: root.join("saves").is_dir(),
+        has_screenshots: root.join("screenshots").is_dir(),
+        has_config: root.join("config").is_dir() || root.join("options.txt").is_file(),
+    })
+}
+
+/// 导出为 **`.mrpack`**（`modrinth.index.json` + `overrides/`）。
+///
+/// 为什么是这个格式而不是自定义包：
+///   - 已登记的 mod/资源包/光影在 `files[]` 里**只存下载链接**，包能小一个数量级
+///     （手机上分享几百 MB 的包不现实）；
+///   - 它同时能被 Modrinth App、PojavLauncher 等第三方启动器读，导出给朋友不用附带说明；
+///   - 我们自己的导入器本来就认这个格式（`MODPACK_MANIFESTS` 里第一位），**导入导出天然自洽**，
+///     不用再维护一套「本项目格式」的读写两份实现。
+/// 对不上来源的内容（手动塞进去的、来源记录丢了的）进 `overrides/`，否则包会缺东西。
+pub async fn export_modpack(instance_id: &str, options: ExportOptions) -> Result<ExportResult> {
+    crate::fsutil::validate_id(instance_id, "实例").map_err(|e| anyhow::anyhow!(e))?;
+    let inst = crate::instances::get_instance(instance_id).await?;
+    let root = std::path::PathBuf::from(&inst.game_dir);
+    let ctx = crate::progress::TaskCtx::new(instance_id, &inst.name, "导出整合包");
+
+    // ── 1) 内容：能反查出直链的进 files[]，其余进 overrides ──────────────
+    crate::progress::emit_install(&ctx, "export", "正在整理内容…", 0, 1);
+    let mut index_files: Vec<Value> = Vec::new();
+    let mut override_files: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut linked = 0usize;
+
+    for kind in EXPORT_KINDS {
+        let folder = crate::instances::kind_folder(kind);
+        for rec in crate::instances::list_content_records(instance_id, kind).await {
+            let src = root.join(folder).join(&rec.filename);
+            if !src.is_file() {
+                continue;
+            }
+            let rel = format!("{folder}/{}", rec.filename);
+            let mut done = false;
+            if can_link(&rec) {
+                let version_id = rec.version_id.clone().unwrap_or_default();
+                // 反查直链失败（下架/网络不通）就退回「打进包」，绝不能假装它还下得到
+                if let Ok((url, _)) =
+                    crate::browse::resolve_content_file(&rec.source, &version_id).await
+                {
+                    if !url.is_empty() {
+                        let sha1 = crate::util::file_sha1(&src).unwrap_or_default();
+                        index_files.push(serde_json::json!({
+                            "path": rel,
+                            "hashes": { "sha1": sha1 },
+                            "downloads": [url],
+                            "fileSize": std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0),
+                        }));
+                        linked += 1;
+                        done = true;
+                    }
+                }
+            }
+            if !done {
+                override_files.push((src, format!("overrides/{rel}")));
+            }
+        }
+    }
+
+    // ── 2) 额外条目：配置 / 存档 / 截图（按用户勾选）────────────────────
+    let mut extras: Vec<&str> = Vec::new();
+    if options.include_config {
+        extras.extend(CONFIG_EXTRAS);
+    }
+    if options.include_saves {
+        extras.extend(SAVE_EXTRAS);
+    }
+    if options.include_screenshots {
+        extras.extend(SHOT_EXTRAS);
+    }
+    let mut override_dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for rel in extras {
+        let p = root.join(rel);
+        if p.is_file() {
+            override_files.push((p, format!("overrides/{rel}")));
+        } else if p.is_dir() {
+            override_dirs.push((p, format!("overrides/{rel}")));
+        }
+    }
+
+    // ── 3) 清单 ─────────────────────────────────────────────────────────
+    let mut deps = serde_json::Map::new();
+    deps.insert("minecraft".to_string(), serde_json::json!(inst.mc_version));
+    if let Some(v) = &inst.loader_version {
+        let key = match inst.loader {
+            Loader::Fabric => Some("fabric-loader"),
+            Loader::Quilt => Some("quilt-loader"),
+            Loader::Forge => Some("forge"),
+            Loader::NeoForge => Some("neoforge"),
+            Loader::Vanilla => None,
+        };
+        if let Some(k) = key {
+            deps.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    let index = serde_json::json!({
+        "formatVersion": 1,
+        "game": "minecraft",
+        // 用实例 id 当版本号：导入方（含我们自己）只把它当标识，不解释内容
+        "versionId": inst.id,
+        "name": inst.name,
+        "files": index_files,
+        "dependencies": Value::Object(deps),
+    });
+    let index_json = serde_json::to_string_pretty(&index)?;
+
+    // ── 4) 落盘到 `<files>/exports/`（FileProvider 已映射该目录，见 file_paths.xml）
+    let data_dir = crate::settings::get_data_dir().await?;
+    let exports_dir = std::path::Path::new(&data_dir).join("exports");
+    fs::create_dir_all(&exports_dir).await.ok();
+    // 先清掉上一次的产物：分享完就没用了，留着只会在手机上白占存储
+    if let Ok(mut rd) = fs::read_dir(&exports_dir).await {
+        while let Ok(Some(e)) = rd.next_entry().await {
+            let _ = fs::remove_file(e.path()).await;
+        }
+    }
+    let file_name = export_file_name(&inst);
+    let zip_path = exports_dir.join(&file_name);
+
+    crate::progress::emit_install(&ctx, "export", "正在打包…", 0, 1);
+    let zip_for_task = zip_path.clone();
+    let bundled = override_files.len() + override_dirs.iter().map(|(p, _)| path_stats(p).0).sum::<usize>();
+    let bytes = tokio::task::spawn_blocking(move || -> Result<u64, String> {
+        let f = std::fs::File::create(&zip_for_task).map_err(|e| format!("创建导出包失败: {e}"))?;
+        let mut zw = zip::ZipWriter::new(f);
+        let opts = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zw.start_file("modrinth.index.json", opts)
+            .map_err(|e| format!("写入清单失败: {e}"))?;
+        std::io::Write::write_all(&mut zw, index_json.as_bytes())
+            .map_err(|e| format!("写入清单失败: {e}"))?;
+        for (src, rel) in &override_files {
+            crate::world_backup::write_file_to_zip(&mut zw, src, rel)?;
+        }
+        for (src, rel) in &override_dirs {
+            crate::world_backup::write_dir_to_zip(&mut zw, src, rel)?;
+        }
+        zw.finish().map_err(|e| format!("收尾失败: {e}"))?;
+        Ok(std::fs::metadata(&zip_for_task).map(|m| m.len()).unwrap_or(0))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("打包任务失败: {e}"))?
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    crate::progress::emit_install_done(&ctx, true, "导出完成", 1, 1);
+    tracing::info!("整合包导出完成：{}（{bytes} 字节）", zip_path.display());
+
+    // 交给系统分享：用户既能直接发给别人，也能在分享面板里「保存到文件」
+    crate::android_bridge::share_file(&zip_path.to_string_lossy(), "application/zip");
+
+    Ok(ExportResult {
+        path: zip_path.to_string_lossy().to_string(),
+        file_name,
+        linked,
+        bundled,
+        bytes,
     })
 }
 

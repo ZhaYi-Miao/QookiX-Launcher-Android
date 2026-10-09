@@ -21,6 +21,7 @@ mod download;
 mod java;
 mod accounts;
 mod modpack;
+mod hangar;
 mod servers;
 /// 服务器空闲休眠与唤醒（无人时停服省电，有人连接自动拉起）。
 mod sleep;
@@ -172,6 +173,14 @@ pub fn run() {
             
             // Modpack commands
             commands::import_modpack,
+            commands::plan_modpack_export,
+            commands::export_modpack,
+
+            // Hangar（PaperMC 插件平台）：搜索 + 装到服务器 plugins/
+            commands::hangar_search_plugins,
+            commands::install_server_plugin,
+            commands::list_server_plugins,
+            commands::delete_server_plugin,
             commands::install_mod,
             commands::uninstall_mod,
             commands::get_installed_mods,

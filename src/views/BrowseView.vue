@@ -183,6 +183,9 @@ const TYPES = [
   { value: "modpack", label: $t("instance-content.modpack") },
   { value: "resourcepack", label: $t("browse.group") },
   { value: "shader", label: $t("utils.categories.shader") },
+  // 插件走 PaperMC 的 Hangar 平台（不是 Modrinth/CurseForge），装了是进**服务器**的
+  // plugins 目录 —— 所以选了它以后，安装目标从「实例」变成「服务器」。
+  { value: "plugin", label: $t("browse.plugins") },
 ];
 
 async function load(reset = true) {
@@ -194,11 +197,36 @@ async function load(reset = true) {
   }
   loading.value = true;
   try {
-    const r = await api.browse(provider.value, query.value, type.value, "", page.value, version.value || undefined, loader.value || undefined, undefined, 20);
-    hits.value = reset ? r.hits : [...hits.value, ...r.hits];
-    page.value += 1;
-    if (!r.hits.length || hits.value.length >= r.total) done.value = true;
-    if (r.cf_error) message.warning(String(r.cf_error));
+    if (type.value === "plugin") {
+      // 「插件」是一条独立数据源：PaperMC 的 Hangar 平台没有 Modrinth/CurseForge 的
+      // project→version→files 那套模型，接口形态也不同（见 src-tauri/src/hangar.rs）。
+      // 这里把它的结果**映射成同样的卡片结构**，列表与卡片组件照旧复用。
+      const list = await api.hangarSearchPlugins(query.value, page.value, 20);
+      const mapped = list.map(
+        (p) =>
+          ({
+            id: p.slug,
+            slug: p.slug,
+            name: p.name,
+            title: p.name,
+            description: p.description,
+            downloads: p.downloads,
+            icon: p.icon,
+            author: p.owner,
+            provider: "hangar",
+            project_type: "plugin",
+          }) as unknown as ProjectHit,
+      );
+      hits.value = reset ? mapped : [...hits.value, ...mapped];
+      page.value += 1;
+      if (mapped.length < 20) done.value = true;
+    } else {
+      const r = await api.browse(provider.value, query.value, type.value, "", page.value, version.value || undefined, loader.value || undefined, undefined, 20);
+      hits.value = reset ? r.hits : [...hits.value, ...r.hits];
+      page.value += 1;
+      if (!r.hits.length || hits.value.length >= r.total) done.value = true;
+      if (r.cf_error) message.warning(String(r.cf_error));
+    }
   } catch (e) {
     message.error(String(e));
     done.value = true;

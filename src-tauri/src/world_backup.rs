@@ -78,8 +78,30 @@ pub async fn list_backups(instance_id: &str, world: &str) -> Vec<BackupInfo> {
     out
 }
 
+/// 把单个文件写进 zip 里的 `rel` 路径。
+///
+/// 独立出来是因为「世界备份」与「导出整合包」都要写文件，只是来源不同
+/// （一个是 `saves/<世界>` 整目录，一个是散在 `mods/`、`config/` 里的零散文件）。
+pub(crate) fn write_file_to_zip(
+    zw: &mut zip::ZipWriter<std::fs::File>,
+    src: &Path,
+    rel: &str,
+) -> Result<(), String> {
+    let mut f = std::fs::File::open(src).map_err(|e| format!("打开 {} 失败: {e}", src.display()))?;
+    let opts = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zw.start_file(rel.to_string(), opts)
+        .map_err(|e| format!("写入 zip 条目 {rel} 失败: {e}"))?;
+    std::io::copy(&mut f, zw).map_err(|e| format!("写入 {rel} 内容失败: {e}"))?;
+    Ok(())
+}
+
 /// 递归把 `dir` 下的文件写入 zip（zip 内路径相对 `dir`）
-fn write_dir_to_zip(zw: &mut zip::ZipWriter<std::fs::File>, dir: &Path, prefix: &str) -> Result<(), String> {
+pub(crate) fn write_dir_to_zip(
+    zw: &mut zip::ZipWriter<std::fs::File>,
+    dir: &Path,
+    prefix: &str,
+) -> Result<(), String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败: {e}"))?;
     for e in rd.flatten() {
         let p = e.path();
@@ -91,12 +113,7 @@ fn write_dir_to_zip(zw: &mut zip::ZipWriter<std::fs::File>, dir: &Path, prefix: 
         if p.is_dir() {
             write_dir_to_zip(zw, &p, &rel)?;
         } else if p.is_file() {
-            let mut f = std::fs::File::open(&p).map_err(|e| format!("打开 {} 失败: {e}", p.display()))?;
-            let opts = zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            zw.start_file(rel.clone(), opts)
-                .map_err(|e| format!("写入 zip 条目 {rel} 失败: {e}"))?;
-            std::io::copy(&mut f, zw).map_err(|e| format!("写入 {rel} 内容失败: {e}"))?;
+            write_file_to_zip(zw, &p, &rel)?;
         }
     }
     Ok(())

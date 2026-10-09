@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import AppButton from "../ui/AppButton.vue";
 import { useMessage } from "../composables/message";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { handleExternalPlugin } from "../utils/pluginInstall";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { api } from "../api";
@@ -232,6 +233,25 @@ async function translateBodyNow() {
 
 const isModpack = computed(() => props.project?.project_type === "modpack");
 
+// ── 插件（PaperMC / Hangar）─────────────────────────────────────────────
+// 与 mod/modpack 最大的不同：**目标是服务器而不是实例**，而且不用选版本 ——
+// 后端按那台服务器自己的 MC 版本挑兼容构建（见 src-tauri/src/hangar.rs）。
+const isPlugin = computed(() => props.project?.project_type === "plugin");
+const selectedServer = ref<string | null>(null);
+/** 服务器列表直接问后端，不必引 store（这个对话框只用到 id/名字/核心） */
+const serverList = ref<{ id: string; name: string; core: string; mc_version: string }[]>([]);
+const serverOptions = computed(() =>
+  serverList.value.map((s) => ({ label: `${s.name}（${s.core} ${s.mc_version}）`, value: s.id })),
+);
+async function ensureServers() {
+  try {
+    serverList.value = (await api.listHostedServers()) ?? [];
+  } catch {
+    serverList.value = [];
+  }
+  if (!selectedServer.value) selectedServer.value = serverList.value[0]?.id ?? null;
+}
+
 const mcWikiUrl = ref("");
 const sourceUrl = computed(() => {
   const p = props.project;
@@ -350,6 +370,12 @@ function resetForProject() {
     ? props.defaultInstance
     : nonVanilla[0]?.id ?? null;
   selectedInstance.value = isModpack.value ? null : pref;
+  // 插件：目标换成服务器，并拉一份服务器列表
+  if (isPlugin.value) {
+    selectedInstance.value = null;
+    selectedServer.value = null;
+    void ensureServers();
+  }
   installMsg.value = "";
   typeFilter.value = "all";
   // 换项目时把翻译状态清干净，免得看到上一个项目的译文
@@ -362,7 +388,8 @@ function resetForProject() {
   bodyOriginal.value = "";
   bodyNote.value = "";
   showZhBody.value = false;
-  loadVersions();
+  // 插件不需要「按实例的 MC 版本/加载器拉兼容版本」这一步：后端自己按服务器版本挑
+  if (!isPlugin.value) loadVersions();
   loadMcWikiUrl();
   loadDescTranslation();
 }
@@ -389,6 +416,39 @@ function depLabel(t: string) {
 
 async function install() {
   if (!props.project) return;
+  // 插件：装到服务器（不走实例那条 install_content）
+  if (isPlugin.value) {
+    if (!selectedServer.value) {
+      message.warning($t("install-dialog.select-server"));
+      return;
+    }
+    const p = props.project as unknown as { slug?: string; name?: string; title?: string; id: string };
+    const slug = p.slug ?? p.id;
+    installing.value = true;
+    api
+      .installServerPlugin(selectedServer.value, slug, p.name ?? p.title ?? slug)
+      .then((r) => {
+        // 未托管在 Hangar：打开浏览器让用户自己下（共用一份处理）
+        if (handleExternalPlugin(r, (m) => message.info(m))) {
+          emit("update:show", false);
+          return;
+        }
+        message.success(
+          $t("install-dialog.plugin-installed", { p1: r.fileName ?? "", p2: r.version ?? "" }),
+        );
+        // 接口没给平台版本信息时如实提醒：兼容性是「未知」而不是「已验证」
+        if (!r.compatVerified) message.warning($t("install-dialog.plugin-compat-unknown"));
+        emit("update:show", false);
+      })
+      .catch((e) => {
+        api.logDebug(`[fe] 插件安装失败 ${String(e)}`);
+        message.error(String(e));
+      })
+      .finally(() => {
+        installing.value = false;
+      });
+    return;
+  }
   api.logDebug(
     `[fe] install() 进入 provider=${props.project.provider} id=${props.project.id} type=${props.project.project_type} isModpack=${isModpack.value} versions=${versions.value.length}`
   );
@@ -497,7 +557,20 @@ async function install() {
       </div>
 
       <div class="id-form">
-        <label v-if="!isModpack" class="id-field">
+        <!-- 插件：目标选**服务器**（插件是服务端的东西），所以这里换一个选择器，
+             并把「按实例/版本拉兼容列表」整套逻辑让开（见 install() 里的插件分支） -->
+        <label v-if="isPlugin" class="id-field">
+          <span>{{ $t("install-dialog.install-to-server") }}</span>
+          <app-select v-model:value="selectedServer" :options="serverOptions" :placeholder="$t('install-dialog.select-server')" />
+        </label>
+        <div v-if="isPlugin" class="id-field">
+          <span class="id-modpack-hint">{{ $t("install-dialog.plugin-hint") }}</span>
+        </div>
+        <div v-if="isPlugin && !serverList.length" class="id-noinst">
+          {{ $t("install-dialog.no-server-yet") }}
+        </div>
+
+        <label v-if="!isModpack && !isPlugin" class="id-field">
           <span>{{ $t("install-dialog.install-to") }}</span>
           <app-select v-model:value="selectedInstance" :options="instanceOptions()" :placeholder="$t('install-dialog.select-instance')" />
         </label>
@@ -506,7 +579,7 @@ async function install() {
           <span class="id-modpack-hint">{{ $t("install-dialog.modpack-new-instance") }}</span>
         </div>
 
-        <div class="id-field">
+        <div v-if="!isPlugin" class="id-field">
           <div class="id-ver-head">
             <span>{{ $t("install-dialog.select-version") }}</span>
             <div ref="typeTabBox" class="id-type-tabs">

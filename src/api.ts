@@ -293,7 +293,75 @@ export const api = {
         icon: string | null;
       }[];
     }>("list_instance_files", { instanceId, sub }),
-  importModpack: (filePath: string) => invoke<Instance>("import_modpack", { filePath }),
+  importModpack: (filePath: string) =>
+    invoke<{
+      instance: Instance;
+      extracted: number;
+      downloaded: number;
+      failed: number;
+      skippedNoUrl: number;
+    }>("import_modpack", { filePath }),
+  /**
+   * 导出前的体检：纯本地统计（不联网），界面据此显示「包里有什么 / 大概多大」。
+   * `linked` = 只存下载链接的项目数，`bundled` = 必须打进包的部分。
+   */
+  planModpackExport: (instanceId: string) =>
+    invoke<{
+      fileName: string;
+      mcVersion: string;
+      loader: string;
+      linked: number;
+      bundled: { label: string; count: number; bytes: number }[];
+      bundledBytes: number;
+      hasSaves: boolean;
+      hasScreenshots: boolean;
+      hasConfig: boolean;
+    }>("plan_modpack_export", { instanceId }),
+  /** 导出成 .mrpack 并调起系统分享（后端把产物写到 `<files>/exports/`） */
+  exportModpack: (
+    instanceId: string,
+    options: { includeSaves: boolean; includeScreenshots: boolean; includeConfig: boolean },
+  ) =>
+    invoke<{ path: string; fileName: string; linked: number; bundled: number; bytes: number }>(
+      "export_modpack",
+      { instanceId, options },
+    ),
+
+  /**
+   * 服务端插件：数据来自 PaperMC 的插件平台 Hangar（公开接口，无需 API key）。
+   * 安装由后端按「服务器的 MC 版本」挑兼容版本，直接落到 `<服务器>/plugins/`。
+   */
+  hangarSearchPlugins: (query: string, page = 0, pageSize = 20) =>
+    invoke<
+      {
+        slug: string;
+        owner: string;
+        name: string;
+        description: string;
+        downloads: number;
+        icon: string | null;
+        versions: string[];
+      }[]
+    >("hangar_search_plugins", { query, page, pageSize }),
+  /**
+   * 把插件装到服务器的 `plugins/`。
+   *
+   * `installed: false` + `externalUrl` = 该插件**没托管在 Hangar**（只有外部下载页，
+   * 例如 EssentialsX 指向 GitHub releases）：这时不是失败，而是要把地址交给用户，
+   * 由界面打开浏览器让他自己下（见 `utils/pluginInstall.ts` 的统一处理）。
+   */
+  installServerPlugin: (serverId: string, slug: string, projectName: string) =>
+    invoke<{
+      installed: boolean;
+      externalUrl?: string | null;
+      fileName?: string;
+      version?: string;
+      compatVerified?: boolean;
+    }>("install_server_plugin", { serverId, slug, projectName }),
+  listServerPlugins: (serverId: string) =>
+    invoke<{ fileName: string; size: number }[]>("list_server_plugins", { serverId }),
+  deleteServerPlugin: (serverId: string, fileName: string) =>
+    invoke<void>("delete_server_plugin", { serverId, fileName }),
   importInstanceImage: (sourcePath: string) => invoke<string>("import_instance_image", { sourcePath }),
   importBackgroundImage: (sourcePath: string) => invoke<string>("import_background_image", { sourcePath }),
   scanMinecraftImport: (source: string) => invoke<void>("scan_minecraft_import", { source }),

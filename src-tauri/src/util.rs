@@ -200,6 +200,27 @@ pub fn extract_zip(zip_path: &std::path::Path, dest: &std::path::Path, allowed_e
 use sha1::Digest as _;
 
 /// 文件 sha1（hex 小写），失败返回 None。
+/// 把任意字符串收拾成安全的文件名片段：保留中文/字母数字与 `-_.`，其余换成 `-`。
+///
+/// 导出整合包、下载插件都要按「项目名/插件名」拼文件名，而它们可能含空格、
+/// 斜杠、emoji —— 直接当文件名会写出目录外或触发文件系统报错。共用一份。
+pub fn safe_stem(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed
+    }
+}
+
 pub fn file_sha1(path: &std::path::Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = sha1::Sha1::new();

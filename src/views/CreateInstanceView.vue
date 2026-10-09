@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import { useMessage } from "../composables/message";
 import { Button as VanButton } from "vant";
 import { api } from "../api";
+import { pickFile } from "../composables/filePicker";
 import { useInstancesStore } from "../stores/instances";
 import AppInput from "../ui/AppInput.vue";
 import AppSelect from "../ui/AppSelect.vue";
@@ -22,6 +23,47 @@ const loaderVersionsLoading = ref(false);
 const loaderVersionsError = ref("");
 const versionOptions = ref<{ label: string; value: string }[]>([]);
 const busy = ref(false);
+
+// ── 导入整合包 ────────────────────────────────────────────────────────
+// 与「全新创建」并列的模式：整合包自带 MC 版本与加载器，用户只要选文件，
+// 不必再手填一遍（填错反而更糟）。解析 / 建实例 / 解 overrides / 下载内容
+// 全在后端一条流水线里跑，进度进「下载中心」。
+const mode = ref<"fresh" | "import">("fresh");
+const importing = ref(false);
+
+async function pickAndImportModpack() {
+  if (importing.value) return;
+  let path: string | null = null;
+  try {
+    path = await pickFile({
+      multiple: false,
+      // .mrpack（Modrinth）与 .zip（CurseForge / 离线包）都收
+      filters: [{ name: $t("create-instance.modpack-file"), extensions: ["mrpack", "zip"] }],
+    });
+  } catch (e) {
+    message.error(String(e));
+    return;
+  }
+  if (!path) return;
+  importing.value = true;
+  try {
+    const r = await api.importModpack(path);
+    // 「少下了一部分」必须当场告诉用户：只写日志的后果是他进游戏才崩，
+    // 而那时错误信息指不到真凶（资源文件那次就是这么踩的）。
+    const bad = (r.failed ?? 0) + (r.skippedNoUrl ?? 0);
+    if (bad > 0) {
+      message.warning($t("create-instance.import-partial", { p1: bad }));
+    } else {
+      message.success($t("create-instance.import-done", { p1: r.instance.name }));
+    }
+    await instances.load(true);
+    router.push(`/instance/${r.instance.id}`);
+  } catch (e) {
+    message.error($t("create-instance.import-failed", { p1: String(e) }));
+  } finally {
+    importing.value = false;
+  }
+}
 
 const LOADERS = [
   { label: "Vanilla", value: "vanilla" },
@@ -102,37 +144,57 @@ onMounted(async () => {
 
 <template>
   <div class="cv">
-    <div class="field">
-      <label>{{ $t("instances.name") }}</label>
-      <app-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
+    <!-- 两种入口并列。整合包那条不需要用户再填版本/加载器（包自带），
+         让他手填一遍只会填错，所以两条路的表单完全不同。 -->
+    <div class="modes">
+      <button class="chip" :class="{ on: mode === 'fresh' }" @click="mode = 'fresh'">
+        {{ $t("create-instance.mode-fresh") }}
+      </button>
+      <button class="chip" :class="{ on: mode === 'import' }" @click="mode = 'import'">
+        {{ $t("create-instance.mode-import") }}
+      </button>
     </div>
-    <div class="field">
-      <label>{{ $t("create-instance.select-version") }}</label>
-      <app-select v-model:value="mcVersion" :options="versionOptions" :placeholder="$t('create-instance.select-version')" />
-    </div>
-    <div class="field">
-      <label>{{ $t("browse.loader") }}</label>
-      <div class="chips">
-        <button v-for="l in LOADERS" :key="l.value" class="chip" :class="{ on: loader === l.value }" @click="loader = l.value">
-          {{ l.label }}
-        </button>
+
+    <template v-if="mode === 'fresh'">
+      <div class="field">
+        <label>{{ $t("instances.name") }}</label>
+        <app-input v-model:value="name" :placeholder="$t('create-instance.name-hint')" maxlength="40" />
       </div>
-    </div>
-    <div v-if="loader !== 'vanilla'" class="field">
-      <label>{{ $t("create-instance.loader-version") }}</label>
-      <app-select
-        v-if="loaderVersionOptions.length"
-        v-model:value="loaderVersion"
-        :options="loaderVersionOptions"
-        :placeholder="$t('create-instance.select-loader-version')"
-      />
-      <div v-else class="hint">
-        {{ loaderVersionsLoading ? $t("create-instance.loader-version-loading") : loaderVersionsError }}
+      <div class="field">
+        <label>{{ $t("create-instance.select-version") }}</label>
+        <app-select v-model:value="mcVersion" :options="versionOptions" :placeholder="$t('create-instance.select-version')" />
       </div>
-    </div>
-    <van-button block type="primary" :disabled="!canSubmit" :loading="busy" class="go" @click="submit">
-      {{ $t("multiplayer.create") }}
-    </van-button>
+      <div class="field">
+        <label>{{ $t("browse.loader") }}</label>
+        <div class="chips">
+          <button v-for="l in LOADERS" :key="l.value" class="chip" :class="{ on: loader === l.value }" @click="loader = l.value">
+            {{ l.label }}
+          </button>
+        </div>
+      </div>
+      <div v-if="loader !== 'vanilla'" class="field">
+        <label>{{ $t("create-instance.loader-version") }}</label>
+        <app-select
+          v-if="loaderVersionOptions.length"
+          v-model:value="loaderVersion"
+          :options="loaderVersionOptions"
+          :placeholder="$t('create-instance.select-loader-version')"
+        />
+        <div v-else class="hint">
+          {{ loaderVersionsLoading ? $t("create-instance.loader-version-loading") : loaderVersionsError }}
+        </div>
+      </div>
+      <van-button block type="primary" :disabled="!canSubmit" :loading="busy" class="go" @click="submit">
+        {{ $t("multiplayer.create") }}
+      </van-button>
+    </template>
+
+    <template v-else>
+      <div class="hint import-hint">{{ $t("create-instance.import-hint") }}</div>
+      <van-button block type="primary" :loading="importing" class="go" @click="pickAndImportModpack">
+        {{ $t("create-instance.pick-modpack") }}
+      </van-button>
+    </template>
   </div>
 </template>
 
@@ -142,6 +204,16 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.modes {
+  display: flex;
+  gap: 8px;
+}
+.modes .chip {
+  flex: 1;
+}
+.import-hint {
+  line-height: 1.6;
 }
 .field label {
   display: block;

@@ -717,18 +717,41 @@ class MainActivity : TauriActivity() {
             zos.closeEntry()
           }
         }
+        shareFile(out.absolutePath, "application/zip")
+      }.onFailure {
+        Log.w(TAG, "导出日志失败", it)
+      }
+    }
+  }
+
+  /**
+   * 把一个**已存在的文件**交给系统分享（`ACTION_SEND` + FileProvider）。
+   *
+   * 这是全局唯一的分享出口：日志（`shareLogsZip`）、控制布局（`exportControlLayout`）、
+   * 导出的整合包都走它。以前每处各抄一遍 Intent + FileProvider + 权限 flag，
+   * 改一处漏两处（历史上就漏过 `FLAG_GRANT_READ_URI_PERMISSION`）。
+   *
+   * `path` 必须落在 `res/xml/file_paths.xml` 映射过的目录里，否则 `getUriForFile`
+   * 会抛 `IllegalArgumentException` —— 调用方负责把产物写到那些目录
+   * （`<files>/exports/`（整合包）、`<files>/controlmap/`、`cacheDir`（日志））。
+   */
+  fun shareFile(path: String, mimeType: String) {
+    runOnUiThread {
+      runCatching {
+        val f = java.io.File(path)
+        if (!f.isFile) throw java.io.IOException("文件不存在：$path")
         val uri = androidx.core.content.FileProvider.getUriForFile(
-          this, "$packageName.fileprovider", out
+          this, "$packageName.fileprovider", f
         )
         val send = Intent(Intent.ACTION_SEND)
         send.putExtra(Intent.EXTRA_STREAM, uri)
-        send.type = "application/zip"
+        send.type = mimeType
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        startActivity(Intent.createChooser(send, "分享日志"))
+        startActivity(Intent.createChooser(send, null))
       }.onFailure {
-        Log.w(TAG, "导出日志失败", it)
+        Log.w(TAG, "分享文件失败：$path", it)
         runCatching {
-          android.widget.Toast.makeText(this, it.message ?: "导出失败", android.widget.Toast.LENGTH_SHORT).show()
+          android.widget.Toast.makeText(this, it.message ?: "分享失败", android.widget.Toast.LENGTH_SHORT).show()
         }
       }
     }
@@ -763,20 +786,12 @@ class MainActivity : TauriActivity() {
      * 需要落到具体目录时在分享目标里选文件管理器即可。
      */
     fun exportControlLayout(layout: String) {
-      runOnUiThread {
-        runCatching {
-          val f = java.io.File(filesDir, "controlmap/$layout.json")
-          if (!f.isFile) throw java.io.IOException("布局不存在：$layout")
-          val uri = androidx.core.content.FileProvider.getUriForFile(
-            this, "$packageName.fileprovider", f
-          )
-          val send = Intent(Intent.ACTION_SEND)
-          send.putExtra(Intent.EXTRA_STREAM, uri)
-          send.type = "application/json"
-          send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-          startActivity(Intent.createChooser(send, null))
-        }.onFailure { android.util.Log.w("MainActivity", "导出控制布局失败", it) }
+      val f = java.io.File(filesDir, "controlmap/$layout.json")
+      if (!f.isFile) {
+        android.util.Log.w("MainActivity", "导出控制布局失败：布局不存在 $layout")
+        return
       }
+      shareFile(f.absolutePath, "application/json")
     }
 
     /**

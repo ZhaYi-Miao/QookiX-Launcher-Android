@@ -230,6 +230,27 @@ pub fn share_logs_zip(archive_name: &str, dir: &str) {
     );
 }
 
+/// 把**已经存在的文件**交给系统分享（导出的整合包等）。
+///
+/// `path` 必须落在 FileProvider 映射过的目录里（见 `res/xml/file_paths.xml`），
+/// 否则 `getUriForFile` 会抛 `IllegalArgumentException`。导出包正是写到映射过的
+/// `<files>/exports/`，所以这里直接传绝对路径。
+///
+/// 为什么走分享而不是「另存为」：手机上用户要的通常是「发给别人」或「存到文件」，
+/// 系统分享面板两者都覆盖（选文件管理器即可落盘），比强制先选目录少一步。
+#[cfg(target_os = "android")]
+pub fn share_file(path: &str, mime: &str) {
+    let _ = android::call_activity2(
+        "shareFile",
+        "(Ljava/lang/String;Ljava/lang/String;)V",
+        path,
+        mime,
+    );
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn share_file(_path: &str, _mime: &str) {}
+
 // ── 控制布局（Pojav 按键布局）────────────────────────────────────────────
 // 这些都要过 Activity：原生编辑器是 Activity、SAF 要 Activity 结果。
 // 返回值用字符串（JSON），因为 JNI 侧构造对象很啰嗦。

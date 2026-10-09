@@ -6,6 +6,7 @@ use crate::version;
 use crate::download;
 use crate::launch;
 use crate::modpack;
+use crate::hangar;
 use crate::browse;
 use crate::{pins, groups, mirror, storage, crash, skins, servers, world_backup, playtime, util, fsutil};
 use serde_json::{json, Value};
@@ -369,8 +370,58 @@ pub async fn set_plugin_manifest_url(url: String) -> Result<String, String> {
 // ==================== Modpack Commands ====================
 
 #[command]
-pub async fn import_modpack(file_path: String) -> Result<MinecraftProfile, String> {
+pub async fn import_modpack(file_path: String) -> Result<modpack::ModpackImportResult, String> {
     modpack::import_modpack(&file_path).await.map_err(|e| e.to_string())
+}
+
+/// 导出前的体检（纯本地统计，不联网）
+#[command]
+pub async fn plan_modpack_export(instance_id: String) -> Result<modpack::ExportPlan, String> {
+    modpack::plan_modpack_export(&instance_id).await.map_err(|e| e.to_string())
+}
+
+/// 把实例导出成 `.mrpack` 并调起系统分享
+#[command]
+pub async fn export_modpack(
+    instance_id: String,
+    options: modpack::ExportOptions,
+) -> Result<modpack::ExportResult, String> {
+    modpack::export_modpack(&instance_id, options).await.map_err(|e| e.to_string())
+}
+
+// ==================== Hangar（PaperMC 插件平台）Commands ====================
+
+#[command]
+pub async fn hangar_search_plugins(
+    query: String,
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<Vec<hangar::HangarPlugin>, String> {
+    hangar::search(&query, page.unwrap_or(0), page_size.unwrap_or(20))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 把插件下到 `<服务器>/plugins/`。版本自动挑「声明支持该服务器 MC 版本」的最新版。
+#[command]
+pub async fn install_server_plugin(
+    server_id: String,
+    slug: String,
+    project_name: String,
+) -> Result<Value, String> {
+    hangar::install_plugin(&server_id, &slug, &project_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn list_server_plugins(server_id: String) -> Result<Vec<Value>, String> {
+    hangar::list_plugins(&server_id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub fn delete_server_plugin(server_id: String, file_name: String) -> Result<(), String> {
+    hangar::delete_plugin(&server_id, &file_name).map_err(|e| e.to_string())
 }
 
 #[command]

@@ -38,6 +38,48 @@ const rendererModeOptions = computed(() => [
   { value: "custom", label: $t("instance-settings.explicit") },
 ]);
 
+// ── 导出 / 分享（整合包）─────────────────────────────────────────────
+// 面板数据来自后端体检（纯本地统计，点开即有）；三项开关默认「配置带上、
+// 存档/截图不带」—— 后两者体积大且含个人内容，要让用户显式勾。
+const exportPlan = ref<Awaited<ReturnType<typeof api.planModpackExport>> | null>(null);
+const exportConfig = ref(true);
+const exportSaves = ref(false);
+const exportShots = ref(false);
+const exporting = ref(false);
+
+const exportBundledCount = computed(() =>
+  (exportPlan.value?.bundled ?? []).reduce((n, b) => n + b.count, 0),
+);
+
+async function loadExportPlan() {
+  try {
+    exportPlan.value = await api.planModpackExport(props.instanceId);
+  } catch {
+    // 体检失败不该挡住宿主页面（列表/其它设置照常用），静默降级成「没有统计」
+    exportPlan.value = null;
+  }
+}
+
+async function doExport() {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    const r = await api.exportModpack(props.instanceId, {
+      includeConfig: exportConfig.value,
+      includeSaves: exportSaves.value,
+      includeScreenshots: exportShots.value,
+    });
+    message.success($t("instance-settings.export-done", { p1: r.fileName }));
+  } catch (e) {
+    message.error($t("instance-settings.export-failed", { p1: String(e) }));
+  } finally {
+    exporting.value = false;
+    loadExportPlan();
+  }
+}
+
+onMounted(loadExportPlan);
+
 const instances = useInstancesStore();
 const accounts = useAccountsStore();
 const settingsStore = useSettingsStore();
@@ -458,6 +500,32 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 导出 / 分享：低频操作，所以放设置页而不是页头 —— 页头只有「启动」一个按钮，
+         再塞图标进去会把最常用的那个挤没。 -->
+    <div class="set-card glass">
+      <h4>{{ $t("instance-settings.export-title") }}</h4>
+      <p class="set-desc">{{ $t("instance-settings.export-desc") }}</p>
+      <div v-if="exportPlan" class="export-lines">
+        <div>{{ $t("instance-settings.export-linked", { p1: exportPlan.linked }) }}</div>
+        <div>{{ $t("instance-settings.export-bundled", { p1: exportBundledCount, p2: fmtMem(exportPlan.bundledBytes) }) }}</div>
+      </div>
+      <label class="set-row">
+        <span>{{ $t("instance-settings.export-config") }}</span>
+        <app-switch v-model:value="exportConfig" />
+      </label>
+      <label v-if="exportPlan?.hasSaves" class="set-row">
+        <span>{{ $t("instance-settings.export-saves") }}</span>
+        <app-switch v-model:value="exportSaves" />
+      </label>
+      <label v-if="exportPlan?.hasScreenshots" class="set-row">
+        <span>{{ $t("instance-settings.export-screenshots") }}</span>
+        <app-switch v-model:value="exportShots" />
+      </label>
+      <button class="btn" :disabled="exporting" @click="doExport">
+        {{ exporting ? $t("instance-settings.exporting") : $t("instance-settings.export-do") }}
+      </button>
+    </div>
+
     <IconPickerDialog
       v-model:show="showIconPicker"
       :value="edit.icon"
@@ -468,6 +536,30 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 导出卡片：说明文字 + 两行统计 + 三个开关 + 一个动作按钮 */
+.set-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+.export-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  font-size: 13px;
+  color: var(--text-2);
+}
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));

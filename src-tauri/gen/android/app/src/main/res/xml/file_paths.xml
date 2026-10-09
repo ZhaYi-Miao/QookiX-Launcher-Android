@@ -6,4 +6,6 @@
   <files-path name="controlmap" path="controlmap/" />
   <!-- 自动更新下载的 APK：<files>/updates/*.apk 交给系统安装器 -->
   <files-path name="updates" path="updates/" />
+  <!-- 导出的整合包：<files>/exports/*.mrpack 通过系统分享交给用户/其他应用 -->
+  <files-path name="exports" path="exports/" />
 </paths>

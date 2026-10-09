@@ -1030,6 +1030,53 @@ pub fn loader_str(loader: &crate::models::Loader) -> &'static str {
     }
 }
 
+/// 把「provider + version_id」解析成真实下载直链与文件名。
+///
+/// `install_content`（装单个内容）与「导出为 .mrpack」都要这一步 —— 后者靠它把本地已装的
+/// mod 还原成 `files[].downloads`，于是导出的整合包**只存链接、不存文件**（能小一个数量级）。
+pub async fn resolve_content_file(provider: &str, version_id: &str) -> Result<(String, String)> {
+    let client = crate::util::http_client().await;
+    if provider == "modrinth" {
+        let response = client
+            .get(format!("{}/version/{}", MODRINTH_API, version_id))
+            .send()
+            .await
+            .context("Failed to get version")?;
+        let version: Value = response.json().await.context("Failed to parse version")?;
+        if let Some(files) = version["files"].as_array() {
+            if let Some(primary) = files
+                .iter()
+                .find(|f| f["primary"].as_bool().unwrap_or(false))
+                .or_else(|| files.first())
+            {
+                return Ok((
+                    primary["url"].as_str().unwrap_or("").to_string(),
+                    primary["filename"].as_str().unwrap_or("").to_string(),
+                ));
+            }
+        }
+        return Ok((String::new(), String::new()));
+    }
+    if provider == "curseforge" {
+        let response = client
+            .get(format!("https://api.curseforge.com/v1/mods/files/{}", version_id))
+            .header("x-api-key", curseforge_key().await)
+            .send()
+            .await
+            .context("Failed to get CurseForge file")?;
+        let result: Value = response
+            .json()
+            .await
+            .context("Failed to parse CurseForge file")?;
+        let data = &result["data"];
+        return Ok((
+            data["downloadUrl"].as_str().unwrap_or("").to_string(),
+            data["fileName"].as_str().unwrap_or("").to_string(),
+        ));
+    }
+    Ok((String::new(), String::new()))
+}
+
 pub async fn install_content(
     instance_id: &str,
     provider: &str,
@@ -1042,36 +1089,16 @@ pub async fn install_content(
     let content_dir = instance_path.join(folder);
     tokio::fs::create_dir_all(&content_dir).await.ok();
 
-    let client = crate::util::http_client().await;
-
-    let mut file_url = String::new();
-    let mut file_name = String::new();
-    let mut project_title = String::new();
-
-    // Fetch version info to get file URL
-    if provider == "modrinth" {
-        let response = client.get(format!("{}/version/{}", MODRINTH_API, version_id))
-            .send().await.context("Failed to get version")?;
-        let version: Value = response.json().await.context("Failed to parse version")?;
-        if let Some(files) = version["files"].as_array() {
-            if let Some(primary) = files.iter().find(|f| f["primary"].as_bool().unwrap_or(false))
-                .or_else(|| files.first()) {
-                file_url = primary["url"].as_str().unwrap_or("").to_string();
-                file_name = primary["filename"].as_str().unwrap_or("").to_string();
-            }
-        }
-        if let Ok(info) = project_info("modrinth", project_id).await {
-            project_title = info.title;
-        }
-    } else if provider == "curseforge" {
-        let response = client.get(format!("https://api.curseforge.com/v1/mods/files/{}", version_id))
-            .header("x-api-key", curseforge_key().await)
-            .send().await.context("Failed to get CurseForge file")?;
-        let result: Value = response.json().await.context("Failed to parse CurseForge file")?;
-        let data = &result["data"];
-        file_url = data["downloadUrl"].as_str().unwrap_or("").to_string();
-        file_name = data["fileName"].as_str().unwrap_or("").to_string();
-    }
+    let (file_url, file_name) = resolve_content_file(provider, version_id).await?;
+    // 「项目名」只用于展示（内容列表里那行标题）；CurseForge 那条路原本就不查它
+    let project_title = if provider == "modrinth" {
+        project_info("modrinth", project_id)
+            .await
+            .map(|i| i.title)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     if file_url.is_empty() || file_name.is_empty() {
         return Err(anyhow::anyhow!("Could not find file to download"));

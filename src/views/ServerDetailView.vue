@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useServersStore } from "../stores/servers";
 import ServerFileManager from "../components/ServerFileManager.vue";
+import ServerPluginsPanel from "../components/ServerPluginsPanel.vue";
 import AppInput from "../ui/AppInput.vue";
 import AppSelect from "../ui/AppSelect.vue";
 import AppSlider from "../ui/AppSlider.vue";
@@ -26,7 +27,7 @@ const servers = useServersStore();
 const serverId = String(route.params.id);
 /** 当前页签。支持 `?tab=files` 深链 —— 多人页的服务器卡片上有「文件 / 设置」图标按钮，
  *  直接落到对应页签（否则那两个图标只是装饰，点了还是进默认页）。 */
-const KNOWN_TABS = ["config", "files", "logs", "console"];
+const KNOWN_TABS = ["config", "files", "plugins", "logs", "console"];
 const tab = ref(
   KNOWN_TABS.includes(String(route.query.tab)) ? String(route.query.tab) : "config"
 );
@@ -727,9 +728,13 @@ onUnmounted(() => {
     <van-tabs v-model:active="tab" class="tabs" @change="tab !== 'config' && loadLogs()">
       <van-tab name="config" :title="$t('router.settings')" />
       <van-tab name="files" :title="$t('instance-detail.files')" />
+      <van-tab name="plugins" :title="$t('server-detail.plugins')" />
       <van-tab name="logs" :title="$t('common.logs')" />
       <van-tab name="console" :title="$t('server-detail.console')" />
     </van-tabs>
+    <div v-if="tab === 'plugins'" class="pane">
+      <ServerPluginsPanel :server-id="serverId" />
+    </div>
     <div v-if="tab === 'config'" class="pane">
       <!-- ── 基本 ──────────────────────────────────────────────────────
            参照竞品 Anvil 的设置逻辑：设置按「主题」分组卡片，每项配一句玩家能看懂的解释，
@@ -955,7 +960,10 @@ onUnmounted(() => {
         <p v-if="!logs.length" class="empty">{{ $t("log-viewer.no-logs") }}</p>
       </div>
     </div>
-    <div v-else class="pane console">
+    <!-- 这里原本是 `v-else`（链尾兜底）：新增 `plugins` 页签后，那个 tab 不匹配上面任何
+         分支，就被这个兜底接住、把控制台内容渲染到了插件页下面。改成显式判断，
+         未知 tab 不再误显示控制台。 -->
+    <div v-else-if="tab === 'console'" class="pane console">
       <!-- 快捷命令：高频命令打成 chips，免得每次都在手机键盘上敲 "/kick "。
            带参数的（/op、/kick）只**填进输入框**并带尾随空格，让用户接着补参数；
            无参的（/list、/help、/stop）点一下输入框就有了，再按发送即可。 -->
