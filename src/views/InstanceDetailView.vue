@@ -335,4 +335,58 @@ async function launch() {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+/* ── 手机横屏（矮窗口）：页签挪到左侧竖排 ─────────────────────────────────
+ *
+ * 横过来之后视口约 923×411（Pixel_9 1080×2424 / 420dpi 实测）。横向一条页签
+ * 要吃掉 ~40px 高度，也就是 10% 的可用高度换一个「切页签」控件 —— 而横屏最不缺的
+ * 就是宽度。竖排到左边之后，高度全省下来，页签本身也从「一条」变成「一栏」更好点。
+ *
+ * 判据用 `max-height` 而不是只看方向：平板横屏高度 600~800px，那套横向页签没问题。
+ */
+@media (orientation: landscape) and (max-height: 560px) {
+  .dv {
+    display: grid;
+    /* 页签栏宽度：原来 124px 太宽 —— 最长的文案「崩溃分析」13px 下才 ~52px，
+       按钮又是 width: 100%，右边常年空一大截，看着比 App 自己在横屏下的整列导航
+       （84px，见 App.vue `.shell`）还长。收到 96px 后按钮贴着文字，多出的宽度还给内容区。 */
+    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    /* ⚠️ 模板区域必须把 `.guard`（下载进度 / 「需要补全游戏文件」提示条）也算进去：
+       它是第 2 个子元素，没有区域可放就会被自动摆到隐式行里 —— 那一行高度由它的内容
+       决定（实测 469px），把 tabs 那两行挤成 78px，页签栏直接塌了。 */
+    grid-template-areas:
+      "tabs head"
+      "tabs guard"
+      "tabs body";
+    gap: 8px;
+  }
+  .guard {
+    grid-area: guard;
+    min-height: 0;
+  }
+  .head {
+    grid-area: head;
+    padding: 8px 12px;
+  }
+  .tabs {
+    grid-area: tabs;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: 0;
+    gap: 6px;
+  }
+  .tb {
+    width: 100%;
+    min-height: 40px;
+    border-radius: 10px;
+    padding: 6px 12px;
+    text-align: left;
+  }
+  .body {
+    grid-area: body;
+  }
+}
 </style>

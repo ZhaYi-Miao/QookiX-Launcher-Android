@@ -40,6 +40,12 @@ class MainActivity : TauriActivity() {
     // 给 Pojav 输入桥（org.lwjgl.glfw.CallbackBridge）准备剪贴板等平台能力
     PojavShim.init(this)
 
+    // 内置默认控制布局（`<files>/controlmap/default.json`）必须在启动器阶段就落盘：
+    // ① 它原先只在游戏启动时写，从没进过游戏的用户打开「按键」页会看到一个空列表，
+    //    点「编辑布局」更会直接报 `NoSuchFileException`；
+    // ② 只在文件缺失 / 皮肤版本变了时写一次（见 ControlLayoutSeed），代价可以忽略。
+    ControlLayoutSeed.ensure(this)
+
     // 升级后必须让 WebView 换一份前端：它的 HTTP 缓存会把旧 bundle 一直喂回来，
     // 表现就是"装完新版 APK，界面还是老样子"（2026-10-05 实测踩到 ✗）。
     clearWebViewCacheOnUpgrade()

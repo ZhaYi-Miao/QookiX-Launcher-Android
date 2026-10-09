@@ -271,4 +271,68 @@ onBeforeUnmount(() => { unlisten?.(); unlisten = null; });
 .page-leave-active { transition: opacity .14s ease; }
 .page-enter-from { opacity: 0; transform: translateY(8px); }
 .page-leave-to { opacity: 0; }
+
+/* ── 手机横屏（矮窗口）：底栏换成左侧导航栏 ───────────────────────────────
+ *
+ * 手机横过来之后视口约 923×411（Pixel_9 1080×2424 / 420dpi 实测）。411px 的高度里
+ * 底栏 + 手势区要吃掉 ~60px，等于 **15% 的可用高度**被一个「换页」控件占着 ——
+ * 而横屏最不缺的就是宽度。所以这一档把底栏改到左边：宽度全省给内容。
+ *
+ * 为什么判据是 `max-height` 而不是 `orientation`：平板横屏高度 600~800px，
+ * 那套「宽而高」的窗口用底栏完全没问题，按方向切会把平板也一起改坏。
+ *
+ * 用 grid 重排而不是改模板：`.shell` 里本来就只有 顶栏 / 页面区 / 底栏 三块，
+ * 给它们指定 grid-area 就够了，不用动 DOM 顺序（DOM 顺序还牵着焦点与读屏顺序）。
+ */
+@media (orientation: landscape) and (max-height: 560px) {
+  .shell {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "rail top"
+      "rail page";
+  }
+  .top {
+    grid-area: top;
+    /* 横屏高度紧张：顶栏压到 44px 上下（竖屏那套 10px+8px 的留白在这里太贵） */
+    padding: 6px 12px 4px;
+  }
+  .title {
+    font-size: 16px;
+  }
+  .page {
+    grid-area: page;
+  }
+  .tabs {
+    grid-area: rail;
+    /* Vant 的 `.van-tabbar` 自带 `height: 50px`，不覆盖它，导航栏就只有 50px 高
+       （`align-self: stretch` 压不过固定高度）—— 实测左侧只占顶部一小块。 */
+    height: 100%;
+    flex-direction: column;
+    align-self: stretch;
+    padding-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+  /* Vant 的底栏自带一条顶部细线，竖着放就成了一条怪线 */
+  .tabs::after {
+    display: none;
+  }
+  .tabs :deep(.van-tabbar-item) {
+    min-height: 0;
+    height: auto;
+    flex: 1;
+    justify-content: center;
+    gap: 2px;
+    font-size: 11px;
+  }
+  /* 栏宽只有 84px：「下载」这类两字标签一旦允许换行就会被拆成竖排字 */
+  .tabs :deep(.van-tabbar-item__text) {
+    white-space: nowrap;
+  }
+  .tab-icon {
+    width: 22px;
+    height: 22px;
+  }
+}
 </style>

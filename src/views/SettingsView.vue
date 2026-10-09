@@ -100,7 +100,7 @@ import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
 import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.3.4 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.4.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -1927,7 +1927,7 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.3.4</span>
+            >v1.4.0</span>
           </div>
           <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>
@@ -2234,12 +2234,13 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 18px;
 }
-/* 手机：子标签页原来一点左右内边距都没有，卡片背景直接顶到屏幕两边
-   （宽屏时子页在左侧导航右边，加了反而挤）。用 container query 只在窄屏加。 */
-@container page (max-width: 640px) {
-  .settings-pane {
-    padding: 0 16px 16px;
-  }
+/* 二级分组页的左右留白：与其它页面一致（MoreView / InstancesView 等都在页面根上写
+   `padding: 4px 16px 16px`），卡片不再顶到屏幕两边。
+   以前只在窄屏（container query ≤640px）加 —— 那会儿宽屏还是「左导航 + 右卡片」双栏，
+   卡片左边有导航顶着、加了反而挤；现在改成「列表进、子页返回」的单栏形态，
+   左边已经没有导航，宽屏同样会贴边，所以留白改成无条件。 */
+.settings-body {
+  padding: 4px 16px 16px;
 }
 .btn {
   display: inline-flex;
@@ -3655,7 +3656,9 @@ textarea.text-input {
   gap: 6px;
   width: 100%;
   min-height: 44px;
-  padding: 0 6px;
+  /* 不再自带左右内边距：父级 .settings-body 已给 16px 装订线，
+     返回条自己再加就会比下面的卡片多缩进 6px、左沿对不齐 */
+  padding: 0;
   margin-bottom: 10px;
   border: none;
   background: transparent;

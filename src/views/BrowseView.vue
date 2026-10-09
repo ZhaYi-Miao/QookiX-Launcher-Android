@@ -411,4 +411,13 @@ onMounted(async () => {
   color: var(--accent);
   background: var(--accent-08);
 }
+
+/* ── 手机横屏（矮窗口）：内容卡排 2~3 列 ─────────────────────────────────
+ * 上面那条「一行一张卡」是给 360px 宽的竖屏写的（双列会把标题/作者压扁）；
+ * 横屏内容区有 800px+，三列刚刚好。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  }
+}
 </style>

@@ -693,4 +693,14 @@ onBeforeUnmount(() => {
   color: var(--text-3);
   line-height: 1.5;
 }
+
+/* ── 手机横屏（矮窗口）：服务器卡片并排两张 ─────────────────────────────
+ * 横屏只有 ~360px 高，卡片一列排下去要滚好几屏；而宽度有 800px 以上空着。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  .list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
 </style>

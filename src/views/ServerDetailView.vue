@@ -1351,4 +1351,25 @@ onUnmounted(() => {
   color: var(--text-3);
   padding: 40px 0;
 }
+
+/* ── 手机横屏（矮窗口）：设置分组卡片排两列 ───────────────────────────────
+ * 横屏只有 ~360px 高，五张设置卡一列排下去要滚很久；宽度反而空着 500px+。
+ * 只对「设置」这一页生效 —— 文件 / 日志 / 控制台各有各的布局，显式退回 flex。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  .pane {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 10px;
+  }
+  /* 保存按钮横跨两列（它是整页唯一的动作，压在最后一行的右边会很难找） */
+  .pane > .save {
+    grid-column: 1 / -1;
+  }
+  .pane.files,
+  .pane.logs,
+  .pane.console {
+    display: flex;
+  }
+}
 </style>

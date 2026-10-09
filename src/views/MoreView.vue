@@ -106,4 +106,12 @@ const entries = computed(() => {
   font-size: 20px;
   line-height: 1;
 }
+
+/* ── 手机横屏（矮窗口）：入口排两列 ── */
+@media (orientation: landscape) and (max-height: 560px) {
+  .more-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>

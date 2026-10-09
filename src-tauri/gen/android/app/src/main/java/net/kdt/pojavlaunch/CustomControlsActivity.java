@@ -161,6 +161,17 @@ public class CustomControlsActivity extends androidx.appcompat.app.AppCompatActi
 			// 兜底：PREF_DEFAULTCTRL_PATH 理论上初始化后不会为空，但它是静态字段，
 			// 万一为空就用默认布局文件（崩在这里的话整个 App 直接闪退，损失很大）
 			if (path == null || path.trim().isEmpty()) path = Tools.CTRLDEF_FILE;
+			// 内置那份布局原先只在**游戏启动**时才落盘。用户从没进过游戏（新装机 / 清过数据）
+			// 却从启动器点「编辑布局」时，这里拿到的是个不存在的路径 →
+			// `loadLayout` 抛 NoSuchFileException，界面上就是「弹报错 + 编辑器一片黑」
+			// （2026-10-09 反馈）。先确保内置布局在，再兜「指定那份不在了」。
+			com.zhayi.qookix.ControlLayoutSeed.ensure(this);
+			if (!new File(path).isFile() && Tools.CTRLDEF_FILE != null) {
+				android.util.Log.w("CustomControls", "要编辑的布局不存在，改用内置默认布局：" + path);
+				path = Tools.CTRLDEF_FILE;
+				android.widget.Toast.makeText(this, "这份布局不在了，已改为编辑内置默认布局",
+						android.widget.Toast.LENGTH_LONG).show();
+			}
 			mControlLayout.loadLayout(path);
 
 			// **必须在加载之后再设一次**：setModifiable(true) 里那句

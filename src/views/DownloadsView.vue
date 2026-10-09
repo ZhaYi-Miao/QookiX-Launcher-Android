@@ -263,4 +263,18 @@ async function cancel(t: TaskEntry) {
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* ── 手机横屏（矮窗口）：下载任务并排两张（页签行与空态横跨整行） ── */
+@media (orientation: landscape) and (max-height: 560px) {
+  .dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 10px;
+  }
+  .dl > .tab-swipe,
+  .dl > .empty {
+    grid-column: 1 / -1;
+  }
+}
 </style>

@@ -100,16 +100,9 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
 
         private const val TAG = "QookiXGame"
 
-        /**
-         * 内置控制布局的**视觉版本**。
-         *
-         * 默认布局写在 `<files>/controlmap/default.json`，只在文件缺失时写入 ——
-         * 所以改版后老用户看不到新皮肤。这里用一个独立标记文件记录当前皮肤版本：
-         * 版本不一致就**覆盖一次**内置 default.json（玩家自己另存/另选的布局文件不受影响，
-         * 只有名为 default.json 的这一份会被刷新）。
-         */
-        private const val CONTROL_STYLE_VERSION = 3
-        private const val STYLE_MARKER = ".qk-control-style"
+        // 内置默认布局的写入与「皮肤版本」标记已经抽到 [`ControlLayoutSeed`] ——
+        // 启动器（MainActivity）与编辑器（CustomControlsActivity）也要用它，
+        // 不能只在游戏启动时才把 default.json 落盘（否则启动器点「编辑布局」会报文件不存在）。
 
         /** `R.array.menu_ingame` 八项对应的图标（顺序必须与数组一致）。 */
         private val GAME_MENU_ICONS = intArrayOf(
@@ -538,11 +531,11 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
 
     /**
      * 加载控制布局。默认走 `LauncherPreferences.PREF_DEFAULTCTRL_PATH`
-     * （首次运行 / 皮肤版本升级时由 [seedDefaultControlLayout] 写入内置布局）；
+     * （首次运行 / 皮肤版本升级时由 [ControlLayoutSeed.ensure] 写入内置布局）；
      * 失败则回落默认布局，绝不因为一个坏 JSON 就起不来游戏。
      */
     private fun loadControls() {
-        seedDefaultControlLayout()
+        ControlLayoutSeed.ensure(this)
         try {
             mControlLayout.loadLayout(LauncherPreferences.PREF_DEFAULTCTRL_PATH)
         } catch (e: IOException) {
@@ -559,44 +552,6 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
         mDrawerPullButton.visibility =
             if (mControlLayout.hasMenuButton()) View.GONE else View.VISIBLE
         mControlLayout.toggleControlVisible()
-    }
-
-    /**
-     * 把内置默认控制布局写到 `<files>/controlmap/default.json`。
-     *
-     * 内容与 PojavLauncher 的 `assets/default.json` 位置一致，但换了 QookiX 的视觉：
-     * 圆角、半透明深色填充 + 强调色描边、中文标签。
-     *
-     * **升级语义**：只在「文件不存在」或「皮肤版本变了」时写入，
-     * 版本标记放在同目录的 [STYLE_MARKER] 里。因此玩家自己另存的控制布局不受影响，
-     * 只有内置的 `default.json` 会被刷新一次。
-     */
-    private fun seedDefaultControlLayout() {
-        val target = File(net.kdt.pojavlaunch.Tools.CTRLDEF_FILE)
-        target.parentFile?.mkdirs()
-
-        val marker = File(target.parentFile, STYLE_MARKER)
-        val installed = try {
-            marker.readText().trim()
-        } catch (_: Throwable) {
-            ""
-        }
-        val wanted = CONTROL_STYLE_VERSION.toString()
-
-        if (target.isFile && target.length() > 0L && installed == wanted) return
-
-        try {
-            resources.openRawResource(R.raw.pojav_default_control).use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-            marker.writeText(wanted)
-            android.util.Log.i(
-                "GameActivity",
-                "内置控制布局已更新到皮肤版本 $wanted（原版本 '${installed.ifEmpty { "无" }}'）"
-            )
-        } catch (e: Throwable) {
-            android.util.Log.w("GameActivity", "默认控制布局写入失败", e)
-        }
     }
 
     // ------------------------------------------------------------------ 游戏启动
@@ -788,7 +743,12 @@ class GameActivity : AppCompatActivity(), ControlButtonMenuListener, EditorExita
             mControlLayout.loadLayout(null as CustomControls?)
             mControlLayout.setModifiable(false)
             System.gc()
-            mControlLayout.loadLayout(LauncherPreferences.PREF_DEFAULTCTRL_PATH)
+            // 那份布局可能已经不在了（用户在启动器里删过 / 改过名）→ 退回内置默认，
+            // 别在游戏里弹一个「文件不存在」的报错框挡住界面。
+            val want = LauncherPreferences.PREF_DEFAULTCTRL_PATH
+            mControlLayout.loadLayout(
+                if (want != null && File(want).isFile) want else net.kdt.pojavlaunch.Tools.CTRLDEF_FILE
+            )
         } catch (e: Throwable) {
             net.kdt.pojavlaunch.Tools.showError(this, e)
         }
