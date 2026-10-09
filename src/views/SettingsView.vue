@@ -100,7 +100,7 @@ import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
 import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.4.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.4.1 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -1927,7 +1927,7 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.4.0</span>
+            >v1.4.1</span>
           </div>
           <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>

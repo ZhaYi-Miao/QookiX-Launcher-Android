@@ -1268,16 +1268,17 @@ fn build_android_jvm_args(
         args.push(format!("-Dorg.lwjgl.librarypath={}", dir.display()));
     }
 
-    // 26.3 的 JNA 要 7.x，而随包那份 libjnidispatch.so 是 6.1.6（老版本用的）——
-    // 让它直接用 jar 里自带的那份，别去系统路径捞（否则 MC 生成硬件报告时直接 Error）。
-    // 判据用「有 3.4.1 natives」而不是版本号：走到这里就等价于 26.3 那条路。
-    // JNA：随包那份 `libjnidispatch.so` 是给老版本用的（6.1.6），而 MC 26.3 的 JNA
-    // 要 7.x，于是它会报一句「incompatible JNA native library」——**不致命**，
-    // MC 拿不到硬件信息而已（它自己 catch 了）。
-    // 试过让它改用 jar 自带的那份（`-Djna.nosys=true`）：反而更糟 —— 我们给 JVM 设了
-    // `-Dos.name=Linux`，JNA 就按桌面 Linux 挑了 glibc 的版本，加载时报
-    // `dlopen failed: library "libc.so.6" not found`。所以维持原样，等有 Android 版
-    // 的 7.x jnidispatch 再说。
+    // JNA：随包那份 jniLibs/libjnidispatch.so 曾是 6.1.6（老版本用的），而 MC 26.3 的
+    // jna.jar 要求 native 版本 7.0.4 —— `com.sun.jna.Version` 里 VERSION=5.17.0 是 jar
+    // 自己的版本，VERSION_NATIVE=7.0.4 才是它要的 native。混用会直接
+    //   java.lang.Error: There is an incompatible JNA native library installed
+    //   Expected: 7.0.4 / Found: 6.1.6
+    // 于是 oshi 全线失败（崩溃报告里 processor / memory / Graphics card 全是 ~~ERROR~~）。
+    // 现在 jniLibs 里换成了 JNA 5.17.0 的 Android native（与 `src-tauri/jna/<abi>/`
+    // 服务端那份同一来源，内含 7.0.4），所以这里照旧把 JNA 指向 `files/natives` 即可。
+    // 曾试过 `-Djna.nosys=true` 让 JNA 用 jar 自带的那份：更糟 —— 我们给 JVM 设了
+    // `-Dos.name=Linux`，JNA 会按桌面 Linux 挑 glibc 版本，报
+    // `dlopen failed: library "libc.so.6" not found`。别再走那条路。
     args.push(format!("-Djna.boot.library.path={native_lib_dir}"));
     args.push(format!("-Djava.home={}", runtime.path));
     args.push(format!(
@@ -1302,7 +1303,18 @@ fn build_android_jvm_args(
     let gl_libname = renderer_gl_lib(&renderer);
     args.push(format!("-Dorg.lwjgl.opengl.libname={gl_libname}"));
     args.push("-Dorg.lwjgl.vulkan.libname=libvulkan.so".to_string());
-    if !native_lib_dir.is_empty() {
+    // freetype 必须跟**这一套 LWJGL 的 Java 类**配套：`native_lib_dir`（APK 里抽出来的
+    // `files/natives`）躺着的是随包老版 `libfreetype.so`，而 3.4.1 组件集里另有一份配套的。
+    // 指错就会重现本函数开头那个坑 —— `Incompatible Java and native library versions
+    // detected`（那一条注释讲的是 `java.library.path` 的顺序，而这个属性**绕过**了它）。
+    // 组件集里没有这份时退回老路径，老版本（无 3.4.1 natives）行为完全不变。
+    let component_freetype = lwjgl_natives.and_then(|dir| {
+        let p = dir.join("libfreetype.so");
+        p.exists().then_some(p)
+    });
+    if let Some(p) = component_freetype {
+        args.push(format!("-Dorg.lwjgl.freetype.libname={}", p.display()));
+    } else if !native_lib_dir.is_empty() {
         args.push(format!(
             "-Dorg.lwjgl.freetype.libname={native_lib_dir}/libfreetype.so"
         ));

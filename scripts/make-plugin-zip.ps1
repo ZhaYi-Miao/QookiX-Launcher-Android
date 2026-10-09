@@ -24,7 +24,7 @@
 param(
     [string]$BaseUrl = "",
     [string[]]$Abis = @("arm64-v8a", "x86_64"),
-    [string]$ComponentsVersion = "3.4.1-2",
+    [string]$ComponentsVersion = "3.4.1-3",
     [string]$RendererVersion = "1.0.1",
     [string]$DriverVersion = "1.0.1",
     # 只打某一类/某个 id（comma 分隔的 kind 或 id，例如 "renderer" / "qookix-renderer-mobileglues"）

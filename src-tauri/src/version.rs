@@ -673,6 +673,16 @@ async fn download_asset_objects(
                         }
                         match resp.bytes().await {
                             Ok(bytes) => {
+                                // 长度必须和索引里的 size 一致才认。镜像/代理配错时常见
+                                // 「HTTP 200 + 一段 HTML 错误页」：不校验的话它会被当成下载成功
+                                // 落盘，下次启动又因大小不符重下 —— 用户永远补不齐。
+                                if size > 0 && bytes.len() as u64 != size {
+                                    reasons.push(format!(
+                                        "{candidate} → 长度不符（期望 {size}，实际 {}）",
+                                        bytes.len()
+                                    ));
+                                    continue;
+                                }
                                 if let Some(parent) = dest.parent() {
                                     let _ = fs::create_dir_all(parent).await;
                                 }
@@ -712,9 +722,21 @@ async fn download_asset_objects(
             "资源对象下载结束：{failed}/{total_files} 个失败（共 {total_bytes} 字节）"
         ));
     }
-    if abort.load(Ordering::Relaxed) || (failed > 0 && failed * 3 >= total_files) {
+    // 判据是「**一个都不能少**」。这里曾经写成 `failed * 3 >= total_files`
+    // （失败过半才报错），后果是真机实测踩到的：26.3 的 5147 个对象静默漏了 199 个
+    // （3.9%），函数照样 `Ok`，安装流程随即把实例标成已安装、报「安装完成」，
+    // 用户要到启动游戏时才发现缺贴图（`panorama_1.png`）/缺 `pack.mcmeta`，
+    // 游戏在 `TextureManager` 里 `NoSuchFileException` 直接崩，而错误信息完全指不到真凶。
+    // 失败计数本身就等于「没落盘的对象数」，所以缺一个 = 没装完。
+    // 报错不会让用户白下：上面按大小跳过，重试只补缺的那部分。
+    if abort.load(Ordering::Relaxed) {
         return Err(anyhow::anyhow!(
-            "资源文件下载失败（{failed}/{total_files}）。请检查网络，或到「设置 → 内容服务 → 下载代理」确认已选择「系统代理」（已配置代理软件时）后重试。"
+            "资源文件下载失败（{failed}/{total_files}），已中止。请检查网络，或到「设置 → 内容服务 → 下载代理」确认已选择「系统代理」（已配置代理软件时）后重试。"
+        ));
+    }
+    if failed > 0 {
+        return Err(anyhow::anyhow!(
+            "资源文件没下完：{failed}/{total_files} 个对象缺失。请检查网络，或到「设置 → 内容服务 → 下载代理」确认已选择「系统代理」（已配置代理软件时）后重试；已下好的文件会跳过，重试只补缺的那些。"
         ));
     }
     Ok(())
