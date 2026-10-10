@@ -45,6 +45,11 @@ class MainActivity : TauriActivity() {
     //    点「编辑布局」更会直接报 `NoSuchFileException`；
     // ② 只在文件缺失 / 皮肤版本变了时写一次（见 ControlLayoutSeed），代价可以忽略。
     ControlLayoutSeed.ensure(this)
+    // 顺手清掉导入布局的中转文件（`controlmap/TMP_IMPORT*.json`）。它原先只在导入时写、
+    // **没有任何地方删**，于是越积越多；而「按键」页的列表把它过滤掉（用户看不到、
+    // 也就删不掉），原生编辑器那个选文件的对话框又照单全收 —— 用户就在那里看到一堆
+    // 删不掉的「TMP_IMPORT_FILE 副本」。
+    sweepImportTempFiles()
 
     // 升级后必须让 WebView 换一份前端：它的 HTTP 缓存会把旧 bundle 一直喂回来，
     // 表现就是"装完新版 APK，界面还是老样子"（2026-10-05 实测踩到 ✗）。
@@ -827,16 +832,48 @@ class MainActivity : TauriActivity() {
       return ""
     }
 
-    /** 与 [readPickedControlLayout] 共用的校验 + 落盘；返回统计 JSON。 */
-      private fun acceptLayoutText(text: String): String {
-        return runCatching {
-          val j = org.json.JSONObject(text)
-          if (!j.has("version") || !j.has("mControlDataList")) {
-            throw java.io.IOException("这不是有效的控制布局文件")
+    /**
+     * 清掉导入布局用的中转文件（`TMP_IMPORT*.json`）。
+     *
+     * 这些是 [acceptLayoutText] / `ImportControlActivity` 写出来的**临时**数据，导入流程
+     * 结束后没有任何地方删除：App 的布局列表按 `startsWith("TMP_IMPORT")` 把它们过滤掉
+     * （用户看不到 → 也就没有删除入口），而原生编辑器那个文件对话框会全部列出来，
+     * 于是出现「一堆删不掉的怪文件」。
+     *
+     * ⚠️ 只能在**启动器**路径调用：`CustomControlsActivity`（预览导入结果时）也会调
+     * `ControlLayoutSeed.ensure`，在那边扫会把预览正要读的那个文件删掉。
+     */
+    private fun sweepImportTempFiles() {
+      runCatching {
+        java.io.File(filesDir, "controlmap").listFiles()?.forEach { f ->
+          if (f.isFile && f.name.startsWith(TMP_IMPORT_NAME) && f.name.endsWith(".json")) {
+            if (f.delete()) Log.i(TAG, "清理导入中转文件 ${f.name}")
           }
-          val tmp = java.io.File(filesDir, "controlmap/$TMP_IMPORT_NAME.json")
-          tmp.parentFile?.mkdirs()
-          tmp.writeText(text)
+        }
+      }
+    }
+
+    /** 与 [readPickedControlLayout] 共用的校验 + 落盘；返回统计 JSON。 */
+    private fun acceptLayoutText(text: String): String {
+      return runCatching {
+        val j = org.json.JSONObject(text)
+        if (!j.has("version") || !j.has("mControlDataList")) {
+          throw java.io.IOException("这不是有效的控制布局文件")
+        }
+        val tmp = java.io.File(filesDir, "controlmap/$TMP_IMPORT_NAME.json")
+        tmp.parentFile?.mkdirs()
+        // 先清掉上一次的残留（含历史遗留的「副本」变体），否则每导入一次就多一个文件
+        tmp.parentFile?.listFiles()?.forEach { f ->
+          if (
+            f.isFile &&
+            f.name.startsWith(TMP_IMPORT_NAME) &&
+            f.name.endsWith(".json") &&
+            f.absolutePath != tmp.absolutePath
+          ) {
+            f.delete()
+          }
+        }
+        tmp.writeText(text)
           org.json.JSONObject()
             .put("ok", true)
             .put("name", TMP_IMPORT_NAME)

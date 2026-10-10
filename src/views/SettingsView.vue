@@ -28,10 +28,14 @@ import { api } from "../api";
 const DOWNLOAD_SLIDERS_ENABLED = true;
 
 /**
- * 并发数的上限，与后端 `download.rs` 的 `CONCURRENCY_MAX = 8` **必须一致**。
- * 移动网络下再高只会互相抢带宽，单流反而更慢。
+ * 并发数上限，与后端 `download.rs` 的 `FILE_CONCURRENCY_MAX` / `CHUNK_CONCURRENCY_MAX`
+ * **必须一致**（两边各存一份常量，改一处忘了另一处就会出现「拖到底但后端钳住」）。
+ *
+ * 数值对齐桌面端（文件 32 / 分片 16）：以前两端都卡在 8，用户在设置里拖到最大也
+ * 只有桌面的四分之一并发，手机上下大包（几百个库 + 几千个资源对象）一直快不起来。
  */
-const CONCURRENCY_MAX = 8;
+const FILE_CONCURRENCY_MAX = 32;
+const CHUNK_CONCURRENCY_MAX = 16;
 
 /**
  * 「手柄死区」滑杆。
@@ -62,6 +66,8 @@ import {
   IconPlay,
   IconSliders,
   IconTrash,
+  IconChevronDown,
+  IconChevronUp,
 } from "../components/icons";
 import type {
   ControlButtonInfo,
@@ -100,7 +106,7 @@ import AppSelect from "../ui/AppSelect.vue";
 import AppSeg from "../ui/AppSeg.vue";
 import ColorPickerSheet from "../components/ColorPickerSheet.vue";
 
-/* ---- 版本徽章彩蛋：长按 v1.5.0 约 2.5s → 全屏像素烟花 + 制作名单 ----
+/* ---- 版本徽章彩蛋：长按 v1.5.1 约 2.5s → 全屏像素烟花 + 制作名单 ----
  * 按住期间徽章脉冲提示「正在积蓄」，松手即取消；触发后任意点击关闭。
  * 烟花 = 预生成的彩色像素方块（CSS 动画向外炸开再淡出，循环）。 */
 const VER_HOLD_MS = 2000;
@@ -820,6 +826,23 @@ async function grantAllFilesAccess() {
 
 /* ── 按键透传（按住这个键时拖动也能转视角）────────────────────────── */
 const controlButtons = ref<ControlButtonInfo[]>([]);
+/** 按键透传逐键一行，布局大了就是十几行 —— 默认折叠（它属于「调一次就不动」的设置） */
+const showPassthru = ref(false);
+
+/**
+ * 打开原生按键布局编辑器（就是游戏里那个横屏界面）。
+ *
+ * 入口原先只在「实例详情 → 按键」页；这里补一个并放在「按键透传」**上方** ——
+ * 透传是逐个按键的细项，用户先要能进布局本身去调键位/大小，再看细项才顺。
+ * 不传布局名 = 编辑器自己用「当前使用中那份」（与 KeysTab 调法一致）。
+ */
+async function openKeyLayoutEditor() {
+  try {
+    await api.openControlLayoutEditor(undefined, false, undefined);
+  } catch (e) {
+    message.error(String(e));
+  }
+}
 const controlButtonBusy = ref<number | null>(null);
 
 async function loadControlButtons() {
@@ -1315,14 +1338,14 @@ onUnmounted(() => {
             <label class="row-label">{{ $t("settings.concurrent-files", { p1: settings.settings.download_threads }) }}<app-slider
                 v-model:value="settings.settings.download_threads"
                 :min="1"
-                :max="CONCURRENCY_MAX"
+                :max="FILE_CONCURRENCY_MAX"
                 :step="1" />
             </label>
             <p class="hint">{{ $t("settings.parallel-download-desc") }}</p>
             <label class="row-label" style="margin-top: 16px;">{{ $t("settings.chunk-threads", { p1: settings.settings.download_chunk_threads }) }}<app-slider
                 v-model:value="settings.settings.download_chunk_threads"
                 :min="1"
-                :max="CONCURRENCY_MAX"
+                :max="CHUNK_CONCURRENCY_MAX"
                 :step="1" />
             </label>
             <p class="hint">{{ $t("settings.chunk-threads-desc") }}</p>
@@ -1777,19 +1800,38 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <!-- 按键布局：进原生横屏编辑器（和游戏里所见即所得那个一模一样）。
+               放在「按键透传」上方：先能进布局调键位，再谈逐个按键的透传细项。 -->
           <div class="card glass">
-            <h3>{{ $t("settings.key-passthrough") }}</h3>
+            <h3>{{ $t("settings.key-layout") }}</h3>
+            <p class="hint">{{ $t("settings.key-layout-desc") }}</p>
+            <button class="mini-btn" @click="openKeyLayoutEditor">{{ $t("settings.key-layout-edit") }}</button>
+          </div>
+
+          <div class="card glass">
+            <!-- 标题可点：展开/收起逐键列表。默认收起 —— 它属于「调一次就不动」的设置，
+                 摊开十几行会把下面真正常用的「操作」组挤到几屏之外。 -->
+            <h3
+              style="display: flex; align-items: center; gap: 6px; cursor: pointer"
+              @click="showPassthru = !showPassthru"
+            >
+              {{ $t("settings.key-passthrough") }}
+              <IconChevronUp v-if="showPassthru" />
+              <IconChevronDown v-else />
+            </h3>
             <p class="hint">{{ $t("settings.key-passthrough-desc") }}</p>
             <div v-if="!controlButtons.length" class="hint">{{ $t("settings.no-layout-yet") }}</div>
-            <div v-for="b in controlButtons" :key="b.index" class="choice-row">
-              <div class="choice-info">
-                <span class="choice-label">{{ b.name }}</span>
+            <template v-if="showPassthru">
+              <div v-for="b in controlButtons" :key="b.index" class="choice-row">
+                <div class="choice-info">
+                  <span class="choice-label">{{ b.name }}</span>
+                </div>
+                <app-switch
+                  :value="b.passThru"
+                  :loading="controlButtonBusy === b.index"
+                  @update:value="(v: boolean) => setPassthru(b.index, v)" />
               </div>
-              <app-switch
-                :value="b.passThru"
-                :loading="controlButtonBusy === b.index"
-                @update:value="(v: boolean) => setPassthru(b.index, v)" />
-            </div>
+            </template>
           </div>
 
           <div class="card glass">
@@ -1927,7 +1969,7 @@ onUnmounted(() => {
               @pointercancel="verCancel"
               @pointerleave="verCancel"
               @contextmenu.prevent
-            >v1.5.0</span>
+            >v1.5.1</span>
           </div>
           <p class="about-hero-slogan">{{ $t("settings.tagline") }}</p>
         </div>

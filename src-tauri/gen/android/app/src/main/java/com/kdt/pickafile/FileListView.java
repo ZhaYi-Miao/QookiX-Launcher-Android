@@ -28,6 +28,29 @@ public class FileListView extends LinearLayout
     private boolean showFiles = true;
     private boolean showFolders = true;
 
+    /**
+     * 名字以这些前缀开头的**文件**不列出来。
+     *
+     * 控制布局目录里混着导入流程的中转文件（`TMP_IMPORT_FILE*.json`）：App 内的布局列表
+     * 把它们过滤掉了（用户看不到、也就没有删除入口），而这个对话框原先照单全收 ——
+     * 结果用户在这里看到一堆「删不掉的怪文件」。调用方用 {@link #skipFilePrefixes} 指定。
+     */
+    private final java.util.List<String> skipNamePrefixes = new java.util.ArrayList<>();
+
+    public void skipFilePrefixes(String... prefixes) {
+        skipNamePrefixes.clear();
+        for (String p : prefixes) {
+            if (p != null && !p.isEmpty()) skipNamePrefixes.add(p);
+        }
+    }
+
+    private boolean isSkippedName(String name) {
+        for (String prefix : skipNamePrefixes) {
+            if (name.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
     public FileListView(AlertDialog build) {
         this(build.getContext(), null, new String[0]);
         dialogToTitleListener(build);
@@ -132,6 +155,9 @@ public class FileListView extends LinearLayout
                             }
 
                             if(showFiles){
+                                // 中转/临时文件（`TMP_IMPORT_FILE` 这类）一律不列：它们不是
+                                // 玩家的布局，列出来只会让人以为「目录里怎么有这些怪文件、还删不掉」
+                                if(isSkippedName(file.getName())) continue;
                                 if(fileSuffixes.length > 0){
                                     for(String suffix : fileSuffixes){
                                         if(file.getName().endsWith("." + suffix)){

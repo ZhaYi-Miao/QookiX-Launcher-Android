@@ -101,20 +101,68 @@ pub async fn save_raw_settings(map: &HashMap<String, Value>) -> Result<()> {
     fs::write(&settings_path, content)
         .await
         .with_context(|| format!("Failed to write settings file: {}", settings_path.display()))?;
+    // 写盘必须是**唯一**的失效入口：缓存与文件不一致的话，用户改完设置不生效才是最难查的 bug
+    invalidate_settings_cache();
     // 代理/镜像等设置改变后让缓存的 HTTP 客户端立即重建
     crate::util::reset_http_client();
     Ok(())
 }
 
+/// 进程内缓存：`(data_dir, 解析后的设置原始 JSON)`。
+///
+/// 为什么需要：`get_settings()` 的实现是「`fs::read_to_string` + `serde_json` 解析」，
+/// 而下载热路径上**每个文件**都要问它一次（`download.rs` 里读并发数、读镜像、读代理），
+/// 并发 8~32 个文件时就是每秒几十次磁盘读 + 全量解析。设置只在用户改的时候变，
+/// 缓存到进程内、写盘时失效即可。
+static SETTINGS_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<Option<(String, HashMap<String, Value>)>>,
+> = std::sync::OnceLock::new();
+
+fn settings_cache() -> &'static std::sync::Mutex<Option<(String, HashMap<String, Value>)>> {
+    SETTINGS_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 设置文件被写过之后调用（见 `save_raw_settings`）。
+pub fn invalidate_settings_cache() {
+    if let Ok(mut guard) = settings_cache().lock() {
+        *guard = None;
+    }
+}
+
+/// 取值期间持锁、克隆后立刻释放（**不跨 await**）。
+fn cached_settings_map(data_dir: &str) -> Option<HashMap<String, Value>> {
+    settings_cache()
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref()
+                .filter(|(cached_dir, _)| cached_dir == data_dir)
+                .map(|(_, map)| map.clone())
+        })
+}
+
 pub async fn get_settings() -> Result<Settings> {
     let data_dir = get_data_dir().await?;
+
     let settings_path = Path::new(&data_dir).join("settings.json");
 
     if settings_path.exists() {
-        let content = fs::read_to_string(&settings_path).await
-            .context("Failed to read settings file")?;
-        let settings: HashMap<String, Value> = serde_json::from_str(&content)
-            .context("Failed to parse settings")?;
+        // 命中缓存就跳过磁盘读 + 解析：下载热路径上**每个文件**都会问一次设置
+        // （并发数、镜像、代理都在里面），几十路并发时这里就是每秒几十次文件 IO。
+        // 设置只在用户改的时候变，写入路径（`save_raw_settings`）会清缓存。
+        let settings: HashMap<String, Value> = match cached_settings_map(&data_dir) {
+            Some(map) => map,
+            None => {
+                let content = fs::read_to_string(&settings_path).await
+                    .context("Failed to read settings file")?;
+                let parsed: HashMap<String, Value> = serde_json::from_str(&content)
+                    .context("Failed to parse settings")?;
+                if let Ok(mut guard) = settings_cache().lock() {
+                    *guard = Some((data_dir.clone(), parsed.clone()));
+                }
+                parsed
+            }
+        };
 
         Ok(Settings {
             data_dir: data_dir.clone(),
@@ -124,8 +172,10 @@ pub async fn get_settings() -> Result<Settings> {
             memory_mode: raw_str(&settings, &["memory_mode", "memoryMode"]).unwrap_or_else(|| "auto".into()),
             jvm_args: raw_str(&settings, &["jvm_args", "jvmArgs"]).unwrap_or_default(),
             game_args: raw_str(&settings, &["game_args", "gameArgs"]).unwrap_or_default(),
-            download_threads: raw_i64(&settings, &["download_threads", "downloadThreads"], 4) as i32,
-            download_chunk_threads: raw_i64(&settings, &["download_chunk_threads", "downloadChunkThreads"], 2) as i32,
+            // 默认值与桌面端一致（文件 8 / 分片 4）：以前是 4 / 2，装机时几百个库加几千个
+            // 资源对象全部按这个并发走，手机上就显得很慢（同样的网络桌面端明显更快）。
+            download_threads: raw_i64(&settings, &["download_threads", "downloadThreads"], 8) as i32,
+            download_chunk_threads: raw_i64(&settings, &["download_chunk_threads", "downloadChunkThreads"], 4) as i32,
             curseforge_api_key: raw_str(&settings, &["curseforge_api_key", "curseforgeApiKey"]),
             translate_provider: raw_str(&settings, &["translate_provider", "translateProvider"])
                 .unwrap_or_else(|| "default".into()),
@@ -172,8 +222,8 @@ pub async fn get_settings() -> Result<Settings> {
             memory_mode: "auto".to_string(),
             jvm_args: String::new(),
             game_args: String::new(),
-            download_threads: 4,
-            download_chunk_threads: 2,
+            download_threads: 8,
+            download_chunk_threads: 4,
             curseforge_api_key: None,
             translate_provider: "default".to_string(),
             translate_api_base: String::new(),

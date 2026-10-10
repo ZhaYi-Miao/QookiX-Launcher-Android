@@ -9,6 +9,8 @@ import { useTasksStore } from "../stores/tasks";
 import { useSettingsStore } from "../stores/settings";
 
 import { useMessage } from "../composables/message";
+import { api } from "../api";
+import type { NewsItem } from "../types";
 import { Button as VanButton, Progress as VanProgress, Swipe as VanSwipe, SwipeItem as VanSwipeItem } from "vant";
 import { loaderBadge, fmtSpeed } from "../utils/format";
 import { taskPercent } from "../utils/task";
@@ -32,6 +34,20 @@ const settings = useSettingsStore();
 const showDownloads = computed(() => settings.settings?.show_home_downloads ?? true);
 const showRecent = computed(() => settings.settings?.show_home_recent ?? true);
 const showStats = computed(() => settings.settings?.show_home_stats ?? true);
+
+// ── 新闻：首页主卡片下面原来一大片空白，把最新几条放进来（点整行进 /news）──
+const news = ref<NewsItem[]>([]);
+const showNews = computed(() => settings.settings?.show_news !== false);
+async function loadNews() {
+  if (!showNews.value) return;
+  try {
+    news.value = (await api.fetchNews()) ?? [];
+  } catch {
+    // 新闻拉不到不该影响首页（网络差 / 服务挂了时静默留空）
+    news.value = [];
+  }
+}
+onMounted(loadNews);
 
 /**
  * 页面右上动作已废弃：那个位置的按钮会在切页时出现/消失，把账号块挤得左右跳。
@@ -182,6 +198,21 @@ onMounted(() => {
         </van-swipe>
       </section>
 
+      <!-- 新闻：主卡片与「最近游玩」下面原来一大片空白，这里填最新几条（点进新闻页看全文） -->
+      <section v-if="showNews && news.length">
+        <h2 class="sec">{{ $t("nav.news") }}</h2>
+        <div class="news-list">
+          <button
+            v-for="n in news.slice(0, 3)"
+            :key="n.title"
+            class="news-row glass"
+            @click="router.push('/news')"
+          >
+            {{ n.title }}
+          </button>
+        </div>
+      </section>
+
       <!-- 游玩统计：没有游玩记录时组件自身不渲染 -->
       <PlaytimeCard v-if="showStats" />
     </template>
@@ -196,6 +227,28 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 首页新闻：一屏内三条，点整行进新闻页（页面底部不再空一大片） */
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.news-row {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .home {
   display: flex;
   flex-direction: column;

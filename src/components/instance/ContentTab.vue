@@ -19,11 +19,11 @@ import { useInstancesStore } from "../../stores/instances";
 import {
   IconCheck,
   IconClose,
-  IconMoreVertical,
   IconDownload,
   IconFile,
   IconImage,
   IconPlus,
+  IconChevronDown,
   IconRefresh,
   IconRepeat,
   IconSearch,
@@ -403,21 +403,20 @@ defineExpose({
     <!-- 工具栏：「检查更新 / 导入本地」原本挂在**左侧导航栏底部**，
          一是与右侧内容区的操作重复，二是把左侧栏撑到溢出屏幕
          （最底下的 tab 只露出一个头、还滚不动）。现在统一收进内容区自己的工具栏。
-         搜索框只在条目够多时才出现，别白占高度。 -->
+         搜索框**常显**（原先条目 ≤3 时隐藏以省高度，但那样「能不能搜」取决于条数，
+         用户找不到入口；列表短的时候搜索框也占不了多少地方）。 -->
     <div class="ct-toolbar glass">
-      <template v-if="contentItems.length > 3">
-        <app-input
-          v-model:value="filterText"
-          size="small"
-          class="filter-input"
-          :placeholder="$t('instance-content.search-content', { p1: contentItems.length })"
-        >
-          <template #prefix><IconSearch /></template>
-        </app-input>
-        <button v-if="filterText" class="filter-clear" :title="$t('instance-content.positive-text')" :aria-label="$t('instance-content.positive-text')" @click="filterText = ''">
-          <IconClose />
-        </button>
-      </template>
+      <app-input
+        v-model:value="filterText"
+        size="small"
+        class="filter-input"
+        :placeholder="$t('instance-content.search-content', { p1: contentItems.length })"
+      >
+        <template #prefix><IconSearch /></template>
+      </app-input>
+      <button v-if="filterText" class="filter-clear" :title="$t('instance-content.positive-text')" :aria-label="$t('instance-content.positive-text')" @click="filterText = ''">
+        <IconClose />
+      </button>
       <div class="ct-toolbar-actions">
         <button class="btn ghost" :disabled="checkingUpdates" @click="checkUpdates">
           <IconRefresh />{{ $t("instance-content.check-updates") }}<span v-if="updatesCount" class="upd-n">{{ updatesCount }}</span>
@@ -471,11 +470,34 @@ defineExpose({
             <span v-if="!item.exists" class="missing">{{ $t("instance-content.file-missing") }}</span>
           </div>
         </div>
-        <!-- 手机：条目不再挂 5 个图标按钮（桌面式的密集操作簇，手指点不准也看不清），
-             改成「点整行 → 底部操作面板」，每项都是带文字的整行按钮。 -->
-        <button class="c-more" :aria-label="$t('instance-content.switch-version')" @click.stop="openActions(item)">
-          <IconMoreVertical />
-        </button>
+        <!-- 条目操作：椭圆形开关键（启用/禁用，最高频）+ 三个符号（切换版本 / 展开面板 / 删除）。
+             原先只有一个「…」收进底部面板，启停要两步；现在启停一步到位，
+             符号按钮都给了 ≥40px 的点击高度，不是桌面那种密集图标簇。
+             次级动作（在内容中心搜索等）仍在底部的操作面板里，点行或「∨」都能进。 -->
+        <div class="c-actions">
+          <button
+            class="c-sw"
+            :class="{ on: item.record.enabled }"
+            :aria-label="item.record.enabled ? $t('instance-content.disable') : $t('instance-content.enable')"
+            @click.stop="toggleContent(item)"
+          >
+            <span class="c-knob" />
+          </button>
+          <button
+            v-if="(item.record.source === 'modrinth' || item.record.source === 'curseforge') && item.record.project_id"
+            class="c-ib"
+            :aria-label="$t('instance-content.switch-version')"
+            @click.stop="openSwitchVersion(item)"
+          >
+            <IconRepeat />
+          </button>
+          <button class="c-ib" :aria-label="$t('instance-content.actions')" @click.stop="openActions(item)">
+            <IconChevronDown />
+          </button>
+          <button class="c-ib danger" :aria-label="$t('account-chip.positive-text')" @click.stop="removeContent(item)">
+            <IconTrash />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -676,6 +698,51 @@ defineExpose({
   gap: 6px;
   flex-shrink: 0;
 }
+/* 启停开关（桌面端那种椭圆开关键，手机上同样是标准可点目标） */
+.c-sw {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.c-sw .c-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: transform 0.15s, background 0.15s;
+}
+.c-sw.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.c-sw.on .c-knob {
+  transform: translateX(18px);
+  background: #1a1206;
+}
+/* 行内符号按钮：给足点击高度，间距避免误触 */
+.c-ib {
+  width: 34px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  padding: 0;
+}
+.c-ib.danger {
+  color: #e5534b;
+}
 .c-icon {
   width: 34px;
   height: 34px;
@@ -720,6 +787,12 @@ defineExpose({
   align-items: center;
   gap: 8px;
   font-size: 11px;
+  /* 元信息只留一行：作者可能是 Modrinth 上一长串贡献者（实测 7 个名字），
+     换行会把整行撑到三行高、把右侧的开关与符号挤到文字中间看着像重叠。
+     作者在最后，被裁掉的也是它 —— 来源徽章与版本号始终可见。 */
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .src {
   padding: 1px 7px;

@@ -562,31 +562,61 @@ pub async fn import_modpack(file_path: &str) -> Result<ModpackImportResult> {
     let mut failed = 0usize;
     if !pack_files.is_empty() {
         let total = pack_files.len();
-        for (i, pf) in pack_files.iter().enumerate() {
-            // 下载中心里点了取消就立刻停手（已下好的部分保留）
-            ctx.check_cancelled()?;
-            let dest = instance_dir.join(&pf.rel_path);
-            crate::progress::emit_install(
-                &ctx,
-                "content",
-                &format!("正在下载 {}", pf.rel_path),
-                i,
-                total,
-            );
-            match crate::download::download_file(
-                &pf.url,
-                &dest.to_string_lossy(),
-                pf.sha1.clone(),
-            )
-            .await
-            {
-                Ok(_) => downloaded += 1,
-                Err(e) => {
-                    failed += 1;
-                    tracing::warn!("整合包文件下载失败 {}: {e}", pf.rel_path);
+        // **并发下载**（这里原先是逐个 `.await` 的串行循环）：整合包动辄几十上百个内容
+        // 文件，串行意味着每个都要等一次完整往返 —— 几十个文件就是几分钟白等。
+        // 桌面端同一段走的就是并发（`download_many`），安卓这边落下了。
+        // 并发数沿用设置里的「同时下载文件数」，进度仍按**完成文件数**报（并发下按秒刷屏没意义）。
+        let concurrency = crate::download::file_concurrency().await;
+        // 计数器与上下文都**自持**（Arc / clone）而不是借局部变量：借出去的引用会让
+        // 这组 future 带上函数内的生命周期，`import_modpack` 的调用方（命令层）接不住
+        // （实测报 `implementation of FnOnce is not general enough`）。
+        let ok = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let bad = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let root = instance_dir.clone();
+        let files: Vec<(String, String, Option<String>)> = pack_files
+            .iter()
+            .map(|pf| (pf.url.clone(), pf.rel_path.clone(), pf.sha1.clone()))
+            .collect();
+        use futures::StreamExt;
+        futures::stream::iter(files.into_iter().map(|(url, rel, sha1)| {
+            let (ok, bad, done, ctx, root) =
+                (ok.clone(), bad.clone(), done.clone(), ctx.clone(), root.clone());
+            async move {
+                // 取消后不再发起新请求（已下好的部分保留）
+                if ctx.check_cancelled().is_err() {
+                    return;
+                }
+                let dest = root.join(&rel);
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match crate::download::download_file(&url, &dest.to_string_lossy(), sha1).await {
+                    Ok(_) => {
+                        ok.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        tracing::warn!("整合包文件下载失败 {rel}: {e}");
+                        bad.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if n % 3 == 0 || n == total {
+                    crate::progress::emit_install(
+                        &ctx,
+                        "content",
+                        &format!("已下载 {n}/{total} 个内容文件"),
+                        n,
+                        total,
+                    );
                 }
             }
-        }
+        }))
+        .buffer_unordered(concurrency)
+        .collect::<Vec<()>>()
+        .await;
+        downloaded = ok.load(std::sync::atomic::Ordering::Relaxed);
+        failed = bad.load(std::sync::atomic::Ordering::Relaxed);
         crate::progress::emit_install_done(
             &ctx,
             failed == 0,

@@ -102,7 +102,10 @@ async function checkFiles() {
 async function repair() {
   if (!canRepair.value || repairing.value) return;
   repairing.value = true;
-  message.loading($t("instance-detail.repairing"));
+  // 这里原先弹 `message.loading(...)` —— 那是个**全屏遮罩**（forbidClick），
+  // 补全大包要好几分钟，期间用户既看不到进度条、也点不了「取消」，只能干等。
+  // 补全本身已经有进度条 + 取消按钮（走 install://progress → 下载中心那条），
+  // 按钮上也有 `:loading="repairing"`，够用了，不要再盖一层。
   try {
     await api.repairInstanceFiles(instanceId);
     await instances.load(true);
@@ -118,6 +121,21 @@ async function repair() {
 }
 
 onMounted(checkFiles);
+
+/**
+ * 内容页签里的分类：模组 / 资源包 / 光影。
+ *
+ * 为什么做成页签内的分段而不是各占一个顶部页签：手机上顶部页签已经 7 个（横屏时是一整列，
+ * 再多会把启动按钮挤没）；而这三类共用同一套「列表 + 工具栏 + 操作面板」，
+ * 换个 `kind` 就行（`ContentTab` 本来就按 `kind` 工作，只是之前被写死成 `mod`）。
+ * 文案复用内容中心已有的三个键，不另造重复词。
+ */
+const contentKind = ref<"mod" | "resourcepack" | "shader">("mod");
+const CONTENT_KINDS = [
+  { value: "mod", label: $t("browse.mods") },
+  { value: "resourcepack", label: $t("browse.group") },
+  { value: "shader", label: $t("utils.categories.shader") },
+] as const;
 
 const TABS = [
   { key: "content", label: $t("nav.browse") },
@@ -204,7 +222,22 @@ async function launch() {
     </div>
 
     <div class="body">
-      <ContentTab v-if="tab === 'content'" :instance-id="instanceId" kind="mod" />
+      <div v-if="tab === 'content'" class="kind-wrap">
+        <div class="kind-seg">
+          <button
+            v-for="k in CONTENT_KINDS"
+            :key="k.value"
+            class="ks"
+            :class="{ on: contentKind === k.value }"
+            @click="contentKind = k.value"
+          >
+            {{ k.label }}
+          </button>
+        </div>
+        <!-- `:key` 换 kind 时强制重建：组件内部的状态（搜索词、更新检查结果、
+             展开的面板）都是按某一类内容算的，带过去只会串味 -->
+        <ContentTab :key="contentKind" :instance-id="instanceId" :kind="contentKind" />
+      </div>
       <SavesTab v-else-if="tab === 'saves'" :instance-id="instanceId" />
       <KeysTab v-else-if="tab === 'keys'" :instance-id="instanceId" />
       <SettingsTab v-else-if="tab === 'settings'" :instance-id="instanceId" />
@@ -299,6 +332,34 @@ async function launch() {
 }
 .guard-btn {
   flex-shrink: 0;
+}
+/* 内容分类（模组/资源包/光影）：作为内容页内部的一行分段控件 */
+.kind-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.kind-seg {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 8px;
+  flex-shrink: 0;
+}
+.ks {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 17px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+}
+.ks.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
 }
 .tabs {
   display: flex;

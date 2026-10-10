@@ -575,6 +575,9 @@ public class ControlLayout extends FrameLayout {
 
 		final AlertDialog dialog = builder.create();
 		FileListView flv = new FileListView(dialog, "json");
+		// 不列导入中转文件：它们不是玩家的布局，App 内的布局列表也看不到它们，
+		// 在这里露出来只会让用户以为「多了一堆删不掉的文件」。
+		flv.skipFilePrefixes("TMP_IMPORT");
 		if(Build.VERSION.SDK_INT < 29)flv.listFileAt(new File(Tools.CTRLMAP_PATH));
 		else flv.lockPathAt(new File(Tools.CTRLMAP_PATH));
 		flv.setFileSelectedListener(new FileSelectedListener(){
@@ -600,6 +603,7 @@ public class ControlLayout extends FrameLayout {
 
 		final AlertDialog dialog = builder.create();
 		FileListView flv = new FileListView(dialog, "json");
+		flv.skipFilePrefixes("TMP_IMPORT");
 		flv.lockPathAt(new File(Tools.CTRLMAP_PATH));
 		flv.setFileSelectedListener(new FileSelectedListener(){
 

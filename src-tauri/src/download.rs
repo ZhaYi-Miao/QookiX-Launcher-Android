@@ -45,9 +45,18 @@ pub async fn download_file(
 /// 分片并发下载的阈值：小于这个大小分片反而得不偿失（多连接握手 + 落盘开销）
 const CHUNK_THRESHOLD: u64 = 8 * 1024 * 1024;
 
-/// 并发数的安全范围。下限 1（串行），上限 8：移动网络下再多只会互相抢带宽。
+/// 并发数的安全范围与默认值。
+///
+/// 上限**对齐桌面端**（文件 32 / 分片 16）：这里原先两边都钳在 8，用户在设置里
+/// 把「同时下载文件数」拖到最大也只有桌面的四分之一并发 —— 手机上下大包
+/// （几百个库 + 几千个资源对象）就一直快不起来，而同样的网络桌面端明显更快。
+/// 默认值也改成与桌面一致（文件 8 / 分片 4），不只是放开上限。
+/// 下限 1 = 串行；真嫌吵的用户可以自己调小。
 const CONCURRENCY_MIN: i32 = 1;
-const CONCURRENCY_MAX: i32 = 8;
+const FILE_CONCURRENCY_MAX: i32 = 32;
+const CHUNK_CONCURRENCY_MAX: i32 = 16;
+const FILE_CONCURRENCY_DEFAULT: i32 = 8;
+const CHUNK_CONCURRENCY_DEFAULT: i32 = 4;
 
 /// 「文件级并发数」—— 从设置读（`download_threads`），读不到就用 4。
 ///
@@ -57,8 +66,8 @@ const CONCURRENCY_MAX: i32 = 8;
 /// 界面上也没有任何可调项。于是用户看到的就是「并行下载没得调」。
 pub async fn file_concurrency() -> usize {
     match crate::settings::get_settings().await {
-        Ok(s) => s.download_threads.clamp(CONCURRENCY_MIN, CONCURRENCY_MAX) as usize,
-        Err(_) => 4,
+        Ok(s) => s.download_threads.clamp(CONCURRENCY_MIN, FILE_CONCURRENCY_MAX) as usize,
+        Err(_) => FILE_CONCURRENCY_DEFAULT as usize,
     }
 }
 
@@ -68,8 +77,8 @@ pub async fn file_concurrency() -> usize {
 /// 而且并发的连接都在抢同一份带宽（`download_threads` 管的是「同时下几个文件」）。
 pub async fn chunk_threads() -> usize {
     match crate::settings::get_settings().await {
-        Ok(s) => s.download_chunk_threads.clamp(CONCURRENCY_MIN, CONCURRENCY_MAX) as usize,
-        Err(_) => 2,
+        Ok(s) => s.download_chunk_threads.clamp(CONCURRENCY_MIN, CHUNK_CONCURRENCY_MAX) as usize,
+        Err(_) => CHUNK_CONCURRENCY_DEFAULT as usize,
     }
 }
 
@@ -270,8 +279,12 @@ pub async fn download_file_with_cancel(
             }
         };
         if len < CHUNK_THRESHOLD {
+            // 探到「不够大」就直接走单流，**不再探测其它候选源**：这个探测是一次完整的
+            // 往返（`Range: 0-0`），而库里几百个小文件每个都会走这条路，配了镜像时
+            // 每个文件白付 2 次往返 —— 这是装卸阶段最不该有的一笔开销。
+            // 单流阶段仍然会逐个候选源试，正确性不受影响。
             chunk_note = format!("single(len={len})");
-            continue;
+            break;
         }
         if !supports_range {
             chunk_note = "single(no-range)".to_string();
@@ -430,6 +443,25 @@ pub async fn download_files_concurrent(
 ///      手机上直接 OOM；现在按块 `chunk()` 流式落盘。
 ///   2. 旧实现校验 SHA1 时又 `fs::read` 把整个文件读**第二遍**；现在哈希在写的同时累计。
 ///   3. 旧实现只在**完成时**写一次进度（前端永远是 0% → 100%）；现在每 200ms 回写一次。
+/// 半成品文件路径：`xxx.jar` → `xxx.jar.part`。
+///
+/// 单独放一个文件而不是「直接写目标名」，是为了让「下了一半」永远不会被当成完整文件
+/// （跳过判断、启动校验都只看目标文件存不存在）。补上 `.part` 后缀而不是替换扩展名，
+/// 免得 `a.b.c` 这种名字被改得认不出来。
+fn part_path(dest: &Path) -> std::path::PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".part");
+    std::path::PathBuf::from(s)
+}
+
+/// 带**重试退避**的外层：同一个源最多试 3 次（间隔 200ms / 600ms）。
+///
+/// 移动网络下「下到一半断流」比「连不上」常见得多，而以前这里失败就直接换下一个源 ——
+/// 只有一个源的场景（官方地址）等于当场失败，换源也未必更快。
+/// 配合下面的 `.part` 续传，重试只补没下完的那段，代价很小。
+///
+/// 只对「已经下了点东西」的失败重试：一次都没下下来说明这个源根本不通（或内容不对，
+/// 例如哈希不符 —— 那时 `.part` 已被删掉），重试纯属浪费时间，直接交给调用方换源。
 async fn stream_to_file(
     client: &reqwest::Client,
     url: &str,
@@ -440,25 +472,122 @@ async fn stream_to_file(
     install_cancel: Option<&Arc<AtomicBool>>,
     chunk_note: &str,
 ) -> std::result::Result<DownloadProgress, StreamFail> {
-    let mut response = client
-        .get(url)
+    let part = part_path(dest);
+    let mut last: Option<StreamFail> = None;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                200 * 3u64.pow(attempt - 1),
+            ))
+            .await;
+        }
+        match stream_to_file_once(
+            client,
+            url,
+            dest,
+            expected_sha1,
+            task_id,
+            cancel,
+            install_cancel,
+            chunk_note,
+        )
+        .await
+        {
+            Ok(p) => return Ok(p),
+            Err(StreamFail::Cancelled) => return Err(StreamFail::Cancelled),
+            Err(e) => {
+                let landed = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
+                last = Some(e);
+                if landed == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| StreamFail::Retry(anyhow::anyhow!("Failed to download {url}"))))
+}
+
+async fn stream_to_file_once(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    expected_sha1: Option<&str>,
+    task_id: &str,
+    cancel: &Arc<AtomicBool>,
+    install_cancel: Option<&Arc<AtomicBool>>,
+    chunk_note: &str,
+) -> std::result::Result<DownloadProgress, StreamFail> {
+    // 断点续传：上次被中断留下的 `.part` 接着下。手机上「切后台被杀 / 弱网断流」很常见，
+    // 从头再来意味着前面下的几百 MB 全白费 —— 这是弱网体感最差的一环。
+    let part = part_path(dest);
+    let existing = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
+
+    let mut request = client.get(url);
+    if existing > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={existing}-"));
+    }
+    let mut response = request
         .send()
         .await
         .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to download {url}: {e}")))?;
 
-    let total_size = response.content_length().unwrap_or(0) as i64;
+    // 只有服务端真的从断点接了（206）才算续传；否则（200 / 不支持 Range）从头写
+    let resumed = existing > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+
+    let total_size = if resumed {
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.rsplit('/').next())
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0)
+    } else {
+        response.content_length().unwrap_or(0) as i64
+    };
 
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to create directory: {e}")))?;
     }
-    let mut file = fs::File::create(dest)
-        .await
-        .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to create {}: {e}", dest.display())))?;
 
     let mut hasher = Sha1::new();
     let mut downloaded: i64 = 0;
+    let mut file = if resumed {
+        // 续传时哈希要从 0 开始累计，先把已有那段补进哈希器。
+        // 不做校验（没给 sha1）时就只记字节数，省掉一次整文件读。
+        if expected_sha1.is_some() {
+            use tokio::io::AsyncReadExt;
+            let mut old = fs::File::open(&part)
+                .await
+                .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to read {}: {e}", part.display())))?;
+            let mut buf = vec![0u8; 256 * 1024];
+            loop {
+                let n = old
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to hash {}: {e}", part.display())))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                downloaded += n as i64;
+            }
+        } else {
+            downloaded = existing as i64;
+        }
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&part)
+            .await
+            .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to open {}: {e}", part.display())))?
+    } else {
+        fs::File::create(&part)
+            .await
+            .map_err(|e| StreamFail::Retry(anyhow::anyhow!("Failed to create {}: {e}", part.display())))?
+    };
+
     let mut last_report = std::time::Instant::now();
 
     loop {
@@ -498,11 +627,23 @@ async fn stream_to_file(
     if let Some(expected) = expected_sha1 {
         let actual = format!("{:x}", hasher.finalize());
         if actual != expected {
-            let _ = fs::remove_file(dest).await;
+            // 删的是 `.part`：目标文件此刻还不存在（下完才改名）
+            let _ = fs::remove_file(&part).await;
             return Err(StreamFail::Retry(anyhow::anyhow!(
                 "SHA1 mismatch from {url}: expected {expected}, got {actual}"
             )));
         }
+    }
+
+    // 收尾：`.part` 原子改名成正式文件。
+    // 于是「目标文件存在」永远等价于「这份文件是完整的」—— 跳过判断与启动校验
+    // 都不必再担心把半截文件当成下好了（弱网下这正是坏档的常见来源）。
+    if let Err(e) = fs::rename(&part, dest).await {
+        let _ = fs::remove_file(&part).await;
+        return Err(StreamFail::Retry(anyhow::anyhow!(
+            "Failed to finalize {}: {e}",
+            dest.display()
+        )));
     }
 
     let progress = if total_size > 0 {
